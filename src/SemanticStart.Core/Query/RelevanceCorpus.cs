@@ -16,7 +16,19 @@ public sealed record RelevanceCase
     /// Display names that would each be a correct top hit. Multiple are allowed because several
     /// machines and several tools can legitimately satisfy one intent.
     /// </summary>
-    public required string[] AcceptableResults { get; init; }
+    public string[] AcceptableResults { get; init; } = [];
+
+    /// <summary>
+    /// Display names that must not be shown for this query. These guard precision: returning
+    /// obvious junk is worse than returning fewer than the requested number of results.
+    /// </summary>
+    public string[] ForbiddenResults { get; init; } = [];
+
+    /// <summary>When true, the correct result is an empty list with a clean no-match contract.</summary>
+    public bool ExpectNoResults { get; init; }
+
+    /// <summary>Optional ceiling for result count when the corpus is asserting cutoff behaviour.</summary>
+    public int? MaxResults { get; init; }
 
     /// <summary>Rank the expected result must appear within.</summary>
     public int WithinTopN { get; init; } = 3;
@@ -43,6 +55,7 @@ public static class RelevanceCorpus
         {
             Query = "search the web",
             AcceptableResults = ["Microsoft Edge", "Edge", "Bing", "Search"],
+            ForbiddenResults = ["Calculator", "Services", "ADInsight", "Phone Link"],
             Rationale = "Natural-language web intent should not be buried by unrelated frequently used apps.",
         },
         new()
@@ -171,6 +184,14 @@ public static class RelevanceCorpus
     [
         new()
         {
+            Query = "powerpoint",
+            AcceptableResults = ["PowerPoint"],
+            ForbiddenResults = ["Calculator"],
+            WithinTopN = 1,
+            Rationale = "An exact Office app name should not be padded with unrelated vector-only apps.",
+        },
+        new()
+        {
             Query = "microphone",
             AcceptableResults = ["Microphone Privacy", "Sound Input Devices", "Sound"],
             WithinTopN = 1,
@@ -242,6 +263,28 @@ public static class RelevanceCorpus
         new() { Query = "blue", AcceptableResults = ["Bluetooth & devices", "Bluetooth"], WithinTopN = 3 },
     ];
 
+    /// <summary>
+    /// Precision and no-result contracts. These intentionally include content-gap cases where the
+    /// right answer has not yet been described well enough by the index; the ranking layer should
+    /// prefer returning nothing over filling the list with generic-token or vector-noise matches.
+    /// </summary>
+    public static IReadOnlyList<RelevanceCase> Precision { get; } =
+    [
+        new()
+        {
+            Query = "create presentation",
+            ForbiddenResults = ["Notepad", "Hyper-V", "Scheduled Tasks", "Claude"],
+            MaxResults = 1,
+            Rationale = "Current PowerPoint fallback text does not mention presentations, so generic 'create' matches must be suppressed.",
+        },
+        new()
+        {
+            Query = "asdfghjkl",
+            ExpectNoResults = true,
+            Rationale = "A nonsense query should produce the empty-state path, not MiniLM noise.",
+        },
+    ];
+
     public static IReadOnlyList<RelevanceCase> All { get; } =
-        [.. SemanticIntent, .. LiteralName, .. Prefix];
+        [.. SemanticIntent, .. LiteralName, .. Prefix, .. Precision];
 }

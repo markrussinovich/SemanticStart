@@ -110,7 +110,7 @@ public sealed class HybridSearchEngine : ISearchEngine
 
         var fused = Fuse(snapshot, query, vectorHits, lexicalHits);
 
-        return [.. fused
+        return [.. PruneLowConfidence(fused)
             .OrderByDescending(c => c.Score)
             .ThenBy(c => c.Entity.Entity.DisplayName, StringComparer.OrdinalIgnoreCase)
             .Take(limit)
@@ -218,6 +218,7 @@ public sealed class HybridSearchEngine : ISearchEngine
             candidate.LiteralContribution =
                 _options.LiteralArmWeight * normalizedStrength / (_options.RrfK + rank + 1);
             candidate.Score += candidate.LiteralContribution;
+            candidate.LiteralStrength = strength;
             candidate.LiteralReason = reason;
         }
 
@@ -229,6 +230,53 @@ public sealed class HybridSearchEngine : ISearchEngine
         }
 
         return [.. candidates.Values];
+    }
+
+    /// <summary>
+    /// Removes low-confidence tail results instead of padding the UI to the requested count.
+    /// Final RRF scores are only ranks and are not comparable across queries, so the cutoff is
+    /// based on the underlying evidence: literal name matches, strong BM25, absolute vector
+    /// floors, and a relative score guard for weak-evidence tails after a strong leader.
+    /// </summary>
+    private List<Candidate> PruneLowConfidence(List<Candidate> candidates)
+    {
+        if (candidates.Count == 0)
+            return candidates;
+
+        var topScore = candidates.Max(c => c.Score);
+        var topVector = candidates
+            .Where(c => c.VectorScore.HasValue)
+            .Select(c => c.VectorScore!.Value)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        return [.. candidates.Where(c => ShouldSurface(c, topScore, topVector))];
+    }
+
+    private bool ShouldSurface(Candidate candidate, double topScore, double topVector)
+    {
+        if (candidate.LiteralStrength >= _options.MinLiteralSurfaceStrength)
+            return true;
+
+        if (candidate.LexicalScore >= _options.StrongLexicalScore)
+            return true;
+
+        var relativeScore = topScore <= 0
+            || candidate.Score >= topScore * _options.MinRelativeScoreWithoutIndependentEvidence;
+
+        if (candidate.VectorScore is not { } vectorScore)
+            return false;
+
+        if (!relativeScore)
+            return false;
+
+        if (!candidate.LexicalScore.HasValue)
+            return vectorScore >= _options.MinVectorOnlySurfaceScore;
+
+        var relativeVector = topVector <= 0
+            || vectorScore >= topVector * _options.MinHybridVectorLeaderRatio;
+
+        return vectorScore >= _options.MinHybridSurfaceVectorScore && relativeVector;
     }
 
     /// <summary>
@@ -334,6 +382,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         public double LexicalContribution { get; set; }
         public double LiteralContribution { get; set; }
         public double UsageContribution { get; set; }
+        public double LiteralStrength { get; set; }
         public string? LiteralReason { get; set; }
     }
 
