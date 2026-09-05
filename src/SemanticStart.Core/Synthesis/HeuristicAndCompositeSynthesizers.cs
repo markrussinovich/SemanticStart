@@ -20,8 +20,8 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         cancellationToken.ThrowIfCancellationRequested();
         var summary = BuildSummary(entity, documents);
         var category = BuildCategory(entity);
-        var tasks = BuildTasks(entity, documents, summary).Distinct(StringComparer.OrdinalIgnoreCase).Take(8).ToArray();
-        var synonyms = BuildSynonyms(entity).Distinct(StringComparer.OrdinalIgnoreCase).Take(16).ToArray();
+        var tasks = BuildTasks(entity, documents, summary).Distinct(StringComparer.OrdinalIgnoreCase).Take(10).ToArray();
+        var synonyms = BuildSynonyms(entity, documents).Distinct(StringComparer.OrdinalIgnoreCase).Take(20).ToArray();
         return Task.FromResult(new SynthesizedProfile { EntityId = entity.Id, Summary = summary, Tasks = tasks, Synonyms = synonyms, Category = category, Generator = Generator });
     }
 
@@ -47,9 +47,16 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
     {
         var known = KnownDescription(entity);
         if (!string.IsNullOrWhiteSpace(known)) return known;
+        var curated = documents.FirstOrDefault(d => d.Provider.Equals("windows-intent-catalog", StringComparison.OrdinalIgnoreCase));
+        var curatedValue = ExtractUsefulLine(curated?.Text);
+        if (!string.IsNullOrWhiteSpace(curatedValue)) return curatedValue;
         foreach (var key in new[] { "description", "fileDescription", "comment" })
-            if (entity.RawMetadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)) return value;
-        foreach (var provider in new[] { "pe-version", "msix-manifest", "shortcut", "local-docs", "learn", "winget" })
+            if (entity.RawMetadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+            {
+                value = EnrichmentTextNormalizer.ToPlainText(value);
+                if (!EnrichmentTextNormalizer.IsLikelyMarkupLine(value)) return value;
+            }
+        foreach (var provider in new[] { "windows-intent-catalog", "pe-version", "msix-manifest", "shortcut", "local-docs", "learn", "winget", "publisher-site" })
         {
             var doc = documents.FirstOrDefault(d => d.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase));
             var value = ExtractUsefulLine(doc?.Text);
@@ -72,22 +79,66 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
     private static string? ExtractUsefulLine(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
+        foreach (var label in new[] { "Summary", "Short Description", "Description", "Application description" })
+        {
+            var labeled = ExtractFirstLabeledValue(text, label);
+            if (!string.IsNullOrWhiteSpace(labeled) && IsUsefulDescriptionLine(labeled))
+                return labeled;
+        }
+
         foreach (var raw in text.Split(['\r', '\n', '.'], StringSplitOptions.RemoveEmptyEntries))
         {
             var line = raw.Trim();
+            if (EnrichmentTextNormalizer.IsLikelyMarkupLine(line)) continue;
+            line = EnrichmentTextNormalizer.ToPlainText(line);
             if (line.StartsWith("File description:", StringComparison.OrdinalIgnoreCase)) line = line[17..].Trim();
             if (line.StartsWith("Description:", StringComparison.OrdinalIgnoreCase)) line = line[12..].Trim();
-            if (line.StartsWith("Product name:", StringComparison.OrdinalIgnoreCase) || line.StartsWith("Company:", StringComparison.OrdinalIgnoreCase)) continue;
-            if (line.Length >= 8
-                && !line.Contains("copyright", StringComparison.OrdinalIgnoreCase)
-                && !line.Contains("all rights reserved", StringComparison.OrdinalIgnoreCase)
-                && !line.Contains(@"{\rtf", StringComparison.OrdinalIgnoreCase))
+            if (line.StartsWith("Short Description:", StringComparison.OrdinalIgnoreCase)) line = line[18..].Trim();
+            if (line.StartsWith("Summary:", StringComparison.OrdinalIgnoreCase)) line = line[8..].Trim();
+            if (line.StartsWith("Product name:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("Company:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("Name:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("Publisher:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("Homepage:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("Tasks:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("Synonyms:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("Tags:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("Moniker:", StringComparison.OrdinalIgnoreCase)) continue;
+            if (IsUsefulDescriptionLine(line))
             {
                 return line;
             }
         }
         return null;
     }
+
+    private static string? ExtractFirstLabeledValue(string text, string label)
+    {
+        var pattern = $@"(?i)\b{Regex.Escape(label)}\s*:\s*(?<value>.*?)(?=\b(?:Summary|Tasks|Synonyms|Tags|Moniker|Description|Short Description|Application description|Homepage|Publisher|Name|Product name|Company)\s*:|$)";
+        foreach (Match match in Regex.Matches(text, pattern, RegexOptions.Singleline))
+        {
+            var value = EnrichmentTextNormalizer.ToPlainText(match.Groups["value"].Value);
+            if (IsUsefulDescriptionLine(value))
+                return value;
+        }
+
+        return null;
+    }
+
+    private static bool IsUsefulDescriptionLine(string line)
+        => line.Length >= 8
+           && line.Count(char.IsWhiteSpace) >= 2
+           && !line.Contains("copyright", StringComparison.OrdinalIgnoreCase)
+           && !line.Contains("all rights reserved", StringComparison.OrdinalIgnoreCase)
+           && !line.Contains("Theme Auto Light Dark", StringComparison.OrdinalIgnoreCase)
+           && !line.StartsWith("Table of contents", StringComparison.OrdinalIgnoreCase)
+           && !line.StartsWith("Index ", StringComparison.OrdinalIgnoreCase)
+           && !line.Contains('»')
+           && !Regex.IsMatch(line, @"^\d+(?:\.\d+)*\s+\w")
+           && !line.Contains(@"{\rtf", StringComparison.OrdinalIgnoreCase)
+           && !line.Contains("://", StringComparison.OrdinalIgnoreCase)
+           && !line.StartsWith("genindex-", StringComparison.OrdinalIgnoreCase)
+           && !EnrichmentTextNormalizer.IsLikelyMarkupLine(line);
 
     private static string BuildCategory(Entity entity)
     {
@@ -120,6 +171,7 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         if (target == "devmgmt.msc" || name.Contains("device manager")) { yield return "manage hardware devices"; yield return "update device drivers"; yield return "troubleshoot a missing device"; yield break; }
         if (entity.LaunchTarget.Equals("ms-settings:display", StringComparison.OrdinalIgnoreCase) || name == "display") { yield return "change screen resolution"; yield return "adjust display scale"; yield return "arrange monitors"; yield return "change brightness"; yield break; }
 
+        foreach (var phrase in ExtractLabeledPhrases(documents, "Tasks")) yield return phrase;
         foreach (var phrase in IntentPhrases(summary + " " + string.Join(' ', documents.Select(d => d.Text)))) yield return phrase;
         yield return entity.Kind switch
         {
@@ -136,15 +188,18 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         text = text.ToLowerInvariant();
         var mappings = new (string Key, string Task)[]
         {
+            ("browser", "search the web"), ("web", "browse websites and search the internet"), ("internet", "connect to the internet"),
+            ("microphone", "choose the default microphone"), ("audio input", "set the audio input device"), ("sound", "adjust sound devices"),
+            ("battery", "find why battery is draining"), ("energy", "reduce power use"), ("power", "change power settings"),
+            ("text size", "make text bigger"), ("font size", "increase font size"), ("accessibility", "make Windows easier to use"),
             ("disk", "manage disks and storage"), ("temporary", "remove temporary files"), ("driver", "manage device drivers"),
             ("device", "manage connected devices"), ("network", "troubleshoot network connections"), ("printer", "manage printers"),
-            ("display", "change display settings"), ("sound", "adjust sound devices"), ("power", "change power settings"),
-            ("security", "review security settings"), ("update", "manage Windows updates"), ("file", "work with files")
+            ("display", "change display settings"), ("security", "review security settings"), ("update", "manage Windows updates"), ("file", "work with files")
         };
         foreach (var (key, task) in mappings) if (text.Contains(key, StringComparison.Ordinal)) yield return task;
     }
 
-    private static IEnumerable<string> BuildSynonyms(Entity entity)
+    private static IEnumerable<string> BuildSynonyms(Entity entity, IReadOnlyList<EnrichmentDocument>? documents = null)
     {
         yield return entity.DisplayName;
         var name = RemoveVendorPrefix(entity.DisplayName);
@@ -159,6 +214,29 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
             yield return Path.GetFileNameWithoutExtension(file);
         }
         if (entity.LaunchTarget.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase)) yield return entity.LaunchTarget;
+        if (documents is not null)
+        {
+            foreach (var synonym in ExtractLabeledPhrases(documents, "Synonyms")) yield return synonym;
+            foreach (var tag in ExtractLabeledPhrases(documents, "Tags")) yield return tag;
+            foreach (var moniker in ExtractLabeledPhrases(documents, "Moniker")) yield return moniker;
+        }
+    }
+
+    private static IEnumerable<string> ExtractLabeledPhrases(IReadOnlyList<EnrichmentDocument> documents, string label)
+    {
+        var pattern = $@"(?i)\b{Regex.Escape(label)}\s*:\s*(?<value>.*?)(?=\b(?:Summary|Tasks|Synonyms|Tags|Moniker|Description|Short Description|Homepage|Publisher|Name)\s*:|$)";
+        foreach (var doc in documents)
+        {
+            foreach (Match match in Regex.Matches(doc.Text, pattern, RegexOptions.Singleline))
+            {
+                foreach (var phrase in Regex.Split(match.Groups["value"].Value, @"[;,|]"))
+                {
+                    var clean = EnrichmentTextNormalizer.ToPlainText(phrase);
+                    if (clean.Length >= 2 && !EnrichmentTextNormalizer.IsLikelyMarkupLine(clean))
+                        yield return clean;
+                }
+            }
+        }
     }
 
     private static string RemoveVendorPrefix(string name) => Regex.Replace(name, @"^(Microsoft|Windows|Microsoft Windows)\s+", "", RegexOptions.IgnoreCase).Trim();

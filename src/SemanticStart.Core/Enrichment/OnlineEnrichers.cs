@@ -1,4 +1,3 @@
-﻿using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -10,53 +9,215 @@ namespace SemanticStart.Core.Enrichment;
 
 public sealed class WingetManifestEnricher : IEnricher
 {
+    private readonly HttpClient _http;
     public string Provider => "winget";
     public bool RequiresNetwork => true;
+    public WingetManifestEnricher(HttpClient? http = null) => _http = http ?? new HttpClient();
     public bool CanEnrich(Entity entity) => entity.Kind is EntityKind.Application or EntityKind.PackagedApp && !string.IsNullOrWhiteSpace(entity.DisplayName);
 
     public async Task<IReadOnlyList<EnrichmentDocument>> EnrichAsync(Entity entity, CancellationToken cancellationToken = default)
     {
-        var winget = ResolveWinget();
-        if (winget is null) return [];
         try
         {
             var query = !string.IsNullOrWhiteSpace(entity.Publisher) ? $"{entity.Publisher} {entity.DisplayName}" : entity.DisplayName;
-            var search = await ProcessRunner.RunAsync(winget, ["search", "--source", "winget", "--query", query, "--disable-interactivity"], TimeSpan.FromSeconds(8), cancellationToken).ConfigureAwait(false);
-            var id = ParseWingetId(search.Output);
-            if (id is null) return [];
-            var show = await ProcessRunner.RunAsync(winget, ["show", "--source", "winget", "--id", id, "--disable-interactivity"], TimeSpan.FromSeconds(8), cancellationToken).ConfigureAwait(false);
-            var text = ExtractWingetFields(show.Output);
+            var id = await ResolvePackageIdAsync(entity, query, cancellationToken).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(id))
+                return [];
+
+            var fields = await ReadManifestFromGitHubAsync(id, cancellationToken).ConfigureAwait(false)
+                         ?? ExtractWingetFields(await CachedProcess.RunAsync("winget", ["show", "--source", "winget", "--id", id, "--disable-interactivity"], TimeSpan.FromSeconds(8), cancellationToken).ConfigureAwait(false));
+
+            var text = FormatFields(fields);
             return string.IsNullOrWhiteSpace(text) ? [] : [new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = true, Text = text, SourceUri = $"winget:{id}" }];
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TaskCanceledException) { return []; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TaskCanceledException or HttpRequestException or JsonException) { return []; }
     }
 
-    private static string? ResolveWinget()
+    private async Task<string?> ResolvePackageIdAsync(Entity entity, string query, CancellationToken cancellationToken)
     {
-        var local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "winget.exe");
-        if (File.Exists(local)) return local;
-        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator))
+        var output = await CachedProcess.RunAsync("winget", ["search", "--source", "winget", "--query", query, "--disable-interactivity"], TimeSpan.FromSeconds(8), cancellationToken).ConfigureAwait(false);
+        return ParseWingetId(output, entity);
+    }
+
+    private async Task<IReadOnlyDictionary<string, string[]>?> ReadManifestFromGitHubAsync(string packageId, CancellationToken cancellationToken)
+    {
+        var parts = packageId.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length < 2)
+            return null;
+
+        var manifestDirectory = $"manifests/{char.ToLowerInvariant(packageId[0])}/{string.Join('/', parts)}";
+        var listingUri = $"https://api.github.com/repos/microsoft/winget-pkgs/contents/{manifestDirectory}?ref=master";
+        var listing = await CachedHttp.GetStringAsync(_http, listingUri, TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(listing))
+            return null;
+
+        using var doc = JsonDocument.Parse(listing);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var version = doc.RootElement.EnumerateArray()
+            .Select(e => e.TryGetProperty("name", out var name) ? name.GetString() : null)
+            .Where(v => !string.IsNullOrWhiteSpace(v) && Version.TryParse(NormalizeVersion(v!), out _))
+            .OrderByDescending(v => Version.Parse(NormalizeVersion(v!)))
+            .FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(version))
+            return null;
+
+        var localeCandidates = new[]
         {
-            try { var candidate = Path.Combine(dir.Trim(), "winget.exe"); if (File.Exists(candidate)) return candidate; } catch (Exception) { }
+            $"{packageId}.locale.en-US.yaml",
+            $"{packageId}.locale.en.yaml",
+            $"{packageId}.yaml",
+        };
+        foreach (var file in localeCandidates)
+        {
+            var raw = $"https://raw.githubusercontent.com/microsoft/winget-pkgs/master/{manifestDirectory}/{version}/{file}";
+            var yaml = await CachedHttp.GetStringAsync(_http, raw, TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(yaml))
+                continue;
+
+            var fields = ParseManifestFields(yaml);
+            if (fields.Count > 0)
+                return fields;
         }
+
         return null;
     }
 
-    private static string? ParseWingetId(string output)
+    private static string NormalizeVersion(string value)
+    {
+        var pieces = value.Split(['.', '-'], StringSplitOptions.RemoveEmptyEntries).Take(4).Select(p => int.TryParse(p, out _) ? p : "0").ToList();
+        while (pieces.Count < 2) pieces.Add("0");
+        return string.Join('.', pieces);
+    }
+
+    private static string? ParseWingetId(string output, Entity entity)
     {
         foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
             var trimmed = Regex.Replace(line.Trim(), @"\s{2,}", "|");
             var cols = trimmed.Split('|');
-            if (cols.Length >= 2 && cols[1].Contains('.', StringComparison.Ordinal) && !cols[1].Equals("Id", StringComparison.OrdinalIgnoreCase)) return cols[1].Trim();
+            if (cols.Length < 2 || !cols[1].Contains('.', StringComparison.Ordinal) || cols[1].Equals("Id", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var name = cols[0].Trim();
+            var id = cols[1].Trim();
+            if (IsPlausibleMatch(entity, name, id))
+                return id;
         }
         return null;
     }
 
-    private static string ExtractWingetFields(string output)
+    private static bool IsPlausibleMatch(Entity entity, string name, string id)
     {
-        var keep = new[] { "Description:", "Short Description:", "Tags:", "Moniker:" };
-        return string.Join(Environment.NewLine, output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Where(l => keep.Any(k => l.TrimStart().StartsWith(k, StringComparison.OrdinalIgnoreCase))).Select(l => l.Trim()));
+        var normalizedName = NormalizeForMatch(entity.DisplayName);
+        var haystack = NormalizeForMatch(name + " " + id);
+        if (normalizedName.Length >= 4 && haystack.Contains(normalizedName, StringComparison.Ordinal))
+            return true;
+
+        var tokens = normalizedName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(t => t.Length >= 4).ToArray();
+        return tokens.Length > 0 && tokens.All(t => haystack.Contains(t, StringComparison.Ordinal));
+    }
+
+    private static string NormalizeForMatch(string value)
+        => Regex.Replace(value.ToLowerInvariant(), @"\b(microsoft|windows|app|desktop|64-bit|32-bit|x64|x86)\b|[^a-z0-9]+", " ").Trim();
+
+    private static IReadOnlyDictionary<string, string[]> ExtractWingetFields(string output)
+    {
+        var fields = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = line.IndexOf(':');
+            if (separator <= 0)
+                continue;
+
+            var key = line[..separator].Trim();
+            if (key is not ("Description" or "Short Description" or "Tags" or "Moniker" or "Homepage" or "Publisher"))
+                continue;
+
+            Add(fields, key, line[(separator + 1)..]);
+        }
+
+        return fields.ToDictionary(kv => kv.Key, kv => kv.Value.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyDictionary<string, string[]> ParseManifestFields(string yaml)
+    {
+        var fields = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        string? activeSequence = null;
+        var wanted = new HashSet<string>(["PackageName", "Publisher", "ShortDescription", "Description", "PackageUrl", "Moniker", "Tags"], StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in yaml.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = raw.TrimEnd();
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith('#') || trimmed.Length == 0)
+                continue;
+
+            if (activeSequence is not null && trimmed.StartsWith("-", StringComparison.Ordinal))
+            {
+                Add(fields, activeSequence, trimmed[1..]);
+                continue;
+            }
+
+            activeSequence = null;
+            var separator = trimmed.IndexOf(':');
+            if (separator <= 0)
+                continue;
+
+            var key = trimmed[..separator].Trim();
+            if (!wanted.Contains(key))
+                continue;
+
+            var value = trimmed[(separator + 1)..].Trim();
+            if (value.Length == 0 && key.Equals("Tags", StringComparison.OrdinalIgnoreCase))
+                activeSequence = key;
+            else
+                Add(fields, key, value);
+        }
+
+        return fields.ToDictionary(kv => kv.Key, kv => kv.Value.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string FormatFields(IReadOnlyDictionary<string, string[]> fields)
+    {
+        var lines = new List<string>();
+        AddLine(lines, "Name", fields, "PackageName");
+        AddLine(lines, "Publisher", fields, "Publisher");
+        AddLine(lines, "Short Description", fields, "ShortDescription", "Short Description");
+        AddLine(lines, "Description", fields, "Description");
+        AddLine(lines, "Tags", fields, "Tags");
+        AddLine(lines, "Moniker", fields, "Moniker");
+        AddLine(lines, "Homepage", fields, "PackageUrl", "Homepage");
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static void AddLine(List<string> lines, string label, IReadOnlyDictionary<string, string[]> fields, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!fields.TryGetValue(key, out var values) || values.Length == 0)
+                continue;
+            lines.Add($"{label}: {string.Join("; ", values)}");
+            return;
+        }
+    }
+
+    private static void Add(Dictionary<string, List<string>> fields, string key, string? value)
+    {
+        value = CleanYamlScalar(value);
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+        if (!fields.TryGetValue(key, out var values))
+            fields[key] = values = [];
+        values.Add(value);
+    }
+
+    private static string? CleanYamlScalar(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        value = value.Trim().Trim('"', '\'');
+        return EnrichmentTextNormalizer.ToPlainText(value);
     }
 }
 
@@ -72,27 +233,113 @@ public sealed class LearnEnricher : IEnricher
     {
         try
         {
-            var term = entity.Kind == EntityKind.SettingsPage ? entity.LaunchTarget : entity.DisplayName + " Windows";
-            var uri = "https://learn.microsoft.com/api/search?locale=en-us&$top=3&search=" + Uri.EscapeDataString(term);
-            var json = await CachedHttp.GetStringAsync(_http, uri, TimeSpan.FromSeconds(6), cancellationToken).ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(json)) return [];
-            using var doc = JsonDocument.Parse(json);
-            if (!doc.RootElement.TryGetProperty("results", out var arr)) return [];
-            foreach (var result in arr.EnumerateArray())
+            var docs = new List<EnrichmentDocument>();
+            foreach (var query in BuildQueries(entity).Distinct(StringComparer.OrdinalIgnoreCase).Take(3))
             {
-                var title = result.TryGetProperty("title", out var t) ? WebUtility.HtmlDecode(t.GetString()) : null;
-                var desc = result.TryGetProperty("description", out var d) ? WebUtility.HtmlDecode(d.GetString()) : null;
-                var url = result.TryGetProperty("url", out var u) ? u.GetString() : uri;
-                if (!string.IsNullOrWhiteSpace(desc))
+                var uri = "https://learn.microsoft.com/api/search?locale=en-us&$top=5&search=" + Uri.EscapeDataString(query);
+                var json = await CachedHttp.GetStringAsync(_http, uri, TimeSpan.FromSeconds(6), cancellationToken).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(json))
+                    continue;
+
+                var results = ParseResults(json).Where(r => IsLikelyRelevant(entity, r)).Take(2).ToArray();
+                foreach (var result in results)
                 {
-                    var text = string.IsNullOrWhiteSpace(title) ? desc! : $"{title}: {desc}";
-                    return [new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = true, Text = Regex.Replace(text, @"\s+", " ").Trim(), SourceUri = url }];
+                    var snippets = new List<string>();
+                    if (!string.IsNullOrWhiteSpace(result.Title)) snippets.Add(result.Title!);
+                    if (!string.IsNullOrWhiteSpace(result.Description)) snippets.Add(result.Description!);
+                    var article = await FetchArticleExcerptAsync(result.Url, cancellationToken).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(article)) snippets.Add(article!);
+                    var text = EnrichmentTextNormalizer.ToPlainText(string.Join(". ", snippets));
+                    if (!string.IsNullOrWhiteSpace(text))
+                        docs.Add(new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = true, Text = text, SourceUri = result.Url ?? uri });
                 }
+
+                if (docs.Count > 0)
+                    break;
             }
+
+            return docs.DistinctBy(d => d.SourceUri).Take(3).ToArray();
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException or InvalidOperationException) { }
         return [];
     }
+
+    private async Task<string?> FetchArticleExcerptAsync(string? url, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || !uri.Host.Equals("learn.microsoft.com", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var html = await CachedHttp.GetStringAsync(_http, uri.ToString(), TimeSpan.FromSeconds(6), cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(html))
+            return null;
+
+        var prose = EnrichmentTextNormalizer.ToPlainText(html);
+        return SelectUsefulSentences(prose, 900);
+    }
+
+    private static IEnumerable<string> BuildQueries(Entity entity)
+    {
+        if (entity.LaunchTarget.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return entity.LaunchTarget;
+            yield return $"Windows {entity.DisplayName} settings";
+            yield return $"{entity.DisplayName} ms-settings Windows";
+            yield break;
+        }
+
+        var file = entity.RawMetadata.GetValueOrDefault("fileName") ?? Path.GetFileNameWithoutExtension(entity.LaunchTarget);
+        if (!string.IsNullOrWhiteSpace(file))
+        {
+            var withoutExtension = Path.GetFileNameWithoutExtension(file);
+            if (!string.IsNullOrWhiteSpace(withoutExtension) && entity.Kind == EntityKind.SystemTool)
+                yield return $"windows command {withoutExtension}";
+            yield return $"{entity.DisplayName} {file} Windows";
+        }
+
+        yield return entity.Kind == EntityKind.OptionalFeature
+            ? $"Windows optional feature {entity.DisplayName}"
+            : $"{entity.DisplayName} Windows";
+    }
+
+    private static bool IsLikelyRelevant(Entity entity, LearnResult result)
+    {
+        var haystack = $"{result.Title} {result.Description} {result.Url}";
+        if (haystack.Contains(entity.DisplayName, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (entity.LaunchTarget.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase) && haystack.Contains(entity.LaunchTarget, StringComparison.OrdinalIgnoreCase))
+            return true;
+        var file = entity.RawMetadata.GetValueOrDefault("fileName") ?? Path.GetFileName(entity.LaunchTarget);
+        return !string.IsNullOrWhiteSpace(file) && haystack.Contains(Path.GetFileNameWithoutExtension(file), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<LearnResult> ParseResults(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("results", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return [];
+
+        return arr.EnumerateArray()
+            .Select(result => new LearnResult(
+                result.TryGetProperty("title", out var t) ? t.GetString() : null,
+                result.TryGetProperty("description", out var d) ? d.GetString() : null,
+                result.TryGetProperty("url", out var u) ? u.GetString() : null))
+            .Where(r => !string.IsNullOrWhiteSpace(r.Description) || !string.IsNullOrWhiteSpace(r.Title))
+            .ToArray();
+    }
+
+    private static string SelectUsefulSentences(string prose, int maxChars)
+    {
+        var sentences = Regex.Split(prose, @"(?<=[.!?])\s+")
+            .Select(s => s.Trim())
+            .Where(s => s.Length is >= 40 and <= 300)
+            .Where(s => !s.Contains("Microsoft Learn", StringComparison.OrdinalIgnoreCase))
+            .Where(s => !s.Contains("Sign in", StringComparison.OrdinalIgnoreCase))
+            .Take(5);
+        var text = string.Join(" ", sentences);
+        return text.Length > maxChars ? text[..maxChars] : text;
+    }
+
+    private sealed record LearnResult(string? Title, string? Description, string? Url);
 }
 
 public sealed class PublisherSiteEnricher : IEnricher
@@ -105,30 +352,75 @@ public sealed class PublisherSiteEnricher : IEnricher
 
     public async Task<IReadOnlyList<EnrichmentDocument>> EnrichAsync(Entity entity, CancellationToken cancellationToken = default)
     {
-        var uri = entity.RawMetadata.FirstOrDefault(kv => (kv.Key.Contains("url", StringComparison.OrdinalIgnoreCase) || kv.Key.Contains("website", StringComparison.OrdinalIgnoreCase) || kv.Key.Contains("homepage", StringComparison.OrdinalIgnoreCase)) && Uri.IsWellFormedUriString(kv.Value, UriKind.Absolute)).Value;
+        var uri = entity.RawMetadata.FirstOrDefault(kv => (kv.Key.Contains("url", StringComparison.OrdinalIgnoreCase) || kv.Key.Contains("website", StringComparison.OrdinalIgnoreCase) || kv.Key.Contains("homepage", StringComparison.OrdinalIgnoreCase)) && IsPublicHttpUri(kv.Value)).Value;
         if (string.IsNullOrWhiteSpace(uri)) return [];
         try
         {
             var html = await CachedHttp.GetStringAsync(_http, uri, TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
-            var match = Regex.Match(html, "<meta[^>]+name=[\"']description[\"'][^>]+content=[\"'](?<c>[^\"']+)[\"']", RegexOptions.IgnoreCase);
-            if (!match.Success) match = Regex.Match(html, "<meta[^>]+content=[\"'](?<c>[^\"']+)[\"'][^>]+name=[\"']description[\"']", RegexOptions.IgnoreCase);
-            var desc = match.Success ? WebUtility.HtmlDecode(match.Groups["c"].Value) : null;
-            return string.IsNullOrWhiteSpace(desc) ? [] : [new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = true, Text = Regex.Replace(desc, @"\s+", " ").Trim(), SourceUri = uri }];
+            var desc = EnrichmentTextNormalizer.ExtractMetaDescription(html);
+            return string.IsNullOrWhiteSpace(desc) ? [] : [new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = true, Text = desc, SourceUri = uri }];
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or InvalidOperationException) { return []; }
+    }
+
+    private static bool IsPublicHttpUri(string value)
+        => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https";
+}
+
+internal static class CachedProcess
+{
+    public static async Task<string> RunAsync(string fileName, IReadOnlyList<string> args, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var executable = ResolveOnPath(fileName);
+        if (executable is null)
+            return string.Empty;
+
+        Directory.CreateDirectory(AppPaths.EnrichmentCacheDirectory);
+        var key = "process-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fileName + "\0" + string.Join("\0", args)))).ToLowerInvariant();
+        var path = Path.Combine(AppPaths.EnrichmentCacheDirectory, key + ".txt");
+        if (File.Exists(path))
+            return await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+
+        var result = await ProcessRunner.RunAsync(executable, args, timeout, cancellationToken).ConfigureAwait(false);
+        var output = result.Output.Length > 64 * 1024 ? result.Output[..(64 * 1024)] : result.Output;
+        if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
+            await File.WriteAllTextAsync(path, output, cancellationToken).ConfigureAwait(false);
+        return output;
+    }
+
+    private static string? ResolveOnPath(string fileName)
+    {
+        var local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? fileName : fileName + ".exe");
+        if (File.Exists(local)) return local;
+        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator))
+        {
+            try
+            {
+                var candidate = Path.Combine(dir.Trim(), fileName);
+                if (File.Exists(candidate)) return candidate;
+                if (!fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    candidate = Path.Combine(dir.Trim(), fileName + ".exe");
+                    if (File.Exists(candidate)) return candidate;
+                }
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException) { }
+        }
+        return null;
     }
 }
 
 internal static class CachedHttp
 {
-    private static readonly SemaphoreSlim Throttle = new(4, 4);
+    private const int MaxResponseBytes = 512 * 1024;
+    private static readonly SemaphoreSlim Throttle = new(3, 3);
     private static DateTimeOffset _lastRequest = DateTimeOffset.MinValue;
     private static readonly object DelayLock = new();
 
     public static async Task<string> GetStringAsync(HttpClient http, string uri, TimeSpan timeout, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(AppPaths.EnrichmentCacheDirectory);
-        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(uri))).ToLowerInvariant();
+        var key = "http-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(uri))).ToLowerInvariant();
         var path = Path.Combine(AppPaths.EnrichmentCacheDirectory, key + ".txt");
         if (File.Exists(path)) return await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
         await Throttle.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -138,17 +430,31 @@ internal static class CachedHttp
             lock (DelayLock)
             {
                 var elapsed = DateTimeOffset.UtcNow - _lastRequest;
-                wait = elapsed < TimeSpan.FromMilliseconds(150) ? TimeSpan.FromMilliseconds(150) - elapsed : TimeSpan.Zero;
+                wait = elapsed < TimeSpan.FromMilliseconds(250) ? TimeSpan.FromMilliseconds(250) - elapsed : TimeSpan.Zero;
                 _lastRequest = DateTimeOffset.UtcNow + wait;
             }
             if (wait > TimeSpan.Zero) await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(timeout);
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            request.Headers.UserAgent.ParseAdd("SemanticStart/1.0 enrichment");
+            request.Headers.UserAgent.ParseAdd("SemanticStart/1.0 (+https://github.com/microsoft/SemanticStart)");
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode) return string.Empty;
-            var text = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+            var contentLength = response.Content.Headers.ContentLength;
+            if (contentLength > MaxResponseBytes) return string.Empty;
+            await using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
+            using var memory = new MemoryStream();
+            var buffer = new byte[8192];
+            var total = 0;
+            while (true)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cts.Token).ConfigureAwait(false);
+                if (read == 0) break;
+                total += read;
+                if (total > MaxResponseBytes) return string.Empty;
+                memory.Write(buffer, 0, read);
+            }
+            var text = Encoding.UTF8.GetString(memory.ToArray());
             await File.WriteAllTextAsync(path, text, cts.Token).ConfigureAwait(false);
             return text;
         }
