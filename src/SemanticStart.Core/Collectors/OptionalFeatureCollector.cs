@@ -9,6 +9,7 @@ namespace SemanticStart.Core.Collectors;
 public sealed class OptionalFeatureCollector : IEntityCollector
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan FeatureInfoTimeout = TimeSpan.FromSeconds(40);
     private const string CapabilityIndexPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\CapabilityIndex";
     private const string PackagesPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages";
 
@@ -131,7 +132,10 @@ public sealed class OptionalFeatureCollector : IEntityCollector
         if (process.ExitCode != 0)
             return [];
 
-        return ParseDismOutput(output);
+        var entities = ParseDismOutput(output);
+        return entities.Count == 0
+            ? entities
+            : await EnrichDismDescriptionsAsync(entities, cancellationToken).ConfigureAwait(false);
     }
 
     private IReadOnlyList<Entity> ParseDismOutput(string output)
@@ -154,6 +158,62 @@ public sealed class OptionalFeatureCollector : IEntityCollector
         }
 
         return entities;
+    }
+
+    private async Task<IReadOnlyList<Entity>> EnrichDismDescriptionsAsync(IReadOnlyList<Entity> entities, CancellationToken cancellationToken)
+    {
+        using var timeoutCts = new CancellationTokenSource(FeatureInfoTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
+        var enriched = new List<Entity>(entities.Count);
+        foreach (var entity in entities)
+        {
+            if (linkedCts.IsCancellationRequested)
+            {
+                enriched.Add(entity);
+                continue;
+            }
+
+            if (!entity.RawMetadata.TryGetValue("featureName", out var featureName) || string.IsNullOrWhiteSpace(featureName))
+            {
+                enriched.Add(entity);
+                continue;
+            }
+
+            try
+            {
+                var output = await RunDismAsync($"/online /get-featureinfo /featurename:{featureName} /english", TimeSpan.FromSeconds(3), linkedCts.Token).ConfigureAwait(false);
+                var description = ParseDismFeatureInfoDescription(output);
+                enriched.Add(string.IsNullOrWhiteSpace(description)
+                    ? entity
+                    : CreateEntity(featureName, entity.DisplayName, entity.RawMetadata.GetValueOrDefault("state") ?? "Unknown", "dism", description));
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                enriched.Add(entity);
+            }
+        }
+
+        return enriched;
+    }
+
+    private static string? ParseDismFeatureInfoDescription(string output)
+    {
+        foreach (var rawLine in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.Trim();
+            if (!line.StartsWith("Description", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var separator = line.IndexOf(':');
+            if (separator <= 0 || separator + 1 >= line.Length)
+                continue;
+
+            var description = line[(separator + 1)..].Trim();
+            return IsUsefulDescription(description) ? description : null;
+        }
+
+        return null;
     }
 
     private IReadOnlyList<Entity> CollectCapabilitiesFromRegistry(CancellationToken cancellationToken)
@@ -187,7 +247,8 @@ public sealed class OptionalFeatureCollector : IEntityCollector
                         }
                     }
 
-                    entities.Add(CreateEntity(capabilityName, FriendlyName(capabilityName), state, "registry"));
+                    var description = ReadRegistryDescription(capability);
+                    entities.Add(CreateEntity(capabilityName, FriendlyName(capabilityName), state, "registry", description));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException or ArgumentException)
                 {
@@ -202,8 +263,17 @@ public sealed class OptionalFeatureCollector : IEntityCollector
         return entities;
     }
 
-    private Entity CreateEntity(string key, string displayName, string state, string provider)
+    private Entity CreateEntity(string key, string displayName, string state, string provider, string? description = null)
     {
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["featureName"] = key,
+            ["state"] = state,
+            ["provider"] = provider,
+        };
+        if (IsUsefulDescription(description))
+            metadata["description"] = description!;
+
         var entity = new Entity
         {
             Id = EntityId.Create(Source, key),
@@ -212,15 +282,78 @@ public sealed class OptionalFeatureCollector : IEntityCollector
             LaunchKind = LaunchKind.Uri,
             LaunchTarget = "ms-settings:optionalfeatures",
             Source = Source,
-            RawMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["featureName"] = key,
-                ["state"] = state,
-                ["provider"] = provider,
-            },
+            RawMetadata = metadata,
         };
 
         return CollectorEntity.WithContentHash(entity);
+    }
+
+    private static string? ReadRegistryDescription(RegistryKey capability)
+    {
+        foreach (var valueName in new[] { "Description", "DisplayName" })
+        {
+            try
+            {
+                var value = Convert.ToString(capability.GetValue(valueName));
+                if (IsUsefulDescription(value))
+                    return value;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException or ArgumentException or InvalidOperationException)
+            {
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsUsefulDescription(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var trimmed = value.Trim();
+        return trimmed.Length >= 12
+               && trimmed.Count(char.IsWhiteSpace) >= 2
+               && !trimmed.Equals("None", StringComparison.OrdinalIgnoreCase)
+               && !trimmed.Equals("Not Available", StringComparison.OrdinalIgnoreCase)
+               && !trimmed.StartsWith("@", StringComparison.Ordinal);
+    }
+
+    private static async Task<string> RunDismAsync(string arguments, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = DismPath,
+            Arguments = arguments,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+
+        using var process = new Process { StartInfo = startInfo };
+        if (!process.Start())
+            return string.Empty;
+
+        var outputTask = process.StandardOutput.ReadToEndAsync(linkedCts.Token);
+        var errorTask = process.StandardError.ReadToEndAsync(linkedCts.Token);
+
+        try
+        {
+            await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            return string.Empty;
+        }
+
+        var output = await outputTask.ConfigureAwait(false);
+        _ = await errorTask.ConfigureAwait(false);
+        return process.ExitCode == 0 ? output : string.Empty;
     }
 
     private static string? GetPackageState(RegistryKey? packages, string packageName)

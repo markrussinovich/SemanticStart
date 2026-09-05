@@ -67,12 +67,10 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
 
     private static string? KnownDescription(Entity entity)
     {
-        var name = entity.DisplayName.ToLowerInvariant();
-        var target = (entity.RawMetadata.GetValueOrDefault("fileName") ?? Path.GetFileName(entity.LaunchTarget) ?? entity.LaunchTarget).ToLowerInvariant();
-        if (target == "notepad.exe" || name.Contains("notepad")) return "Create, open, and edit plain text notes and files.";
-        if (target == "cleanmgr.exe" || name.Contains("disk cleanup")) return "Free disk space by removing temporary and unnecessary files.";
-        if (target == "devmgmt.msc" || name.Contains("device manager")) return "View and manage hardware devices, drivers, and device status.";
-        if (entity.LaunchTarget.Equals("ms-settings:display", StringComparison.OrdinalIgnoreCase) || name == "display") return "Change monitor layout, brightness, scale, resolution, and advanced display settings.";
+        if (MatchesExact(entity, "Notepad", "notepad.exe")) return "Create, open, and edit plain text notes and files.";
+        if (MatchesExact(entity, "Disk Cleanup", "cleanmgr.exe")) return "Free disk space by removing temporary and unnecessary files.";
+        if (MatchesExact(entity, "Device Manager", "devmgmt.msc")) return "View and manage hardware devices, drivers, and device status.";
+        if (entity.LaunchTarget.Equals("ms-settings:display", StringComparison.OrdinalIgnoreCase) || entity.DisplayName.Equals("Display", StringComparison.OrdinalIgnoreCase)) return "Change monitor layout, brightness, scale, resolution, and advanced display settings.";
         return null;
     }
 
@@ -164,12 +162,10 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
 
     private static IEnumerable<string> BuildTasks(Entity entity, IReadOnlyList<EnrichmentDocument> documents, string summary)
     {
-        var name = entity.DisplayName.ToLowerInvariant();
-        var target = (entity.RawMetadata.GetValueOrDefault("fileName") ?? Path.GetFileName(entity.LaunchTarget) ?? entity.LaunchTarget).ToLowerInvariant();
-        if (target == "notepad.exe" || name.Contains("notepad")) { yield return "take quick notes"; yield return "edit a plain text file"; yield return "open a text document"; yield break; }
-        if (target == "cleanmgr.exe" || name.Contains("disk cleanup")) { yield return "free up disk space"; yield return "delete temporary files"; yield return "clean up old Windows files"; yield break; }
-        if (target == "devmgmt.msc" || name.Contains("device manager")) { yield return "manage hardware devices"; yield return "update device drivers"; yield return "troubleshoot a missing device"; yield break; }
-        if (entity.LaunchTarget.Equals("ms-settings:display", StringComparison.OrdinalIgnoreCase) || name == "display") { yield return "change screen resolution"; yield return "adjust display scale"; yield return "arrange monitors"; yield return "change brightness"; yield break; }
+        if (MatchesExact(entity, "Notepad", "notepad.exe")) { yield return "take quick notes"; yield return "edit a plain text file"; yield return "open a text document"; yield break; }
+        if (MatchesExact(entity, "Disk Cleanup", "cleanmgr.exe")) { yield return "free up disk space"; yield return "delete temporary files"; yield return "clean up old Windows files"; yield break; }
+        if (MatchesExact(entity, "Device Manager", "devmgmt.msc")) { yield return "manage hardware devices"; yield return "update device drivers"; yield return "troubleshoot a missing device"; yield break; }
+        if (entity.LaunchTarget.Equals("ms-settings:display", StringComparison.OrdinalIgnoreCase) || entity.DisplayName.Equals("Display", StringComparison.OrdinalIgnoreCase)) { yield return "change screen resolution"; yield return "adjust display scale"; yield return "arrange monitors"; yield return "change brightness"; yield break; }
 
         foreach (var phrase in ExtractLabeledPhrases(documents, "Tasks")) yield return phrase;
         foreach (var phrase in IntentPhrases(summary + " " + string.Join(' ', documents.Select(d => d.Text)))) yield return phrase;
@@ -181,6 +177,15 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
             EntityKind.SystemTool => "troubleshoot Windows from the command line",
             _ => "open " + entity.DisplayName.ToLowerInvariant()
         };
+    }
+
+    private static bool MatchesExact(Entity entity, string displayName, string fileName)
+    {
+        if (entity.DisplayName.Equals(displayName, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var target = entity.RawMetadata.GetValueOrDefault("fileName") ?? Path.GetFileName(entity.LaunchTarget);
+        return target is not null && target.Equals(fileName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static IEnumerable<string> IntentPhrases(string text)

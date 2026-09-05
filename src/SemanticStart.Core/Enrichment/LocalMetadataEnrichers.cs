@@ -57,6 +57,15 @@ public sealed class CuratedWindowsIntentEnricher : IEnricher
     private static readonly IReadOnlyDictionary<string, IntentEntry> ByFileName = new Dictionary<string, IntentEntry>(StringComparer.OrdinalIgnoreCase)
     {
         ["msedge.exe"] = new("Browse websites, search the web, use web apps, manage tabs, downloads, favorites, and browser privacy.", ["search the web", "open a website", "browse the internet", "change browser settings", "download a file"], ["browser", "web browser", "internet", "edge"]),
+        ["chrome.exe"] = new("Browse websites, search the web, use web apps, manage tabs, downloads, bookmarks, extensions, and browser privacy.", ["search the web", "open a website", "browse the internet", "manage browser extensions", "download a file"], ["browser", "web browser", "internet", "google chrome", "chrome"]),
+        ["firefox.exe"] = new("Browse websites, search the web, use web apps, manage tabs, downloads, bookmarks, extensions, and browser privacy.", ["search the web", "open a website", "browse the internet", "manage browser add-ons", "download a file"], ["browser", "web browser", "internet", "mozilla firefox", "firefox"]),
+        ["winword.exe"] = new("Create, write, edit, format, review, and print word-processing documents.", ["write a document", "create a report", "edit a Word file", "format a letter", "review a document"], ["word processor", "word document", "docx", "Microsoft Word", "Office Word"]),
+        ["excel.exe"] = new("Create, edit, analyze, chart, and format spreadsheets, workbooks, tables, formulas, and data.", ["edit a spreadsheet", "create a workbook", "analyze data", "make a chart", "work with formulas"], ["spreadsheet", "workbook", "xlsx", "Microsoft Excel", "Office Excel"]),
+        ["powerpnt.exe"] = new("Create, edit, present, and share slide presentations, slideshows, and slide decks.", ["create a presentation", "make slides", "build a slide deck", "present a slideshow", "edit PowerPoint slides"], ["presentation", "slides", "slide deck", "slideshow", "pptx", "Microsoft PowerPoint", "Office PowerPoint"]),
+        ["outlook.exe"] = new("Read, send, organize, and search email, calendars, meetings, contacts, and tasks.", ["write an email", "schedule a meeting", "check my calendar", "search mail", "manage contacts"], ["email", "mail", "calendar", "Microsoft Outlook", "Office Outlook"]),
+        ["onenote.exe"] = new("Capture, organize, sync, and search notes, notebooks, pages, drawings, images, and meeting notes.", ["take notes", "organize a notebook", "write meeting notes", "clip research", "sync notes"], ["notes", "notebook", "Microsoft OneNote", "Office OneNote"]),
+        ["teams.exe"] = new("Chat, meet, call, collaborate, share files, and join video meetings with Microsoft Teams.", ["join a meeting", "chat with coworkers", "start a video call", "share my screen", "collaborate with a team"], ["chat", "meetings", "video call", "Microsoft Teams", "Teams"]),
+        ["onedrive.exe"] = new("Sync, back up, share, and access cloud files and folders with OneDrive.", ["sync my files", "back up desktop documents and pictures", "share a cloud file", "access OneDrive folders"], ["cloud storage", "file sync", "Microsoft OneDrive", "OneDrive"]),
         ["mmsys.cpl"] = ByLaunchTarget["ms-settings:sound"],
         ["powercfg.cpl"] = ByLaunchTarget["ms-settings:powersleep"],
         ["desk.cpl"] = ByLaunchTarget["ms-settings:display"],
@@ -105,8 +114,43 @@ public sealed class CuratedWindowsIntentEnricher : IEnricher
         if (name.Equals("Task Manager", StringComparison.OrdinalIgnoreCase))
             return ByFileName["taskmgr.exe"];
 
+        var normalized = NormalizeAppName(name);
+        if (ByAppName.TryGetValue(normalized, out var byName))
+            return byName;
+
         return null;
     }
+
+    private static readonly IReadOnlyDictionary<string, IntentEntry> ByAppName = new Dictionary<string, IntentEntry>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["edge"] = ByFileName["msedge.exe"],
+        ["microsoft edge"] = ByFileName["msedge.exe"],
+        ["chrome"] = ByFileName["chrome.exe"],
+        ["google chrome"] = ByFileName["chrome.exe"],
+        ["firefox"] = ByFileName["firefox.exe"],
+        ["mozilla firefox"] = ByFileName["firefox.exe"],
+        ["word"] = ByFileName["winword.exe"],
+        ["microsoft word"] = ByFileName["winword.exe"],
+        ["excel"] = ByFileName["excel.exe"],
+        ["microsoft excel"] = ByFileName["excel.exe"],
+        ["powerpoint"] = ByFileName["powerpnt.exe"],
+        ["microsoft powerpoint"] = ByFileName["powerpnt.exe"],
+        ["outlook"] = ByFileName["outlook.exe"],
+        ["microsoft outlook"] = ByFileName["outlook.exe"],
+        ["onenote"] = ByFileName["onenote.exe"],
+        ["microsoft onenote"] = ByFileName["onenote.exe"],
+        ["teams"] = ByFileName["teams.exe"],
+        ["microsoft teams"] = ByFileName["teams.exe"],
+        ["onedrive"] = ByFileName["onedrive.exe"],
+        ["microsoft onedrive"] = ByFileName["onedrive.exe"],
+    };
+
+    private static string NormalizeAppName(string name)
+        => name.Replace("®", string.Empty, StringComparison.Ordinal)
+            .Replace("™", string.Empty, StringComparison.Ordinal)
+            .Replace("(Preview)", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("  ", " ", StringComparison.Ordinal)
+            .Trim();
 
     private sealed record IntentEntry(string Summary, string[] Tasks, string[] Synonyms);
 }

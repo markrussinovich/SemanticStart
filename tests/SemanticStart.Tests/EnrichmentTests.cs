@@ -51,6 +51,36 @@ public sealed class EnrichmentTests
         Assert.Contains(profile.Synonyms, s => s.Equals("battery", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task CuratedWindowsIntentCatalog_CoversMainstreamOfficeApps()
+    {
+        var entity = CreateEntity("PowerPoint", EntityKind.Application, "PowerPoint");
+        var pipeline = new EnrichmentPipeline([new CuratedWindowsIntentEnricher()], new HeuristicProfileSynthesizer(), maxDegreeOfParallelism: 1);
+
+        var (_, profile) = await pipeline.EnrichAndSynthesizeAsync(entity, new EnrichmentOptions());
+
+        Assert.Contains("presentation", profile.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(profile.Tasks, t => t.Contains("create a presentation", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(profile.Synonyms, s => s.Equals("slide deck", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task HeuristicSynthesizer_DoesNotApplyNotepadKnowledgeToOptionalFeatureContainingNotepad()
+    {
+        var entity = CreateEntity("Microsoft Windows Notepad System", EntityKind.OptionalFeature, "ms-settings:optionalfeatures") with
+        {
+            RawMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["featureName"] = "Microsoft-Windows-Notepad-System",
+            }
+        };
+
+        var profile = await new HeuristicProfileSynthesizer().SynthesizeAsync(entity, []);
+
+        Assert.DoesNotContain("plain text notes", profile.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(profile.Tasks, t => t.Contains("quick notes", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static Entity CreateEntity(string name, EntityKind kind, string target) => new()
     {
         Id = "test:" + target,
