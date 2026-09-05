@@ -55,15 +55,43 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
             if (entity.RawMetadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
             {
                 value = EnrichmentTextNormalizer.ToPlainText(value);
-                if (!EnrichmentTextNormalizer.IsLikelyMarkupLine(value)) return value;
+                if (!EnrichmentTextNormalizer.IsLikelyMarkupLine(value) && AddsInformation(entity, value)) return value;
             }
         foreach (var provider in new[] { "windows-intent-catalog", "pe-version", "msix-manifest", "shortcut", "local-docs", "learn", "winget", "publisher-site" })
         {
             var doc = documents.FirstOrDefault(d => d.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase));
             var value = ExtractUsefulLine(doc?.Text);
-            if (!string.IsNullOrWhiteSpace(value)) return value;
+            if (!string.IsNullOrWhiteSpace(value) && AddsInformation(entity, value)) return value;
         }
         return null;
+    }
+
+    private static readonly HashSet<string> UninformativeWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "the", "a", "an", "and", "or", "for", "of", "to", "in", "on", "with", "by", "from", "is", "are",
+        "app", "apps", "application", "applications", "display", "name", "tool", "tools", "utility",
+        "program", "software", "microsoft", "windows", "suite", "package", "version", "open", "run", "start"
+    };
+
+    /// <summary>
+    /// Rejects a candidate description that only restates the entity's own name. MSIX manifests are
+    /// the worst offender: the Sysinternals suite declares every application's description to be its
+    /// own name, so ZoomIt was summarised as "ZoomIt Application display" and that empty text then
+    /// pre-empted its real documentation from Microsoft Learn. A description must contribute at
+    /// least two words that are neither part of the name nor generic packaging vocabulary.
+    /// </summary>
+    private static bool AddsInformation(Entity entity, string candidate)
+    {
+        var nameWords = Regex.Split(entity.DisplayName, @"\W+")
+            .Where(w => w.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var informative = Regex.Split(candidate, @"\W+")
+            .Where(w => w.Length > 2 && !nameWords.Contains(w) && !UninformativeWords.Contains(w))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
+        return informative >= 2;
     }
 
     private static string? KnownDescription(Entity entity)
@@ -277,9 +305,10 @@ public sealed class CompositeProfileSynthesizer : IProfileSynthesizer
         if (!_llm.IsAvailable) return heuristic;
         try
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(20));
-            var profile = await _llm.SynthesizeAsync(entity, documents, cts.Token).ConfigureAwait(false);
+            // The synthesizer owns its own per-request timeout. A cap here covered queue wait as
+            // well as the request itself, so once calls were serialised behind a single local model
+            // every entity's budget expired before its turn and the whole index silently fell back.
+            var profile = await _llm.SynthesizeAsync(entity, documents, cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(profile.Summary) || profile.Tasks.Count == 0) return heuristic;
             var synonyms = profile.Synonyms.Concat(heuristic.Synonyms).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToArray();
             return profile with { Synonyms = synonyms, Category = string.IsNullOrWhiteSpace(profile.Category) ? heuristic.Category : profile.Category };

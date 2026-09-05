@@ -28,6 +28,7 @@ internal static class Program
                 "search" => await SearchAsync(args),
                 "eval" => await EvalAsync(),
                 "stats" => await StatsAsync(),
+                "llm-test" => await LlmTestAsync(),
                 _ => Help(),
             };
         }
@@ -47,8 +48,29 @@ internal static class Program
               search <query> [-n N]        Query the index
               eval                         Run the relevance harness
               stats                        Show index statistics
+              llm-test                     Diagnose local LLM discovery and connectivity
             """);
         return 0;
+    }
+
+    /// <summary>
+    /// Reports what the local LLM discovery actually saw. Index builds fall back to heuristics
+    /// silently by design, which makes a misconfigured runtime indistinguishable from one that is
+    /// working; this prints the endpoint, catalog, and a live completion instead.
+    /// </summary>
+    private static async Task<int> LlmTestAsync()
+    {
+        var catalog = await LocalLlmProfileSynthesizer.DiscoverCatalogAsync();
+        Console.WriteLine($"Catalog: {catalog.StatusMessage}");
+        Console.WriteLine($"Detected endpoint: {catalog.DetectedEndpointBaseUrl ?? "(none)"}");
+        foreach (var model in catalog.Models)
+            Console.WriteLine($"  [{(model.IsReady ? "ready" : "     ")}] {model.ModelName}  ({model.RuntimeName} {model.EndpointBaseUrl})");
+
+        var result = await LocalLlmProfileSynthesizer.TestConnectionAsync(new LocalLlmOptions());
+        Console.WriteLine();
+        Console.WriteLine($"Connection: {(result.Success ? "OK" : "FAILED")} - {result.Message}");
+        Console.WriteLine($"Endpoint: {result.EndpointBaseUrl ?? "(none)"}   Model: {result.ModelName ?? "(none)"}");
+        return result.Success ? 0 : 1;
     }
 
     private static async Task<int> IndexAsync(string[] args)

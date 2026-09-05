@@ -227,13 +227,27 @@ public sealed class LearnEnricher : IEnricher
     public string Provider => "learn";
     public bool RequiresNetwork => true;
     public LearnEnricher(HttpClient? http = null) => _http = http ?? new HttpClient();
-    public bool CanEnrich(Entity entity) => entity.Kind is EntityKind.SettingsPage or EntityKind.ControlPanelApplet or EntityKind.ManagementConsole or EntityKind.OptionalFeature or EntityKind.SystemTool;
+    /// <summary>
+    /// Learn documents Windows features and a great many first-party tools. Applications were
+    /// excluded, which silently ruled out precisely the tools users cannot name: every Sysinternals
+    /// utility is documented on Learn, but ZoomIt and Process Explorer could never be enriched from
+    /// it and indexed with no text beyond their own names. Apps are now included; irrelevant results
+    /// are already filtered by <see cref="IsLikelyRelevant"/>.
+    /// </summary>
+    public bool CanEnrich(Entity entity) =>
+        entity.Kind is EntityKind.SettingsPage or EntityKind.ControlPanelApplet or EntityKind.ManagementConsole
+            or EntityKind.OptionalFeature or EntityKind.SystemTool or EntityKind.Application or EntityKind.PackagedApp
+        && !string.IsNullOrWhiteSpace(entity.DisplayName);
 
     public async Task<IReadOnlyList<EnrichmentDocument>> EnrichAsync(Entity entity, CancellationToken cancellationToken = default)
     {
         try
         {
-            var docs = new List<EnrichmentDocument>();
+            // Collect across every query and keep only the best tier. Stopping at the first query
+            // that returned anything used to accept a page that merely name-dropped the entity —
+            // Snipping Tool was described by the "Features on Demand" catalogue — while its own
+            // article was one query away.
+            var candidates = new List<(int Tier, LearnResult Result)>();
             foreach (var query in BuildQueries(entity).Distinct(StringComparer.OrdinalIgnoreCase).Take(3))
             {
                 var uri = "https://learn.microsoft.com/api/search?locale=en-us&$top=5&search=" + Uri.EscapeDataString(query);
@@ -241,21 +255,32 @@ public sealed class LearnEnricher : IEnricher
                 if (string.IsNullOrWhiteSpace(json))
                     continue;
 
-                var results = ParseResults(json).Where(r => IsLikelyRelevant(entity, r)).Take(2).ToArray();
-                foreach (var result in results)
+                foreach (var result in ParseResults(json))
                 {
-                    var snippets = new List<string>();
-                    if (!string.IsNullOrWhiteSpace(result.Title)) snippets.Add(result.Title!);
-                    if (!string.IsNullOrWhiteSpace(result.Description)) snippets.Add(result.Description!);
-                    var article = await FetchArticleExcerptAsync(result.Url, cancellationToken).ConfigureAwait(false);
-                    if (!string.IsNullOrWhiteSpace(article)) snippets.Add(article!);
-                    var text = EnrichmentTextNormalizer.ToPlainText(string.Join(". ", snippets));
-                    if (!string.IsNullOrWhiteSpace(text))
-                        docs.Add(new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = true, Text = text, SourceUri = result.Url ?? uri });
+                    var tier = Relevance(entity, result);
+                    if (tier > 0)
+                        candidates.Add((tier, result));
                 }
 
-                if (docs.Count > 0)
+                if (candidates.Any(c => c.Tier >= AboutTier))
                     break;
+            }
+
+            if (candidates.Count == 0)
+                return [];
+
+            var bestTier = candidates.Max(c => c.Tier);
+            var docs = new List<EnrichmentDocument>();
+            foreach (var result in candidates.Where(c => c.Tier == bestTier).Select(c => c.Result).DistinctBy(r => r.Url).Take(2))
+            {
+                var snippets = new List<string>();
+                if (!string.IsNullOrWhiteSpace(result.Title)) snippets.Add(result.Title!);
+                if (!string.IsNullOrWhiteSpace(result.Description)) snippets.Add(result.Description!);
+                var article = await FetchArticleExcerptAsync(result.Url, cancellationToken).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(article)) snippets.Add(article!);
+                var text = EnrichmentTextNormalizer.ToPlainText(string.Join(". ", snippets));
+                if (!string.IsNullOrWhiteSpace(text))
+                    docs.Add(new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = true, Text = text, SourceUri = result.Url });
             }
 
             return docs.DistinctBy(d => d.SourceUri).Take(3).ToArray();
@@ -296,20 +321,92 @@ public sealed class LearnEnricher : IEnricher
             yield return $"{entity.DisplayName} {file} Windows";
         }
 
+        // For packaged apps the family name carries the suite or publisher, which is often the
+        // difference between finding the right article and finding nothing: a Learn search for
+        // "ZoomIt" alone is ambiguous, while "Sysinternals ZoomIt" lands on its documentation page.
+        if (entity.Kind == EntityKind.PackagedApp)
+        {
+            var aumid = entity.RawMetadata.GetValueOrDefault("appUserModelId") ?? entity.LaunchTarget;
+            var family = aumid.Split('!', 2)[0];
+            var publisherSeparator = family.LastIndexOf('_');
+            var name = publisherSeparator > 0 ? family[..publisherSeparator] : family;
+
+            foreach (var part in name.Split('.', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (part.Length < 4 || part.Equals(entity.DisplayName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                yield return $"{part} {entity.DisplayName}";
+            }
+        }
+
         yield return entity.Kind == EntityKind.OptionalFeature
             ? $"Windows optional feature {entity.DisplayName}"
             : $"{entity.DisplayName} Windows";
     }
 
-    private static bool IsLikelyRelevant(Entity entity, LearnResult result)
+    private const int AboutTier = 2;
+
+    /// <summary>
+    /// Scores how strongly a result is *about* the entity rather than merely mentioning it:
+    /// 3 = the article's URL slug is the entity, 2 = its title names the entity, 1 = only the body
+    /// or an identifying token matches. Only the best available tier is kept. Accepting any mention
+    /// let unrelated articles become an entity's whole description.
+    /// </summary>
+    private static int Relevance(Entity entity, LearnResult result)
     {
+        var slug = SlugOf(result.Url);
+        var normalizedName = Normalize(entity.DisplayName);
+        var tokens = IdentifyingTokens(entity).Select(Normalize).Where(t => t.Length >= 4).ToArray();
+
+        if (normalizedName.Length >= 4 && (slug == normalizedName || tokens.Contains(slug)))
+            return 3;
+        if (!string.IsNullOrWhiteSpace(result.Title) && result.Title!.Contains(entity.DisplayName, StringComparison.OrdinalIgnoreCase))
+            return AboutTier;
+
         var haystack = $"{result.Title} {result.Description} {result.Url}";
         if (haystack.Contains(entity.DisplayName, StringComparison.OrdinalIgnoreCase))
-            return true;
+            return 1;
         if (entity.LaunchTarget.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase) && haystack.Contains(entity.LaunchTarget, StringComparison.OrdinalIgnoreCase))
-            return true;
-        var file = entity.RawMetadata.GetValueOrDefault("fileName") ?? Path.GetFileName(entity.LaunchTarget);
-        return !string.IsNullOrWhiteSpace(file) && haystack.Contains(Path.GetFileNameWithoutExtension(file), StringComparison.OrdinalIgnoreCase);
+            return 3;
+
+        return tokens.Any(token => haystack.Contains(token, StringComparison.OrdinalIgnoreCase)) ? 1 : 0;
+    }
+
+    private static string SlugOf(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return string.Empty;
+        var segment = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        return Normalize(segment ?? string.Empty);
+    }
+
+    private static string Normalize(string value) => new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
+    private static readonly HashSet<string> GenericTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "microsoft", "windows", "app", "apps", "application", "tool", "tools", "system", "shell", "exe", "com", "net"
+    };
+
+    private static IEnumerable<string> IdentifyingTokens(Entity entity)
+    {
+        var candidates = new List<string?>();
+
+        var aumid = entity.RawMetadata.GetValueOrDefault("appUserModelId") ?? entity.LaunchTarget;
+        var bang = aumid.IndexOf('!');
+        if (bang >= 0 && bang < aumid.Length - 1)
+            candidates.Add(aumid[(bang + 1)..]);
+
+        var file = entity.RawMetadata.GetValueOrDefault("fileName");
+        if (string.IsNullOrWhiteSpace(file) && !entity.LaunchTarget.Contains('!') && !entity.LaunchTarget.Contains("://", StringComparison.Ordinal))
+            file = Path.GetFileName(entity.LaunchTarget);
+        if (!string.IsNullOrWhiteSpace(file))
+            candidates.Add(Path.GetFileNameWithoutExtension(file));
+
+        return candidates
+            .Where(token => !string.IsNullOrWhiteSpace(token) && token!.Length >= 4 && !GenericTokens.Contains(token))
+            .Select(token => token!)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyList<LearnResult> ParseResults(string json)
