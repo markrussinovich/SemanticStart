@@ -1,4 +1,6 @@
-﻿using System.Text;
+﻿using System.Diagnostics;
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -15,6 +17,15 @@ public enum LocalLlmMode
     Custom
 }
 
+public enum LocalLlmRuntime
+{
+    FoundryLocal,
+    Ollama,
+    LmStudio,
+    OpenAiCompatible,
+    Curated
+}
+
 public sealed record LocalLlmOptions
 {
     public const string DefaultModelName = "qwen2.5:1.5b";
@@ -29,6 +40,31 @@ public sealed record LocalLlmConnectionResult(
     string? EndpointBaseUrl,
     string? ModelName,
     string Message);
+
+public sealed record LocalLlmCatalogItem
+{
+    public required string ModelName { get; init; }
+    public required string DisplayName { get; init; }
+    public required LocalLlmRuntime Runtime { get; init; }
+    public required string RuntimeName { get; init; }
+    public string? EndpointBaseUrl { get; init; }
+    public bool IsReady { get; init; }
+    public bool CanDownload { get; init; }
+    public string DownloadSize { get; init; } = "size varies";
+    public string RamRequirement { get; init; } = "RAM varies";
+    public string BestFor { get; init; } = "General local synthesis.";
+    public string Source { get; init; } = "Detected";
+    public bool IsCurated { get; init; }
+
+    public string PickerLabel =>
+        $"{DisplayName} · {RuntimeName} · {(IsReady ? "Ready" : "Download required")} · {DownloadSize} · {RamRequirement}";
+}
+
+public sealed record LocalLlmCatalog(
+    IReadOnlyList<LocalLlmCatalogItem> Models,
+    string StatusMessage,
+    string? DetectedRuntime,
+    string? DetectedEndpointBaseUrl);
 
 public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
 {
@@ -57,15 +93,72 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
         try
         {
             var resolved = await ResolveEndpointAsync(http, options, cancellationToken).ConfigureAwait(false);
-            return resolved is null
-                ? new LocalLlmConnectionResult(false, null, null, "No OpenAI-compatible local LLM endpoint responded.")
-                : new LocalLlmConnectionResult(true, resolved.Endpoint.ToString().TrimEnd('/'), resolved.ModelName, $"Connected to {resolved.Endpoint} using {resolved.ModelName}.");
+            if (resolved is null)
+                return new LocalLlmConnectionResult(false, null, null, "No OpenAI-compatible local LLM endpoint responded.");
+
+            var completion = await TestCompletionAsync(http, resolved, cancellationToken).ConfigureAwait(false);
+            return string.IsNullOrWhiteSpace(completion)
+                ? new LocalLlmConnectionResult(false, resolved.Endpoint.ToString().TrimEnd('/'), resolved.ModelName, $"Connected to {resolved.Endpoint}, but {resolved.ModelName} did not complete a test prompt.")
+                : new LocalLlmConnectionResult(true, resolved.Endpoint.ToString().TrimEnd('/'), resolved.ModelName, $"Generated a test completion with {resolved.ModelName}.");
         }
         finally
         {
             if (ownsClient)
                 http.Dispose();
         }
+    }
+
+    public static async Task<LocalLlmCatalog> DiscoverCatalogAsync(HttpClient? http = null, CancellationToken cancellationToken = default)
+    {
+        var ownsClient = http is null;
+        http ??= new HttpClient();
+        try
+        {
+            var foundryEndpoint = (await DiscoverFoundryEndpointsAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault()?.ToString().TrimEnd('/');
+            var foundry = await DiscoverFoundryModelsAsync(foundryEndpoint, cancellationToken).ConfigureAwait(false);
+            var ollama = await DiscoverOllamaModelsAsync(http, new Uri("http://localhost:11434"), cancellationToken).ConfigureAwait(false);
+            var lmStudio = await DiscoverOpenAiModelsAsync(http, new Uri("http://localhost:1234"), LocalLlmRuntime.LmStudio, "LM Studio", cancellationToken).ConfigureAwait(false);
+            var generic = await DiscoverOpenAiModelsAsync(http, new Uri("http://localhost:8080"), LocalLlmRuntime.OpenAiCompatible, "OpenAI-compatible", cancellationToken).ConfigureAwait(false);
+
+            var models = MergeCatalogItems(foundry.Concat(ollama).Concat(lmStudio).Concat(generic)).ToArray();
+            if (models.Length == 0)
+            {
+                var foundryInstalled = ResolveFoundryCli() is not null;
+                var fallback = CuratedModels(null, foundryInstalled: foundryInstalled, ollamaAvailable: false).ToArray();
+                return new LocalLlmCatalog(
+                    fallback,
+                    foundryInstalled
+                        ? "Foundry Local is installed, but its model catalog did not respond quickly. Try Refresh, or download one of these recommended models."
+                        : "No local LLM runtime was detected. Install Foundry Local (recommended), then refresh and download one of these small models.",
+                    foundryInstalled ? "Foundry Local" : null,
+                    null);
+            }
+
+            var firstReady = models.FirstOrDefault(m => m.IsReady);
+            return new LocalLlmCatalog(
+                models,
+                firstReady is null
+                    ? "Models were found, but none are downloaded yet. Pick one and download it before rebuilding the index."
+                    : $"{firstReady.RuntimeName} detected at {firstReady.EndpointBaseUrl ?? "local runtime"}; {models.Count(m => m.IsReady)} model(s) ready.",
+                firstReady?.RuntimeName ?? models[0].RuntimeName,
+                firstReady?.EndpointBaseUrl ?? models[0].EndpointBaseUrl);
+        }
+        finally
+        {
+            if (ownsClient)
+                http.Dispose();
+        }
+    }
+
+    public static async Task<LocalLlmConnectionResult> DownloadModelAsync(LocalLlmCatalogItem item, IProgress<double>? progress = null, CancellationToken cancellationToken = default)
+    {
+        progress?.Report(0);
+        if (item.Runtime == LocalLlmRuntime.FoundryLocal)
+            return await DownloadFoundryModelAsync(item, progress, cancellationToken).ConfigureAwait(false);
+        if (item.Runtime == LocalLlmRuntime.Ollama && !string.IsNullOrWhiteSpace(item.EndpointBaseUrl))
+            return await DownloadOllamaModelAsync(item, progress, cancellationToken).ConfigureAwait(false);
+
+        return new LocalLlmConnectionResult(false, item.EndpointBaseUrl, item.ModelName, $"Automatic download is not available for {item.RuntimeName}.");
     }
 
     public async Task<SynthesizedProfile> SynthesizeAsync(Entity entity, IReadOnlyList<EnrichmentDocument> documents, CancellationToken cancellationToken = default)
@@ -174,22 +267,220 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
 
     private static IReadOnlyList<string> CleanList(IEnumerable<string>? values) => values?.Select(v => Regex.Replace(v.Trim(), @"\s+", " ")).Where(v => v.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(12).ToArray() ?? [];
 
+    private static async Task<string?> TestCompletionAsync(HttpClient http, ResolvedEndpoint resolved, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(30));
+            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(resolved.Endpoint, "/v1/chat/completions"));
+            request.Content = JsonContent(new
+            {
+                model = resolved.ModelName,
+                messages = new[] { new { role = "user", content = "Reply with exactly: OK" } },
+                temperature = 0,
+                max_tokens = 8,
+                stream = false
+            });
+
+            using var response = await http.SendAsync(request, timeout.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+                return null;
+
+            var body = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+            using var responseJson = JsonDocument.Parse(body);
+            return responseJson.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static IEnumerable<LocalLlmCatalogItem> MergeCatalogItems(IEnumerable<LocalLlmCatalogItem> items) =>
+        items
+            .GroupBy(i => $"{i.Runtime}|{i.ModelName}", StringComparer.OrdinalIgnoreCase)
+            .Select(g =>
+            {
+                var best = g.OrderByDescending(i => i.IsReady).ThenBy(i => i.IsCurated).First();
+                return best with { IsReady = g.Any(i => i.IsReady) || best.IsReady };
+            })
+            .OrderBy(i => i.Runtime == LocalLlmRuntime.FoundryLocal ? 0 : i.Runtime == LocalLlmRuntime.Ollama ? 1 : 2)
+            .ThenByDescending(i => i.IsReady)
+            .ThenBy(i => i.DisplayName, StringComparer.OrdinalIgnoreCase);
+
+    private static async Task<IReadOnlyList<LocalLlmCatalogItem>> DiscoverFoundryModelsAsync(string? endpointBaseUrl, CancellationToken cancellationToken)
+    {
+        var foundry = ResolveFoundryCli();
+        if (foundry is null)
+            return [];
+
+        try
+        {
+            var list = await ProcessRunner.RunAsync(foundry, ["model", "list"], TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+            var cache = await ProcessRunner.RunAsync(foundry, ["cache", "list"], TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+            if (list.ExitCode != 0 && string.IsNullOrWhiteSpace(list.Output))
+                return [];
+
+            var parsed = ParseFoundryModelList(list.Output)
+                .Select(name => CreateDetectedItem(
+                    name,
+                    LocalLlmRuntime.FoundryLocal,
+                    "Foundry Local",
+                    endpointBaseUrl,
+                    cache.Output.Contains(name, StringComparison.OrdinalIgnoreCase),
+                    canDownload: true,
+                    source: "foundry model list"))
+                .ToArray();
+
+            return parsed.Length > 0 ? parsed : [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TaskCanceledException)
+        {
+            return [];
+        }
+    }
+
+    private static async Task<IReadOnlyList<LocalLlmCatalogItem>> DiscoverOllamaModelsAsync(HttpClient http, Uri endpoint, CancellationToken cancellationToken)
+    {
+        var installed = await ProbeOllamaTagsWithSizesAsync(http, endpoint, cancellationToken).ConfigureAwait(false);
+        if (installed is null)
+            return [];
+
+        var endpointText = endpoint.ToString().TrimEnd('/');
+        var detected = installed.Select(model => CreateDetectedItem(
+            model.Name,
+            LocalLlmRuntime.Ollama,
+            "Ollama",
+            endpointText,
+            isReady: true,
+            canDownload: true,
+            source: "/api/tags",
+            downloadSize: model.SizeBytes is { } size ? FormatBytes(size) : null));
+
+        return detected.Concat(CuratedModels(endpointText, foundryInstalled: false, ollamaAvailable: true)).ToArray();
+    }
+
+    private static async Task<IReadOnlyList<LocalLlmCatalogItem>> DiscoverOpenAiModelsAsync(
+        HttpClient http,
+        Uri endpoint,
+        LocalLlmRuntime runtime,
+        string runtimeName,
+        CancellationToken cancellationToken)
+    {
+        var models = await ProbeOpenAiModelsAsync(http, endpoint, cancellationToken).ConfigureAwait(false);
+        var endpointText = endpoint.ToString().TrimEnd('/');
+        return models
+            .Select(model => CreateDetectedItem(model, runtime, runtimeName, endpointText, isReady: true, canDownload: false, source: "/v1/models"))
+            .ToArray();
+    }
+
+    private static LocalLlmCatalogItem CreateDetectedItem(
+        string modelName,
+        LocalLlmRuntime runtime,
+        string runtimeName,
+        string? endpointBaseUrl,
+        bool isReady,
+        bool canDownload,
+        string source,
+        string? downloadSize = null)
+    {
+        var curated = CuratedModels(endpointBaseUrl, foundryInstalled: runtime == LocalLlmRuntime.FoundryLocal, ollamaAvailable: runtime == LocalLlmRuntime.Ollama)
+            .FirstOrDefault(c => c.Runtime == runtime && c.ModelName.Equals(modelName, StringComparison.OrdinalIgnoreCase));
+
+        return new LocalLlmCatalogItem
+        {
+            ModelName = modelName,
+            DisplayName = curated?.DisplayName ?? modelName,
+            Runtime = runtime,
+            RuntimeName = runtimeName,
+            EndpointBaseUrl = endpointBaseUrl,
+            IsReady = isReady,
+            CanDownload = canDownload,
+            DownloadSize = downloadSize ?? curated?.DownloadSize ?? "size unknown",
+            RamRequirement = curated?.RamRequirement ?? "depends on quantization",
+            BestFor = curated?.BestFor ?? "Detected local model.",
+            Source = source,
+            IsCurated = false,
+        };
+    }
+
+    private static IEnumerable<LocalLlmCatalogItem> CuratedModels(string? endpointBaseUrl, bool foundryInstalled, bool ollamaAvailable)
+    {
+        if (foundryInstalled || !ollamaAvailable)
+        {
+            yield return Curated("qwen2.5-0.5b", "Qwen2.5 0.5B", LocalLlmRuntime.FoundryLocal, "Foundry Local", endpointBaseUrl, foundryInstalled, "≈400 MB", "≈2 GB RAM", "Fastest CPU setup and smoke tests.");
+            yield return Curated("qwen2.5-1.5b", "Qwen2.5 1.5B", LocalLlmRuntime.FoundryLocal, "Foundry Local", endpointBaseUrl, foundryInstalled, "≈1.0 GB", "≈4 GB RAM", "Best default for fast JSON metadata synthesis.");
+            yield return Curated("llama-3.2-1b", "Llama 3.2 1B", LocalLlmRuntime.FoundryLocal, "Foundry Local", endpointBaseUrl, foundryInstalled, "≈1.3 GB", "≈4 GB RAM", "Very small multilingual instruction following.");
+            yield return Curated("phi-3.5-mini", "Phi-3.5 Mini", LocalLlmRuntime.FoundryLocal, "Foundry Local", endpointBaseUrl, foundryInstalled, "≈2.2 GB", "≈6 GB RAM", "Higher quality reasoning when latency is acceptable.");
+        }
+
+        if (ollamaAvailable || !foundryInstalled)
+        {
+            yield return Curated("qwen2.5:0.5b", "Qwen2.5 0.5B", LocalLlmRuntime.Ollama, "Ollama", ollamaAvailable ? endpointBaseUrl ?? "http://localhost:11434" : null, ollamaAvailable, "398 MB", "≈2 GB RAM", "Fastest CPU setup and smoke tests.");
+            yield return Curated("qwen2.5:1.5b", "Qwen2.5 1.5B", LocalLlmRuntime.Ollama, "Ollama", ollamaAvailable ? endpointBaseUrl ?? "http://localhost:11434" : null, ollamaAvailable, "986 MB", "≈4 GB RAM", "Best default for fast JSON metadata synthesis.");
+            yield return Curated("llama3.2:1b", "Llama 3.2 1B", LocalLlmRuntime.Ollama, "Ollama", ollamaAvailable ? endpointBaseUrl ?? "http://localhost:11434" : null, ollamaAvailable, "≈1.3 GB", "≈4 GB RAM", "Very small multilingual instruction following.");
+            yield return Curated("llama3.2:3b", "Llama 3.2 3B", LocalLlmRuntime.Ollama, "Ollama", ollamaAvailable ? endpointBaseUrl ?? "http://localhost:11434" : null, ollamaAvailable, "≈2.0 GB", "≈6 GB RAM", "Better quality while still practical on CPU.");
+            yield return Curated("gemma2:2b", "Gemma 2 2B", LocalLlmRuntime.Ollama, "Ollama", ollamaAvailable ? endpointBaseUrl ?? "http://localhost:11434" : null, ollamaAvailable, "≈1.6 GB", "≈4 GB RAM", "Balanced summarization and categorization.");
+            yield return Curated("phi3.5:mini", "Phi-3.5 Mini", LocalLlmRuntime.Ollama, "Ollama", ollamaAvailable ? endpointBaseUrl ?? "http://localhost:11434" : null, ollamaAvailable, "≈2.2 GB", "≈6 GB RAM", "Higher quality reasoning when latency is acceptable.");
+        }
+    }
+
+    private static LocalLlmCatalogItem Curated(
+        string modelName,
+        string displayName,
+        LocalLlmRuntime runtime,
+        string runtimeName,
+        string? endpointBaseUrl,
+        bool canDownload,
+        string downloadSize,
+        string ramRequirement,
+        string bestFor) => new()
+        {
+            ModelName = modelName,
+            DisplayName = displayName,
+            Runtime = runtime,
+            RuntimeName = runtimeName,
+            EndpointBaseUrl = endpointBaseUrl,
+            IsReady = false,
+            CanDownload = canDownload,
+            DownloadSize = downloadSize,
+            RamRequirement = ramRequirement,
+            BestFor = bestFor,
+            Source = "Curated small-model list",
+            IsCurated = true,
+        };
+
     private static async Task<ResolvedEndpoint?> ResolveEndpointAsync(HttpClient http, LocalLlmOptions options, CancellationToken cancellationToken)
     {
-        var endpoints = options.Mode == LocalLlmMode.Custom
-            ? CustomEndpoints(options.EndpointBaseUrl)
+        var endpointCandidates = options.Mode == LocalLlmMode.Custom
+            ? CustomEndpoints(options.EndpointBaseUrl).Select(e => new EndpointCandidate(e, LocalLlmRuntime.OpenAiCompatible))
             : await AutoEndpointsAsync(cancellationToken).ConfigureAwait(false);
 
-        foreach (var endpoint in endpoints.DistinctBy(e => e.ToString(), StringComparer.OrdinalIgnoreCase))
+        var probes = new List<(EndpointCandidate Candidate, IReadOnlyList<string> Models)>();
+
+        foreach (var candidate in endpointCandidates.DistinctBy(e => e.Endpoint.ToString(), StringComparer.OrdinalIgnoreCase))
         {
-            var models = await ProbeModelsAsync(http, endpoint, cancellationToken).ConfigureAwait(false);
+            var models = await ProbeModelsAsync(http, candidate.Endpoint, cancellationToken).ConfigureAwait(false);
             if (models.Count == 0)
                 continue;
 
-            return new ResolvedEndpoint(endpoint, SelectModel(options, models));
+            probes.Add((candidate, models));
         }
 
-        return null;
+        if (probes.Count == 0)
+            return null;
+
+        var preferred = NormalizedModelName(options);
+        if (options.Mode != LocalLlmMode.Custom)
+        {
+            var preferredProbe = probes.FirstOrDefault(p => p.Models.Any(m => m.Equals(preferred, StringComparison.OrdinalIgnoreCase)));
+            if (preferredProbe.Models is not null)
+                return new ResolvedEndpoint(preferredProbe.Candidate.Endpoint, preferred, preferredProbe.Candidate.Runtime);
+        }
+
+        var selected = probes[0];
+        return new ResolvedEndpoint(selected.Candidate.Endpoint, SelectModel(options, selected.Models), selected.Candidate.Runtime);
     }
 
     private static string SelectModel(LocalLlmOptions options, IReadOnlyList<string> models)
@@ -215,16 +506,16 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
         }
     }
 
-    private static async Task<IEnumerable<Uri>> AutoEndpointsAsync(CancellationToken cancellationToken)
+    private static async Task<IEnumerable<EndpointCandidate>> AutoEndpointsAsync(CancellationToken cancellationToken)
     {
-        var endpoints = new List<Uri>();
-        endpoints.AddRange(await DiscoverFoundryEndpointsAsync(cancellationToken).ConfigureAwait(false));
-        endpoints.Add(new Uri("http://localhost:59321"));
-        endpoints.Add(new Uri("http://127.0.0.1:59321"));
-        endpoints.Add(new Uri("http://localhost:11434"));
-        endpoints.Add(new Uri("http://localhost:1234"));
-        endpoints.Add(new Uri("http://localhost:8080"));
-        return endpoints.Select(NormalizeEndpoint);
+        var endpoints = new List<EndpointCandidate>();
+        endpoints.AddRange((await DiscoverFoundryEndpointsAsync(cancellationToken).ConfigureAwait(false)).Select(e => new EndpointCandidate(e, LocalLlmRuntime.FoundryLocal)));
+        endpoints.Add(new EndpointCandidate(new Uri("http://localhost:59321"), LocalLlmRuntime.FoundryLocal));
+        endpoints.Add(new EndpointCandidate(new Uri("http://127.0.0.1:59321"), LocalLlmRuntime.FoundryLocal));
+        endpoints.Add(new EndpointCandidate(new Uri("http://localhost:11434"), LocalLlmRuntime.Ollama));
+        endpoints.Add(new EndpointCandidate(new Uri("http://localhost:1234"), LocalLlmRuntime.LmStudio));
+        endpoints.Add(new EndpointCandidate(new Uri("http://localhost:8080"), LocalLlmRuntime.OpenAiCompatible));
+        return endpoints.Select(e => e with { Endpoint = NormalizeEndpoint(e.Endpoint) });
     }
 
     private static Uri NormalizeEndpoint(Uri endpoint)
@@ -292,16 +583,189 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
         }
     }
 
+    private static async Task<IReadOnlyList<(string Name, long? SizeBytes)>?> ProbeOllamaTagsWithSizesAsync(HttpClient http, Uri endpoint, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromMilliseconds(800));
+            using var response = await http.GetAsync(new Uri(endpoint, "/api/tags"), timeout.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return null;
+            var json = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("models", out var models) || models.ValueKind != JsonValueKind.Array)
+                return null;
+
+            return models.EnumerateArray()
+                .Select(model =>
+                {
+                    var name = model.TryGetProperty("name", out var nameElement) ? nameElement.GetString() : null;
+                    long? size = model.TryGetProperty("size", out var sizeElement) && sizeElement.TryGetInt64(out var bytes) ? bytes : null;
+                    return (Name: name, SizeBytes: size);
+                })
+                .Where(model => !string.IsNullOrWhiteSpace(model.Name))
+                .Select(model => (model.Name!, model.SizeBytes))
+                .ToArray();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task<LocalLlmConnectionResult> DownloadOllamaModelAsync(LocalLlmCatalogItem item, IProgress<double>? progress, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var http = new HttpClient();
+            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(new Uri(item.EndpointBaseUrl!), "/api/pull"));
+            request.Content = JsonContent(new { name = item.ModelName, stream = true });
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+                return new LocalLlmConnectionResult(false, item.EndpointBaseUrl, item.ModelName, $"Ollama pull failed with HTTP {(int)response.StatusCode}.");
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using var reader = new StreamReader(stream);
+            while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("total", out var totalElement)
+                    && root.TryGetProperty("completed", out var completedElement)
+                    && totalElement.TryGetInt64(out var total)
+                    && completedElement.TryGetInt64(out var completed)
+                    && total > 0)
+                {
+                    progress?.Report(Math.Clamp((double)completed / total, 0, 1));
+                }
+
+                if (root.TryGetProperty("error", out var error))
+                    return new LocalLlmConnectionResult(false, item.EndpointBaseUrl, item.ModelName, error.GetString() ?? "Ollama pull failed.");
+            }
+
+            progress?.Report(1);
+            return new LocalLlmConnectionResult(true, item.EndpointBaseUrl, item.ModelName, $"Downloaded {item.ModelName} with Ollama.");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException or IOException)
+        {
+            return new LocalLlmConnectionResult(false, item.EndpointBaseUrl, item.ModelName, $"Ollama download failed: {ex.Message}");
+        }
+    }
+
+    private static async Task<LocalLlmConnectionResult> DownloadFoundryModelAsync(LocalLlmCatalogItem item, IProgress<double>? progress, CancellationToken cancellationToken)
+    {
+        var foundry = ResolveFoundryCli();
+        if (foundry is null)
+            return new LocalLlmConnectionResult(false, item.EndpointBaseUrl, item.ModelName, "Foundry Local is not installed.");
+
+        try
+        {
+            var result = await RunProcessWithProgressAsync(foundry, ["model", "download", item.ModelName], progress, cancellationToken).ConfigureAwait(false);
+            progress?.Report(result.ExitCode == 0 ? 1 : 0);
+            return result.ExitCode == 0
+                ? new LocalLlmConnectionResult(true, item.EndpointBaseUrl, item.ModelName, $"Downloaded {item.ModelName} with Foundry Local.")
+                : new LocalLlmConnectionResult(false, item.EndpointBaseUrl, item.ModelName, $"Foundry download failed: {TrimOutput(result.Output)}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TaskCanceledException)
+        {
+            return new LocalLlmConnectionResult(false, item.EndpointBaseUrl, item.ModelName, $"Foundry download failed: {ex.Message}");
+        }
+    }
+
+    private static async Task<(int ExitCode, string Output)> RunProcessWithProgressAsync(string fileName, IReadOnlyList<string> args, IProgress<double>? progress, CancellationToken cancellationToken)
+    {
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo { FileName = fileName, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true, CreateNoWindow = true };
+        foreach (var arg in args) process.StartInfo.ArgumentList.Add(arg);
+        var output = new StringBuilder();
+        process.OutputDataReceived += (_, e) => UpdateProgress(e.Data);
+        process.ErrorDataReceived += (_, e) => UpdateProgress(e.Data);
+        process.Start();
+        process.StandardInput.Close();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        return (process.ExitCode, output.ToString());
+
+        void UpdateProgress(string? line)
+        {
+            if (line is null)
+                return;
+
+            output.AppendLine(line);
+            var percent = Regex.Match(line, @"(?<percent>\d+(?:\.\d+)?)\s*%");
+            if (percent.Success && double.TryParse(percent.Groups["percent"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+                progress?.Report(Math.Clamp(value / 100, 0, 1));
+        }
+    }
+
+    private static string TrimOutput(string output)
+    {
+        output = Regex.Replace(output.Trim(), @"\s+", " ");
+        return output.Length <= 240 ? output : output[..240] + "...";
+    }
+
     private static async Task<IEnumerable<Uri>> DiscoverFoundryEndpointsAsync(CancellationToken cancellationToken)
     {
-        var foundry = ResolveOnPath("foundry.exe") ?? ResolveOnPath("foundry");
+        var foundry = ResolveFoundryCli();
         if (foundry is null) return [];
         try
         {
-            var result = await ProcessRunner.RunAsync(foundry, ["service", "status"], TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+            var result = await ProcessRunner.RunAsync(foundry, ["server", "status"], TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+            if (result.ExitCode != 0 || !Regex.IsMatch(result.Output, @"https?://(?:localhost|127\.0\.0\.1):\d+"))
+                result = await ProcessRunner.RunAsync(foundry, ["service", "status"], TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+
             return Regex.Matches(result.Output, @"https?://(?:localhost|127\.0\.0\.1):\d+").Select(m => new Uri(m.Value)).ToArray();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TaskCanceledException) { return []; }
+    }
+
+    private static IEnumerable<string> ParseFoundryModelList(string output)
+    {
+        var names = ParseModelNames(output)
+            .Where(name => name.Contains('-', StringComparison.Ordinal) || name.Contains('.', StringComparison.Ordinal))
+            .Where(name => !name.Equals("model-id", StringComparison.OrdinalIgnoreCase)
+                && !name.Equals("model", StringComparison.OrdinalIgnoreCase)
+                && !name.Equals("alias", StringComparison.OrdinalIgnoreCase));
+        return names.Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string> ParseModelNames(string output)
+    {
+        foreach (var raw in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var line = Regex.Replace(raw, @"[│┃|]", " ");
+            foreach (Match match in Regex.Matches(line, @"(?<![A-Za-z0-9_.:/-])(?<name>[A-Za-z][A-Za-z0-9_.]*(?:[-:/][A-Za-z0-9_.]+)+)(?![A-Za-z0-9_.:/-])"))
+            {
+                var name = match.Groups["name"].Value.Trim();
+                if (!name.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                    && !name.Contains("foundry-local", StringComparison.OrdinalIgnoreCase)
+                    && !name.Contains("microsoft.com", StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return name;
+                }
+            }
+        }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        var value = (double)bytes;
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+
+        return value >= 10 || unit == 0
+            ? $"{value:F0} {units[unit]}"
+            : $"{value:F1} {units[unit]}";
     }
 
     private static string? ResolveOnPath(string fileName)
@@ -313,11 +777,14 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
         return null;
     }
 
+    private static string? ResolveFoundryCli() => ResolveOnPath("foundry.exe") ?? ResolveOnPath("foundry");
+
     private sealed record LlmDto(
         [property: JsonPropertyName("summary")] string Summary,
         [property: JsonPropertyName("tasks")] string[]? Tasks,
         [property: JsonPropertyName("synonyms")] string[]? Synonyms,
         [property: JsonPropertyName("category")] string? Category);
 
-    private sealed record ResolvedEndpoint(Uri Endpoint, string ModelName);
+    private sealed record EndpointCandidate(Uri Endpoint, LocalLlmRuntime Runtime);
+    private sealed record ResolvedEndpoint(Uri Endpoint, string ModelName, LocalLlmRuntime Runtime);
 }
