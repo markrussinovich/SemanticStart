@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.RegularExpressions;
 using SemanticStart.Core.Abstractions;
 using SemanticStart.Core.Model;
 
@@ -167,7 +169,8 @@ public sealed class HybridSearchEngine : ISearchEngine
 
             var candidate = GetOrAdd(snapshot, candidates, index);
             candidate.VectorScore = score;
-            candidate.VectorContribution = _options.VectorArmWeight / (_options.RrfK + rank + 1);
+            candidate.VectorContribution = _options.VectorArmWeight / (_options.RrfK + rank + 1)
+                + _options.VectorMagnitudeWeight * score;
             candidate.Score += candidate.VectorContribution;
         }
 
@@ -179,6 +182,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         // whose sole claim was the word "computer". Weak lexical rows can still surface through the
         // vector or literal arms on their own merit.
         var lexicalLeader = lexicalHits.Count > 0 ? lexicalHits.Max(h => h.Score) : 0;
+        var queryTerms = ContentTerms(query);
 
         for (var rank = 0; rank < lexicalHits.Count; rank++)
         {
@@ -191,7 +195,8 @@ public sealed class HybridSearchEngine : ISearchEngine
 
             var candidate = GetOrAdd(snapshot, candidates, index);
             candidate.LexicalScore = score;
-            candidate.LexicalContribution = _options.LexicalArmWeight / (_options.RrfK + rank + 1);
+            candidate.LexicalContribution = _options.LexicalArmWeight * LexicalCoverageWeight(candidate.Entity, queryTerms)
+                / (_options.RrfK + rank + 1);
             candidate.Score += candidate.LexicalContribution;
         }
 
@@ -404,6 +409,63 @@ public sealed class HybridSearchEngine : ISearchEngine
         public double LiteralStrength { get; set; }
         public string? LiteralReason { get; set; }
     }
+
+    /// <summary>
+    /// How much of the query a lexical hit actually accounts for. The FTS query is an OR of the
+    /// query's tokens, so a row matching one common word ranks alongside a row matching all of
+    /// them: "annotate the screen during a demo" and "record my screen" both returned the Lock
+    /// Screen settings page first, on the strength of the single word "screen", pushing ZoomIt and
+    /// Steps Recorder down. Scaling the arm by coverage keeps such rows in play — they are still
+    /// legitimate weak matches — without letting them lead.
+    /// </summary>
+    private static double LexicalCoverageWeight(IndexedEntity entity, IReadOnlyList<string> queryTerms)
+    {
+        // A single-token query is a name or a prefix being typed, where the token *is* the whole
+        // query and coverage carries no information.
+        if (queryTerms.Count < 2)
+            return 1.0;
+
+        var haystack = BuildMatchText(entity);
+        var matched = queryTerms.Count(term => haystack.Contains(term, StringComparison.Ordinal));
+        var coverage = (double)matched / queryTerms.Count;
+        return Math.Max(coverage, _minimumCoverageWeight);
+    }
+
+    private const double _minimumCoverageWeight = 0.2;
+
+    private static string BuildMatchText(IndexedEntity entity)
+    {
+        var builder = new StringBuilder();
+        builder.Append(' ').Append(entity.Entity.DisplayName.ToLowerInvariant());
+        if (entity.Profile is { } profile)
+        {
+            builder.Append(' ').Append(profile.Summary.ToLowerInvariant());
+            foreach (var task in profile.Tasks)
+                builder.Append(' ').Append(task.ToLowerInvariant());
+            foreach (var synonym in profile.Synonyms)
+                builder.Append(' ').Append(synonym.ToLowerInvariant());
+        }
+
+        return builder.Append(' ').ToString();
+    }
+
+    private static readonly HashSet<string> QueryStopwords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "does", "for", "from", "get",
+        "how", "i", "in", "is", "it", "me", "my", "of", "on", "or", "that", "the", "then", "there",
+        "this", "to", "up", "want", "was", "what", "when", "where", "which", "why", "will", "with",
+        "you", "your", "during", "some", "any", "make", "see"
+    };
+
+    private static IReadOnlyList<string> ContentTerms(string query) =>
+        QueryTermRegex.Matches(query)
+            .Select(m => m.Value.ToLowerInvariant())
+            .Where(t => t.Length >= 3 && !QueryStopwords.Contains(t))
+            .Distinct(StringComparer.Ordinal)
+            .Take(12)
+            .ToArray();
+
+    private static readonly Regex QueryTermRegex = new(@"[\p{L}\p{N}]+", RegexOptions.Compiled);
 
     /// <summary>
     /// An immutable view of the index. Every field is derived from a single read of the store, so

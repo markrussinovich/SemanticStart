@@ -470,9 +470,12 @@ public sealed class LearnEnricher : IEnricher
         Regex.IsMatch(haystack, $@"(?<![\w]){Regex.Escape(needle)}(?![\w])", RegexOptions.IgnoreCase);
 
     /// <summary>
-    /// Documentation hubs and landing pages describe a whole product area, never a single tool, so
-    /// their prose ("Windows technical documentation for developers and IT pros") is pure noise in
-    /// an embedding. They are recognised by having almost no path depth below the locale segment.
+    /// Documentation hubs, landing pages, and non-product areas. Hubs describe a whole product area
+    /// rather than a single tool, so their prose ("Windows technical documentation for developers
+    /// and IT pros") is pure noise in an embedding. The excluded areas are worse than noise: the
+    /// editorial style guide describes *how to write about* a product, which is why Snipping Tool
+    /// was summarised as capitalization rules and its relationship with Snip &amp; Sketch, and
+    /// training and Q&amp;A pages describe exercises and questions rather than the thing itself.
     /// </summary>
     private static bool IsHubPage(string? url)
     {
@@ -481,8 +484,17 @@ public sealed class LearnEnricher : IEnricher
 
         var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
         // e.g. /en-us/windows/ -> ["en-us","windows"]; a real article is at least one level deeper.
-        return segments.Length <= 2;
+        if (segments.Length <= 2)
+            return true;
+
+        return segments.Any(segment => ExcludedAreas.Any(area => segment.StartsWith(area, StringComparison.OrdinalIgnoreCase)));
     }
+
+    private static readonly string[] ExcludedAreas =
+    [
+        "product-style-guide", "style-guide", "training", "certifications", "credentials",
+        "answers", "shows", "events", "samples", "assessments", "plans"
+    ];
 
     private static string SlugOf(string? url)
     {
@@ -541,7 +553,8 @@ public sealed class LearnEnricher : IEnricher
         "This browser is no longer supported", "Table of contents", "Skip to main content",
         "Read in English", "Save Add to Collections", "Add to plan", "Share via", "was this page helpful",
         "Submit and view feedback", "Additional resources", "In this article", "Feedback",
-        "Access to this page requires authorization", "changing directories", "Download Microsoft Edge"
+        "Access to this page requires authorization", "changing directories", "Download Microsoft Edge",
+        "only available to authorized"
     ];
 
     private static string SelectUsefulSentences(string prose, int maxChars)

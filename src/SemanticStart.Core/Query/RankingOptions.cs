@@ -92,6 +92,16 @@ public sealed record RankingOptions
     /// </summary>
     public double MinRelativeScoreWithoutIndependentEvidence { get; init; } = 0.35;
 
+    /// <summary>
+    /// Weight applied to the raw cosine as a fused-score term, in addition to the arm's
+    /// reciprocal-rank contribution. RRF is rank-based, and with K = 60 the top dozen ranks differ
+    /// by well under a thousandth, so realistic queries routinely produce exact ties that are then
+    /// broken arbitrarily. Asking to annotate the screen scored ZoomIt highest of anything in the
+    /// index at cosine 0.427 and still ranked it behind the Lock Screen settings page at 0.356.
+    /// Kept small: this is a tie-breaker over similarly ranked candidates, not a second ranking.
+    /// </summary>
+    public double VectorMagnitudeWeight { get; init; } = 0.02;
+
     /// <summary>Relative literal strength when the display name starts with the query. This is the "wor" -> "Word" rule.</summary>
     public double PrefixBoost { get; init; } = 1.5;
 
