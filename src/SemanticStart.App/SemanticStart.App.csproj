@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!--
+      DPI awareness lives in the manifest because the OS applies it before any managed code runs;
+      WinForms' ApplicationHighDpiMode is never applied here since a WPF app does not call
+      ApplicationConfiguration.Initialize(). WFO0003 flags the manifest route, which is correct
+      advice for a pure WinForms app but not for this hybrid one.
+    -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SemanticStart.Core\SemanticStart.Core.csproj" />
+  </ItemGroup>
+
+</Project>

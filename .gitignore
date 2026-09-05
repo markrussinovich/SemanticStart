@@ -1,0 +1,12 @@
+# Build output
+bin/
+obj/
+artifacts/
+
+# Local tooling
+.vs/
+*.user
+
+# Downloaded ONNX weights and any other large local assets
+models/
+*.onnx

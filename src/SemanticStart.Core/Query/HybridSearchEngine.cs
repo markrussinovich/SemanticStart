@@ -1,0 +1,302 @@
+using System.Diagnostics;
+using SemanticStart.Core.Abstractions;
+using SemanticStart.Core.Model;
+
+namespace SemanticStart.Core.Query;
+
+/// <summary>
+/// Hybrid retrieval over the built index.
+///
+/// Two arms run against every query. The vector arm supplies semantic recall so that a phrase
+/// describing an intent finds a tool whose name shares no words with it. The lexical arm supplies
+/// precision on literal names. Neither is sufficient alone: pure vector search embarrassingly
+/// fails on short prefixes like "wor", and pure lexical search cannot answer "free up disk space".
+/// Results are combined with reciprocal rank fusion, then adjusted by literal-name boosts and by
+/// what the user actually launches.
+///
+/// The whole index is held in memory. At a few thousand entities the vector matrix is only a few
+/// megabytes and a brute-force scan beats the complexity of an approximate index.
+/// </summary>
+public sealed class HybridSearchEngine : ISearchEngine
+{
+    private readonly IIndexStore _store;
+    private readonly IEmbeddingModel _embeddings;
+    private readonly RankingOptions _options;
+
+    private readonly SemaphoreSlim _loadLock = new(1, 1);
+
+    /// <summary>
+    /// The entity array, the vector matrix, and the usage table must be replaced together. A
+    /// background reindex swaps this reference, and a search in flight keeps reading the snapshot
+    /// it started with. Holding them in separate fields would let a search pair a new entity list
+    /// with an old vector matrix and read off the end of it.
+    /// </summary>
+    private volatile Snapshot? _snapshot;
+
+    public HybridSearchEngine(IIndexStore store, IEmbeddingModel embeddings, RankingOptions? options = null)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _embeddings = embeddings ?? throw new ArgumentNullException(nameof(embeddings));
+        _options = options ?? RankingOptions.Default;
+    }
+
+    /// <summary>Number of entities currently searchable.</summary>
+    public int Count => _snapshot?.Entities.Length ?? 0;
+
+    /// <summary>
+    /// Pulls the index into memory. Called implicitly by the first search, but the app should
+    /// call it at startup so the first keystroke does not pay for it.
+    /// </summary>
+    public async Task LoadAsync(CancellationToken cancellationToken = default)
+    {
+        await _loadLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var entities = await _store.GetAllAsync(cancellationToken).ConfigureAwait(false);
+            var vectors = await _store.GetVectorMatrixAsync(cancellationToken).ConfigureAwait(false);
+            var usage = await _store.GetUsageStatsAsync(cancellationToken).ConfigureAwait(false);
+
+            var array = entities.ToArray();
+            var byId = new Dictionary<string, int>(array.Length, StringComparer.Ordinal);
+            for (var i = 0; i < array.Length; i++)
+                byId[array[i].Entity.Id] = i;
+
+            var byOrdinal = new Dictionary<int, int>(array.Length);
+            for (var i = 0; i < array.Length; i++)
+            {
+                if (array[i].VectorOrdinal is { } ordinal)
+                    byOrdinal[ordinal] = i;
+            }
+
+            _snapshot = new Snapshot(array, byId, byOrdinal, vectors, _embeddings.Dimensions, usage);
+        }
+        finally
+        {
+            _loadLock.Release();
+        }
+    }
+
+    /// <summary>Discards the in-memory snapshot so the next search picks up a rebuilt index.</summary>
+    public void Invalidate() => _snapshot = null;
+
+    public async Task<IReadOnlyList<SearchHit>> SearchAsync(
+        string query,
+        int limit = 10,
+        CancellationToken cancellationToken = default)
+    {
+        var snapshot = _snapshot;
+        if (snapshot is null)
+        {
+            await LoadAsync(cancellationToken).ConfigureAwait(false);
+            snapshot = _snapshot ?? Snapshot.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(query))
+            return MostUsed(snapshot, limit);
+
+        query = query.Trim();
+
+        // The two arms are independent; run them together so the query cost is dominated by
+        // whichever is slower rather than by their sum.
+        var vectorTask = RunVectorArmAsync(snapshot, query, cancellationToken);
+        var lexicalTask = _store.SearchLexicalAsync(query, _options.CandidatesPerArm, cancellationToken);
+
+        await Task.WhenAll(vectorTask, lexicalTask).ConfigureAwait(false);
+
+        var vectorHits = await vectorTask.ConfigureAwait(false);
+        var lexicalHits = await lexicalTask.ConfigureAwait(false);
+
+        var fused = Fuse(snapshot, query, vectorHits, lexicalHits);
+
+        return [.. fused
+            .OrderByDescending(c => c.Score)
+            .ThenBy(c => c.Entity.Entity.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .Take(limit)
+            .Select(ToHit)];
+    }
+
+    /// <summary>Embeds the query and scans the vector matrix. Returns ordinals paired with cosine similarity.</summary>
+    private async Task<List<(int Ordinal, double Score)>> RunVectorArmAsync(
+        Snapshot snapshot, string query, CancellationToken cancellationToken)
+    {
+        var results = new List<(int, double)>();
+
+        if (snapshot.Vectors.Length == 0 || snapshot.Dimensions == 0)
+            return results;
+
+        var embedded = await _embeddings.EmbedAsync([query], cancellationToken).ConfigureAwait(false);
+        if (embedded.Count == 0)
+            return results;
+
+        var q = embedded[0];
+        var rows = snapshot.Vectors.Length / snapshot.Dimensions;
+
+        // Both sides are L2-normalized by contract, so the dot product is the cosine similarity.
+        for (var row = 0; row < rows; row++)
+        {
+            var span = snapshot.Vectors.AsSpan(row * snapshot.Dimensions, snapshot.Dimensions);
+            var score = VectorMath.Dot(q, span);
+
+            if (score >= _options.MinVectorScore)
+                results.Add((row, score));
+        }
+
+        results.Sort(static (a, b) => b.Item2.CompareTo(a.Item2));
+
+        if (results.Count > _options.CandidatesPerArm)
+            results.RemoveRange(_options.CandidatesPerArm, results.Count - _options.CandidatesPerArm);
+
+        return results;
+    }
+
+    private List<Candidate> Fuse(
+        Snapshot snapshot,
+        string query,
+        List<(int Ordinal, double Score)> vectorHits,
+        IReadOnlyList<(string EntityId, double Score)> lexicalHits)
+    {
+        var candidates = new Dictionary<string, Candidate>(StringComparer.Ordinal);
+
+        for (var rank = 0; rank < vectorHits.Count; rank++)
+        {
+            var (ordinal, score) = vectorHits[rank];
+            if (!snapshot.IndexByVectorOrdinal.TryGetValue(ordinal, out var index))
+                continue;
+
+            var candidate = GetOrAdd(snapshot, candidates, index);
+            candidate.VectorScore = score;
+            candidate.Score += _options.VectorArmWeight / (_options.RrfK + rank + 1);
+        }
+
+        for (var rank = 0; rank < lexicalHits.Count; rank++)
+        {
+            var (entityId, score) = lexicalHits[rank];
+            if (!snapshot.IndexById.TryGetValue(entityId, out var index))
+                continue;
+
+            var candidate = GetOrAdd(snapshot, candidates, index);
+            candidate.LexicalScore = score;
+            candidate.Score += _options.LexicalArmWeight / (_options.RrfK + rank + 1);
+        }
+
+        // Literal-name signals are applied to every entity, not just to those an arm retrieved.
+        // Without this a very short prefix could miss entirely: it is too short to embed
+        // meaningfully and may fall outside the lexical arm's candidate cut.
+        for (var i = 0; i < snapshot.Entities.Length; i++)
+        {
+            var (boost, reason) = NameMatcher.Score(query, snapshot.Entities[i].Entity.DisplayName, _options);
+            if (boost <= 0)
+                continue;
+
+            var candidate = GetOrAdd(snapshot, candidates, i);
+            candidate.Score += boost;
+            candidate.MatchReason = reason;
+        }
+
+        foreach (var candidate in candidates.Values)
+        {
+            candidate.Score += UsageBoost(snapshot, candidate.Entity.Entity.Id);
+            candidate.MatchReason ??= candidate.VectorScore.HasValue ? "semantic" : "lexical";
+        }
+
+        return [.. candidates.Values];
+    }
+
+    /// <summary>
+    /// Biases results toward what this user launches, blending total frequency with recency.
+    /// Both components are capped so learned behaviour tilts close calls without overriding a
+    /// clearly better match.
+    /// </summary>
+    private double UsageBoost(Snapshot snapshot, string entityId)
+    {
+        if (!snapshot.Usage.TryGetValue(entityId, out var stats) || stats.LaunchCount <= 0)
+            return 0;
+
+        // Logarithmic so the 1st launch matters far more than the 51st.
+        var frequency = Math.Min(
+            _options.MaxFrequencyBoost,
+            Math.Log(1 + stats.LaunchCount) / Math.Log(50) * _options.MaxFrequencyBoost);
+
+        var recency = 0.0;
+        if (stats.LastLaunchedAt is { } last)
+        {
+            var age = DateTimeOffset.UtcNow - last;
+            if (age >= TimeSpan.Zero)
+            {
+                var halfLives = age.TotalSeconds / _options.RecencyHalfLife.TotalSeconds;
+                recency = _options.MaxRecencyBoost * Math.Pow(0.5, halfLives);
+            }
+        }
+
+        return frequency + recency;
+    }
+
+    /// <summary>Shown when the query is empty, so the overlay opens on something useful.</summary>
+    private IReadOnlyList<SearchHit> MostUsed(Snapshot snapshot, int limit)
+    {
+        return [.. snapshot.Entities
+            .Select(e => new
+            {
+                Entity = e,
+                Boost = UsageBoost(snapshot, e.Entity.Id),
+            })
+            .Where(x => x.Boost > 0)
+            .OrderByDescending(x => x.Boost)
+            .Take(limit)
+            .Select(x => new SearchHit
+            {
+                Entity = x.Entity.Entity,
+                Score = x.Boost,
+                Summary = x.Entity.Profile?.Summary,
+                MatchReason = "frequently used",
+            })];
+    }
+
+    private static Candidate GetOrAdd(Snapshot snapshot, Dictionary<string, Candidate> candidates, int entityIndex)
+    {
+        var entity = snapshot.Entities[entityIndex];
+        if (!candidates.TryGetValue(entity.Entity.Id, out var candidate))
+        {
+            candidate = new Candidate { Entity = entity };
+            candidates[entity.Entity.Id] = candidate;
+        }
+
+        return candidate;
+    }
+
+    private static SearchHit ToHit(Candidate c) => new()
+    {
+        Entity = c.Entity.Entity,
+        Score = c.Score,
+        VectorScore = c.VectorScore,
+        LexicalScore = c.LexicalScore,
+        Summary = c.Entity.Profile?.Summary,
+        MatchReason = c.MatchReason,
+    };
+
+    [DebuggerDisplay("{Entity.Entity.DisplayName} = {Score}")]
+    private sealed class Candidate
+    {
+        public required IndexedEntity Entity { get; init; }
+        public double Score { get; set; }
+        public double? VectorScore { get; set; }
+        public double? LexicalScore { get; set; }
+        public string? MatchReason { get; set; }
+    }
+
+    /// <summary>
+    /// An immutable view of the index. Every field is derived from a single read of the store, so
+    /// the entity array, its lookups, and the vector matrix are always consistent with each other.
+    /// </summary>
+    private sealed record Snapshot(
+        IndexedEntity[] Entities,
+        Dictionary<string, int> IndexById,
+        Dictionary<int, int> IndexByVectorOrdinal,
+        float[] Vectors,
+        int Dimensions,
+        IReadOnlyDictionary<string, UsageStats> Usage)
+    {
+        public static Snapshot Empty { get; } =
+            new([], [], [], [], 0, new Dictionary<string, UsageStats>());
+    }
+}

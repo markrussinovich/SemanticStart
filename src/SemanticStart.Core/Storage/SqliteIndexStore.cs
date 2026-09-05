@@ -1,0 +1,595 @@
+using System.Globalization;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Microsoft.Data.Sqlite;
+using SemanticStart.Core.Abstractions;
+using SemanticStart.Core.Model;
+
+namespace SemanticStart.Core.Storage;
+
+public sealed partial class SqliteIndexStore : IIndexStore
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    private readonly string _databasePath;
+    private readonly string _vectorPath;
+    private readonly object _gate = new();
+
+    private SqliteConnection? _connection;
+    private VectorFile? _vectors;
+    private int _dimensions;
+    private int _nextOrdinal;
+    private bool _disposed;
+
+    public SqliteIndexStore()
+        : this(AppPaths.IndexDatabase, AppPaths.VectorFile)
+    {
+    }
+
+    public SqliteIndexStore(string databasePath, string vectorPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(vectorPath);
+
+        _databasePath = databasePath;
+        _vectorPath = vectorPath;
+    }
+
+    public Task InitializeAsync(string embeddingModelId, int dimensions, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(embeddingModelId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(dimensions);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+
+            AppPaths.EnsureCreated();
+            CreateParentDirectory(_databasePath);
+            CreateParentDirectory(_vectorPath);
+
+            _connection?.Dispose();
+            SQLitePCL.Batteries_V2.Init();
+            _connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = _databasePath,
+                Mode = SqliteOpenMode.ReadWriteCreate,
+                Cache = SqliteCacheMode.Shared
+            }.ToString());
+            _connection.Open();
+
+            IndexSchema.Initialize(_connection);
+            _vectors = new VectorFile(_vectorPath, dimensions);
+            _dimensions = dimensions;
+
+            if (!IndexSchema.IsCompatible(_connection, embeddingModelId))
+            {
+                IndexSchema.ClearContent(_connection);
+                _vectors.Truncate();
+                _nextOrdinal = 0;
+            }
+            else
+            {
+                _nextOrdinal = Math.Max(GetNextEntityOrdinal(_connection), _vectors.RowCount);
+            }
+
+            IndexSchema.SetMeta(_connection, "schema_version", IndexSchema.Version.ToString(CultureInfo.InvariantCulture));
+            IndexSchema.SetMeta(_connection, "embedding_model", embeddingModelId);
+            IndexSchema.SetMeta(_connection, "embedding_dimensions", dimensions.ToString(CultureInfo.InvariantCulture));
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyDictionary<string, string>> GetContentHashesAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = "SELECT id, content_hash FROM entities WHERE content_hash IS NOT NULL;";
+            using var reader = cmd.ExecuteReader();
+            var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
+            while (reader.Read())
+                hashes[reader.GetString(0)] = reader.GetString(1);
+
+            return Task.FromResult<IReadOnlyDictionary<string, string>>(hashes);
+        }
+    }
+
+    public Task UpsertAsync(
+        Entity entity,
+        IReadOnlyList<EnrichmentDocument> documents,
+        SynthesizedProfile? profile,
+        float[]? embedding,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        ArgumentNullException.ThrowIfNull(documents);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_gate)
+        {
+            using var tx = Connection.BeginTransaction();
+            var ordinal = GetExistingOrdinal(entity.Id, tx);
+            if (embedding is not null && ordinal is null)
+                ordinal = _nextOrdinal++;
+
+            UpsertEntity(entity, ordinal, tx);
+            ReplaceDocuments(entity.Id, documents, tx);
+            ReplaceProfile(entity.Id, profile, tx);
+            if (embedding is not null)
+                Vectors.Write(ordinal!.Value, embedding);
+            RefreshFts(entity.Id, tx);
+            tx.Commit();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task RemoveAsync(IReadOnlyCollection<string> entityIds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entityIds);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (entityIds.Count == 0)
+            return Task.CompletedTask;
+
+        lock (_gate)
+        {
+            using var tx = Connection.BeginTransaction();
+            foreach (var id in entityIds)
+            {
+                using var fts = Connection.CreateCommand();
+                fts.Transaction = tx;
+                fts.CommandText = "DELETE FROM entities_fts WHERE entity_id = $id;";
+                fts.Parameters.AddWithValue("$id", id);
+                fts.ExecuteNonQuery();
+
+                using var entity = Connection.CreateCommand();
+                entity.Transaction = tx;
+                entity.CommandText = "DELETE FROM entities WHERE id = $id;";
+                entity.Parameters.AddWithValue("$id", id);
+                entity.ExecuteNonQuery();
+            }
+
+            // Vector ordinals are never compacted; deleted entities leave zero/unused holes.
+            tx.Commit();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<IndexedEntity>> GetAllAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT e.id, e.kind, e.display_name, e.launch_kind, e.launch_target,
+                       e.launch_arguments, e.icon_source, e.publisher, e.source,
+                       e.raw_metadata, e.content_hash, e.vector_ordinal,
+                       p.summary, p.tasks, p.synonyms, p.category, p.generator
+                FROM entities e
+                LEFT JOIN profiles p ON p.entity_id = e.id
+                ORDER BY e.id;
+                """;
+            using var reader = cmd.ExecuteReader();
+            var results = new List<IndexedEntity>();
+            while (reader.Read())
+            {
+                var entity = new Entity
+                {
+                    Id = reader.GetString(0),
+                    Kind = (EntityKind)reader.GetInt32(1),
+                    DisplayName = reader.GetString(2),
+                    LaunchKind = (LaunchKind)reader.GetInt32(3),
+                    LaunchTarget = reader.GetString(4),
+                    LaunchArguments = GetNullableString(reader, 5),
+                    IconSource = GetNullableString(reader, 6),
+                    Publisher = GetNullableString(reader, 7),
+                    Source = reader.GetString(8),
+                    RawMetadata = DeserializeDictionary(reader.GetString(9)),
+                    ContentHash = GetNullableString(reader, 10)
+                };
+
+                SynthesizedProfile? profile = null;
+                if (!reader.IsDBNull(12))
+                {
+                    profile = new SynthesizedProfile
+                    {
+                        EntityId = entity.Id,
+                        Summary = reader.GetString(12),
+                        Tasks = DeserializeList(reader.GetString(13)),
+                        Synonyms = DeserializeList(reader.GetString(14)),
+                        Category = GetNullableString(reader, 15),
+                        Generator = reader.GetString(16)
+                    };
+                }
+
+                results.Add(new IndexedEntity
+                {
+                    Entity = entity,
+                    Profile = profile,
+                    VectorOrdinal = reader.IsDBNull(11) ? null : reader.GetInt32(11)
+                });
+            }
+
+            return Task.FromResult<IReadOnlyList<IndexedEntity>>(results);
+        }
+    }
+
+    public Task<float[]> GetVectorMatrixAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+            return Task.FromResult(Vectors.ReadAll());
+    }
+
+    public Task<IReadOnlyList<(string EntityId, double Score)>> SearchLexicalAsync(
+        string query, int limit, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (limit <= 0)
+            return Task.FromResult<IReadOnlyList<(string EntityId, double Score)>>([]);
+
+        var match = BuildFtsQuery(query);
+        if (match.Length == 0)
+            return Task.FromResult<IReadOnlyList<(string EntityId, double Score)>>([]);
+
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT entity_id, -bm25(entities_fts) AS score
+                FROM entities_fts
+                WHERE entities_fts MATCH $query
+                ORDER BY bm25(entities_fts)
+                LIMIT $limit;
+                """;
+            cmd.Parameters.AddWithValue("$query", match);
+            cmd.Parameters.AddWithValue("$limit", limit);
+
+            using var reader = cmd.ExecuteReader();
+            var hits = new List<(string EntityId, double Score)>();
+            while (reader.Read())
+                hits.Add((reader.GetString(0), reader.GetDouble(1)));
+
+            return Task.FromResult<IReadOnlyList<(string EntityId, double Score)>>(hits);
+        }
+    }
+
+    public Task<IReadOnlyDictionary<string, UsageStats>> GetUsageStatsAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = "SELECT entity_id, launch_count, last_launched_at FROM usage_stats;";
+            using var reader = cmd.ExecuteReader();
+            var stats = new Dictionary<string, UsageStats>(StringComparer.Ordinal);
+            while (reader.Read())
+            {
+                var id = reader.GetString(0);
+                stats[id] = new UsageStats
+                {
+                    EntityId = id,
+                    LaunchCount = reader.GetInt32(1),
+                    LastLaunchedAt = reader.IsDBNull(2) ? null : DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture)
+                };
+            }
+
+            return Task.FromResult<IReadOnlyDictionary<string, UsageStats>>(stats);
+        }
+    }
+
+    public Task RecordLaunchAsync(string entityId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(entityId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO usage_stats (entity_id, launch_count, last_launched_at)
+                VALUES ($id, 1, $now)
+                ON CONFLICT(entity_id) DO UPDATE SET
+                    launch_count = launch_count + 1,
+                    last_launched_at = excluded.last_launched_at;
+                """;
+            cmd.Parameters.AddWithValue("$id", entityId);
+            cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            cmd.ExecuteNonQuery();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task PurgeOnlineContentAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            using var tx = Connection.BeginTransaction();
+            var affected = new List<string>();
+            using (var select = Connection.CreateCommand())
+            {
+                select.Transaction = tx;
+                select.CommandText = "SELECT DISTINCT entity_id FROM documents WHERE is_online = 1;";
+                using var reader = select.ExecuteReader();
+                while (reader.Read())
+                    affected.Add(reader.GetString(0));
+            }
+
+            using (var delete = Connection.CreateCommand())
+            {
+                delete.Transaction = tx;
+                delete.CommandText = "DELETE FROM documents WHERE is_online = 1;";
+                delete.ExecuteNonQuery();
+            }
+
+            foreach (var id in affected)
+                RefreshFts(id, tx);
+
+            tx.Commit();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<int> CountAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM entities;";
+            return Task.FromResult(Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture));
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+
+            _connection?.Dispose();
+            _disposed = true;
+        }
+    }
+
+    private SqliteConnection Connection
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _connection ?? throw new InvalidOperationException("The store has not been initialized.");
+        }
+    }
+
+    private VectorFile Vectors => _vectors ?? throw new InvalidOperationException("The store has not been initialized.");
+
+    private static void CreateParentDirectory(string path)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+    }
+
+    private int? GetExistingOrdinal(string entityId, SqliteTransaction tx)
+    {
+        using var cmd = Connection.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT vector_ordinal FROM entities WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$id", entityId);
+        var value = cmd.ExecuteScalar();
+        return value is null or DBNull ? null : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+    }
+
+    private void UpsertEntity(Entity entity, int? ordinal, SqliteTransaction tx)
+    {
+        using var cmd = Connection.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO entities (
+                id, kind, display_name, launch_kind, launch_target, launch_arguments,
+                icon_source, publisher, source, raw_metadata, content_hash, vector_ordinal, indexed_at)
+            VALUES (
+                $id, $kind, $display_name, $launch_kind, $launch_target, $launch_arguments,
+                $icon_source, $publisher, $source, $raw_metadata, $content_hash, $vector_ordinal, $indexed_at)
+            ON CONFLICT(id) DO UPDATE SET
+                kind = excluded.kind,
+                display_name = excluded.display_name,
+                launch_kind = excluded.launch_kind,
+                launch_target = excluded.launch_target,
+                launch_arguments = excluded.launch_arguments,
+                icon_source = excluded.icon_source,
+                publisher = excluded.publisher,
+                source = excluded.source,
+                raw_metadata = excluded.raw_metadata,
+                content_hash = excluded.content_hash,
+                vector_ordinal = COALESCE(excluded.vector_ordinal, entities.vector_ordinal),
+                indexed_at = excluded.indexed_at;
+            """;
+        cmd.Parameters.AddWithValue("$id", entity.Id);
+        cmd.Parameters.AddWithValue("$kind", (int)entity.Kind);
+        cmd.Parameters.AddWithValue("$display_name", entity.DisplayName);
+        cmd.Parameters.AddWithValue("$launch_kind", (int)entity.LaunchKind);
+        cmd.Parameters.AddWithValue("$launch_target", entity.LaunchTarget);
+        AddNullable(cmd, "$launch_arguments", entity.LaunchArguments);
+        AddNullable(cmd, "$icon_source", entity.IconSource);
+        AddNullable(cmd, "$publisher", entity.Publisher);
+        cmd.Parameters.AddWithValue("$source", entity.Source);
+        cmd.Parameters.AddWithValue("$raw_metadata", JsonSerializer.Serialize(entity.RawMetadata, JsonOptions));
+        AddNullable(cmd, "$content_hash", entity.ContentHash);
+        AddNullable(cmd, "$vector_ordinal", ordinal);
+        cmd.Parameters.AddWithValue("$indexed_at", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        cmd.ExecuteNonQuery();
+    }
+
+    private void ReplaceDocuments(string entityId, IReadOnlyList<EnrichmentDocument> documents, SqliteTransaction tx)
+    {
+        using (var delete = Connection.CreateCommand())
+        {
+            delete.Transaction = tx;
+            delete.CommandText = "DELETE FROM documents WHERE entity_id = $entity_id;";
+            delete.Parameters.AddWithValue("$entity_id", entityId);
+            delete.ExecuteNonQuery();
+        }
+
+        foreach (var document in documents)
+        {
+            using var insert = Connection.CreateCommand();
+            insert.Transaction = tx;
+            insert.CommandText = """
+                INSERT INTO documents (entity_id, provider, is_online, text, source_uri, retrieved_at)
+                VALUES ($entity_id, $provider, $is_online, $text, $source_uri, $retrieved_at);
+                """;
+            insert.Parameters.AddWithValue("$entity_id", document.EntityId);
+            insert.Parameters.AddWithValue("$provider", document.Provider);
+            insert.Parameters.AddWithValue("$is_online", document.IsOnline ? 1 : 0);
+            insert.Parameters.AddWithValue("$text", document.Text);
+            AddNullable(insert, "$source_uri", document.SourceUri);
+            insert.Parameters.AddWithValue("$retrieved_at", document.RetrievedAt.ToString("O", CultureInfo.InvariantCulture));
+            insert.ExecuteNonQuery();
+        }
+    }
+
+    private void ReplaceProfile(string entityId, SynthesizedProfile? profile, SqliteTransaction tx)
+    {
+        if (profile is null)
+        {
+            using var delete = Connection.CreateCommand();
+            delete.Transaction = tx;
+            delete.CommandText = "DELETE FROM profiles WHERE entity_id = $entity_id;";
+            delete.Parameters.AddWithValue("$entity_id", entityId);
+            delete.ExecuteNonQuery();
+            return;
+        }
+
+        using var cmd = Connection.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO profiles (entity_id, summary, tasks, synonyms, category, generator)
+            VALUES ($entity_id, $summary, $tasks, $synonyms, $category, $generator)
+            ON CONFLICT(entity_id) DO UPDATE SET
+                summary = excluded.summary,
+                tasks = excluded.tasks,
+                synonyms = excluded.synonyms,
+                category = excluded.category,
+                generator = excluded.generator;
+            """;
+        cmd.Parameters.AddWithValue("$entity_id", profile.EntityId);
+        cmd.Parameters.AddWithValue("$summary", profile.Summary);
+        cmd.Parameters.AddWithValue("$tasks", JsonSerializer.Serialize(profile.Tasks, JsonOptions));
+        cmd.Parameters.AddWithValue("$synonyms", JsonSerializer.Serialize(profile.Synonyms, JsonOptions));
+        AddNullable(cmd, "$category", profile.Category);
+        cmd.Parameters.AddWithValue("$generator", profile.Generator);
+        cmd.ExecuteNonQuery();
+    }
+
+    private void RefreshFts(string entityId, SqliteTransaction tx)
+    {
+        using (var delete = Connection.CreateCommand())
+        {
+            delete.Transaction = tx;
+            delete.CommandText = "DELETE FROM entities_fts WHERE entity_id = $id;";
+            delete.Parameters.AddWithValue("$id", entityId);
+            delete.ExecuteNonQuery();
+        }
+
+        using var insert = Connection.CreateCommand();
+        insert.Transaction = tx;
+        insert.CommandText = """
+            INSERT INTO entities_fts (entity_id, display_name, summary, tasks, synonyms, publisher)
+            SELECT e.id, e.display_name, COALESCE(p.summary, ''), COALESCE(p.tasks, '[]'),
+                   COALESCE(p.synonyms, '[]'), COALESCE(e.publisher, '')
+            FROM entities e
+            LEFT JOIN profiles p ON p.entity_id = e.id
+            WHERE e.id = $id;
+            """;
+        insert.Parameters.AddWithValue("$id", entityId);
+        insert.ExecuteNonQuery();
+    }
+
+    private static int GetNextEntityOrdinal(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COALESCE(MAX(vector_ordinal) + 1, 0) FROM entities;";
+        return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Builds the FTS5 MATCH expression for a user query.
+    /// <para>
+    /// Tokens are combined with <c>OR</c>, not FTS5's implicit <c>AND</c>. Requiring every term to
+    /// appear in the same row makes the lexical arm silently return nothing for ordinary
+    /// multi-word intent queries — "default microphone" found no row containing both words, so the
+    /// whole arm dropped out and results came from the vector arm alone. With <c>OR</c>, BM25 still
+    /// ranks rows matching more of the query higher, which is the behaviour we actually want.
+    /// </para>
+    /// <para>
+    /// Stopwords are dropped so that filler words ("the", "my", "how") cannot drag in unrelated
+    /// rows, and the final token is a prefix match so results update sensibly while still typing.
+    /// </para>
+    /// </summary>
+    private static string BuildFtsQuery(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return string.Empty;
+
+        var all = FtsTokenRegex().Matches(query)
+            .Select(m => m.Value)
+            .Where(t => t.Length > 0)
+            .Take(16)
+            .ToArray();
+        if (all.Length == 0)
+            return string.Empty;
+
+        // Never drop the trailing token: it is the one the user is still typing.
+        var tokens = all
+            .Where((t, i) => i == all.Length - 1 || !Stopwords.Contains(t))
+            .ToArray();
+        if (tokens.Length == 0)
+            tokens = all;
+
+        // Parameterization prevents SQL injection; quoting tokens avoids FTS5 syntax errors.
+        tokens[^1] = $"\"{tokens[^1]}\"*";
+        for (var i = 0; i < tokens.Length - 1; i++)
+            tokens[i] = $"\"{tokens[i]}\"";
+
+        return string.Join(" OR ", tokens);
+    }
+
+    private static readonly HashSet<string> Stopwords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "does", "for", "from", "get",
+        "how", "i", "in", "is", "it", "me", "my", "of", "on", "or", "that", "the", "then", "there",
+        "this", "to", "up", "want", "was", "what", "when", "where", "which", "why", "will", "with",
+        "you", "your"
+    };
+
+    private static IReadOnlyDictionary<string, string> DeserializeDictionary(string json)
+        => JsonSerializer.Deserialize<Dictionary<string, string>>(json, JsonOptions)
+           ?? new Dictionary<string, string>();
+
+    private static IReadOnlyList<string> DeserializeList(string json)
+        => JsonSerializer.Deserialize<List<string>>(json, JsonOptions) ?? [];
+
+    private static string? GetNullableString(SqliteDataReader reader, int ordinal)
+        => reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+
+    private static void AddNullable(SqliteCommand command, string name, object? value)
+        => command.Parameters.AddWithValue(name, value ?? DBNull.Value);
+
+    private void ThrowIfDisposed()
+        => ObjectDisposedException.ThrowIf(_disposed, this);
+
+    [GeneratedRegex(@"[\p{L}\p{Nd}_]+", RegexOptions.CultureInvariant)]
+    private static partial Regex FtsTokenRegex();
+}

@@ -1,0 +1,184 @@
+<Window x:Class="SemanticStart.App.OverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:SemanticStart.App"
+        Width="720" Height="600" WindowStyle="None" ResizeMode="NoResize"
+        AllowsTransparency="True" Background="Transparent" ShowInTaskbar="False" Topmost="True"
+        FontFamily="{DynamicResource UiFont}" UseLayoutRounding="True" SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Ideal" TextOptions.TextRenderingMode="ClearType"
+        Deactivated="Window_Deactivated" KeyDown="Window_KeyDown">
+    <Window.Resources>
+        <local:NullToVisibilityConverter x:Key="IconVisible" />
+        <local:NullToVisibilityConverter x:Key="IconMissing" Invert="True" />
+
+        <!--
+            Search field templated by hand so it can carry a Windows 11 corner radius, a focus
+            underline in the accent colour, and inline placeholder text.
+        -->
+        <Style x:Key="SearchTextBox" TargetType="TextBox">
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource PrimaryTextBrush}" />
+            <Setter Property="Background" Value="{DynamicResource SearchBoxBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource SearchBoxBorderBrush}" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="Padding" Value="12,9" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1" CornerRadius="6">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="15" Margin="12,0,0,0" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource SecondaryTextBrush}" />
+                                <Grid Grid.Column="1">
+                                    <!--
+                                        The placeholder shares the content host's margin, so its
+                                        first glyph lands exactly on the caret. Inset it slightly
+                                        so the caret sits to the left of the text, as Windows does.
+                                    -->
+                                    <TextBlock x:Name="Placeholder" Text="Search apps, settings, and Windows features"
+                                               Margin="{TemplateBinding Padding}" Padding="15,0,0,0" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource SecondaryTextBrush}" Visibility="Collapsed"
+                                               IsHitTestVisible="False" />
+                                    <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
+                                                  VerticalAlignment="Center" />
+                                </Grid>
+                                <Border x:Name="FocusLine" Grid.ColumnSpan="2" Height="2" VerticalAlignment="Bottom"
+                                        CornerRadius="0,0,6,6" Background="{DynamicResource AccentBrush}" Visibility="Collapsed" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Text" Value="">
+                                <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="FocusLine" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <!-- 8px radius matches Windows 11 flyouts; the older 22px read as a phone control. -->
+    <Border CornerRadius="8" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource PanelBorderBrush}"
+            BorderThickness="1" Padding="16,14,16,12" Margin="14">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="28" ShadowDepth="6" Direction="270"
+                              Color="{DynamicResource ShadowColor}" Opacity="{DynamicResource ShadowOpacity}" />
+        </Border.Effect>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Header -->
+            <Grid Grid.Row="0" Margin="2,0,0,12">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="18" Height="18" CornerRadius="4" Background="{DynamicResource AccentBrush}"
+                            VerticalAlignment="Center">
+                        <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="10"
+                                   Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock Text="SemanticStart" FontSize="14" FontWeight="SemiBold" Margin="9,0,0,0"
+                               VerticalAlignment="Center" Foreground="{DynamicResource HeaderTextBrush}" />
+                </StackPanel>
+            </Grid>
+
+            <TextBox x:Name="SearchBox" Grid.Row="1" Style="{StaticResource SearchTextBox}"
+                     Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}" />
+
+            <ListBox x:Name="ResultsList" Grid.Row="2" Margin="0,12,0,4" ItemsSource="{Binding Results}"
+                     SelectedIndex="{Binding SelectedIndex, Mode=TwoWay}" Background="Transparent" BorderThickness="0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     Foreground="{DynamicResource PrimaryTextBrush}">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Margin" Value="0,1" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="5" Padding="8,7">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <!-- Fluent selection indicator: an accent pill on the leading edge. -->
+                                            <Border x:Name="Indicator" Width="3" Height="20" CornerRadius="1.5"
+                                                    Background="{DynamicResource AccentBrush}" Visibility="Collapsed"
+                                                    HorizontalAlignment="Left" VerticalAlignment="Center" Margin="-4,0,0,0" />
+                                            <ContentPresenter Grid.Column="1" />
+                                        </Grid>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemSelectedBrush}" />
+                                            <Setter TargetName="Indicator" Property="Visibility" Value="Visible" />
+                                        </Trigger>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemHoverBrush}" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate DataType="{x:Type local:SearchResultItem}">
+                        <Grid MouseLeftButtonUp="Result_MouseLeftButtonUp" Background="Transparent">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Grid Width="32" Height="32" VerticalAlignment="Center" Margin="4,0,0,0">
+                                <Border Background="{DynamicResource IconBackplateBrush}" CornerRadius="5"
+                                        Visibility="{Binding Icon, Converter={StaticResource IconMissing}}" />
+                                <Image Source="{Binding Icon}" Width="26" Height="26" RenderOptions.BitmapScalingMode="HighQuality"
+                                       Visibility="{Binding Icon, Converter={StaticResource IconVisible}}" />
+                                <TextBlock Text="{Binding FallbackGlyph}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource SecondaryTextBrush}"
+                                           Visibility="{Binding Icon, Converter={StaticResource IconMissing}}" />
+                            </Grid>
+                            <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding DisplayName}" FontSize="14" Foreground="{DynamicResource PrimaryTextBrush}"
+                                           TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Summary}" FontSize="12" Foreground="{DynamicResource SecondaryTextBrush}"
+                                           TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <Border Grid.Column="2" Background="{DynamicResource BadgeBrush}" CornerRadius="4" Padding="7,2"
+                                    VerticalAlignment="Center" Margin="8,0,4,0">
+                                <TextBlock Text="{Binding KindBadge}" FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" />
+                            </Border>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- Footer: settings on the left, status to its right. -->
+            <Grid Grid.Row="3" Margin="2,6,0,0">
+                <Border Height="1" VerticalAlignment="Top" Background="{DynamicResource DividerBrush}" Margin="0,-6,0,0" />
+                <Button x:Name="SettingsButton" Style="{StaticResource SubtleButton}" HorizontalAlignment="Left"
+                        Width="32" Height="32" FontSize="15" Content="&#xE713;" ToolTip="Settings"
+                        Click="SettingsButton_Click" />
+                <TextBlock Text="{Binding Status}" Foreground="{DynamicResource SecondaryTextBrush}" FontSize="12"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="40,0,4,0" />
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

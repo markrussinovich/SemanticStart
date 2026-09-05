@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!--
+      Globalization-invariant mode must stay off. WPF's caret logic constructs a CultureInfo from
+      the current input language, which throws under invariant mode and kills the process the
+      instant the overlay takes focus. It is also wrong for this app on its merits: matching app
+      names on non-English systems needs real culture-aware casing and comparison.
+    -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <!-- Single source of truth for the version shown in Settings and stamped on the binaries. -->
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+</Project>
