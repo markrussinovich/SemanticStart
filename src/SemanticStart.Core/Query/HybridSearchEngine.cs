@@ -11,8 +11,10 @@ namespace SemanticStart.Core.Query;
 /// describing an intent finds a tool whose name shares no words with it. The lexical arm supplies
 /// precision on literal names. Neither is sufficient alone: pure vector search embarrassingly
 /// fails on short prefixes like "wor", and pure lexical search cannot answer "free up disk space".
-/// Results are combined with reciprocal rank fusion, then adjusted by literal-name boosts and by
-/// what the user actually launches.
+/// Results are combined with reciprocal rank fusion. Literal-name matches are modeled as a third
+/// ranked arm rather than raw additive scores, and usage boosts are capped to the same order of
+/// magnitude as one RRF contribution. Keeping every signal on one scale prevents a frequently
+/// launched but weak semantic hit from overwhelming a result retrieved by both semantic arms.
 ///
 /// The whole index is held in memory. At a few thousand entities the vector matrix is only a few
 /// megabytes and a brute-force scan beats the complexity of an approximate index.
@@ -165,7 +167,8 @@ public sealed class HybridSearchEngine : ISearchEngine
 
             var candidate = GetOrAdd(snapshot, candidates, index);
             candidate.VectorScore = score;
-            candidate.Score += _options.VectorArmWeight / (_options.RrfK + rank + 1);
+            candidate.VectorContribution = _options.VectorArmWeight / (_options.RrfK + rank + 1);
+            candidate.Score += candidate.VectorContribution;
         }
 
         for (var rank = 0; rank < lexicalHits.Count; rank++)
@@ -176,27 +179,53 @@ public sealed class HybridSearchEngine : ISearchEngine
 
             var candidate = GetOrAdd(snapshot, candidates, index);
             candidate.LexicalScore = score;
-            candidate.Score += _options.LexicalArmWeight / (_options.RrfK + rank + 1);
+            candidate.LexicalContribution = _options.LexicalArmWeight / (_options.RrfK + rank + 1);
+            candidate.Score += candidate.LexicalContribution;
         }
 
         // Literal-name signals are applied to every entity, not just to those an arm retrieved.
         // Without this a very short prefix could miss entirely: it is too short to embed
-        // meaningfully and may fall outside the lexical arm's candidate cut.
+        // meaningfully and may fall outside the lexical arm's candidate cut. The match strength
+        // only orders the literal arm; the amount added is still an RRF reciprocal-rank term.
+        var literalHits = new List<(int Index, double Strength, string Reason)>();
         for (var i = 0; i < snapshot.Entities.Length; i++)
         {
-            var (boost, reason) = NameMatcher.Score(query, snapshot.Entities[i].Entity.DisplayName, _options);
-            if (boost <= 0)
+            var (strength, reason) = NameMatcher.Score(query, snapshot.Entities[i].Entity.DisplayName, _options);
+            if (strength <= 0 || reason is null)
                 continue;
 
-            var candidate = GetOrAdd(snapshot, candidates, i);
-            candidate.Score += boost;
-            candidate.MatchReason = reason;
+            literalHits.Add((i, strength, reason));
+        }
+
+        literalHits.Sort((a, b) =>
+        {
+            var byStrength = b.Strength.CompareTo(a.Strength);
+            return byStrength != 0
+                ? byStrength
+                : string.Compare(
+                    snapshot.Entities[a.Index].Entity.DisplayName,
+                    snapshot.Entities[b.Index].Entity.DisplayName,
+                    StringComparison.OrdinalIgnoreCase);
+        });
+
+        for (var rank = 0; rank < literalHits.Count; rank++)
+        {
+            var (index, strength, reason) = literalHits[rank];
+            var candidate = GetOrAdd(snapshot, candidates, index);
+            var normalizedStrength = _options.ExactMatchBoost <= 0
+                ? 1.0
+                : Math.Clamp(strength / _options.ExactMatchBoost, 0.0, 1.0);
+            candidate.LiteralContribution =
+                _options.LiteralArmWeight * normalizedStrength / (_options.RrfK + rank + 1);
+            candidate.Score += candidate.LiteralContribution;
+            candidate.LiteralReason = reason;
         }
 
         foreach (var candidate in candidates.Values)
         {
-            candidate.Score += UsageBoost(snapshot, candidate.Entity.Entity.Id);
-            candidate.MatchReason ??= candidate.VectorScore.HasValue ? "semantic" : "lexical";
+            candidate.UsageContribution = UsageBoost(snapshot, candidate.Entity.Entity.Id);
+            candidate.Score += candidate.UsageContribution;
+            candidate.MatchReason = ExplainMatch(candidate);
         }
 
         return [.. candidates.Values];
@@ -229,6 +258,25 @@ public sealed class HybridSearchEngine : ISearchEngine
         }
 
         return frequency + recency;
+    }
+
+    private static string ExplainMatch(Candidate candidate)
+    {
+        if (candidate.LiteralReason is { } literal
+            && candidate.LiteralContribution >= candidate.VectorContribution
+            && candidate.LiteralContribution >= candidate.LexicalContribution)
+        {
+            return literal;
+        }
+
+        return (candidate.VectorScore.HasValue, candidate.LexicalScore.HasValue) switch
+        {
+            (true, true) => "hybrid semantic+lexical",
+            (true, false) => "semantic",
+            (false, true) => "lexical",
+            _ when candidate.LiteralReason is { } literalOnly => literalOnly,
+            _ => "usage",
+        };
     }
 
     /// <summary>Shown when the query is empty, so the overlay opens on something useful.</summary>
@@ -282,6 +330,11 @@ public sealed class HybridSearchEngine : ISearchEngine
         public double? VectorScore { get; set; }
         public double? LexicalScore { get; set; }
         public string? MatchReason { get; set; }
+        public double VectorContribution { get; set; }
+        public double LexicalContribution { get; set; }
+        public double LiteralContribution { get; set; }
+        public double UsageContribution { get; set; }
+        public string? LiteralReason { get; set; }
     }
 
     /// <summary>

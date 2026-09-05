@@ -35,6 +35,18 @@ public static class RelevanceCorpus
     [
         new()
         {
+            Query = "default microphone",
+            AcceptableResults = ["Microphone Privacy", "Sound Input Devices", "Sound", "Input"],
+            Rationale = "Regression: usage or raw-score boosts must not outrank the best hybrid semantic+lexical microphone settings hit.",
+        },
+        new()
+        {
+            Query = "search the web",
+            AcceptableResults = ["Microsoft Edge", "Edge", "Bing", "Search"],
+            Rationale = "Natural-language web intent should not be buried by unrelated frequently used apps.",
+        },
+        new()
+        {
             Query = "free up disk space",
             AcceptableResults = ["Disk Cleanup", "Storage", "Storage Sense", "cleanmgr"],
             Rationale = "Canonical intent query. No shared words with 'Disk Cleanup' beyond 'disk'.",
@@ -50,6 +62,12 @@ public static class RelevanceCorpus
             Query = "my laptop battery drains too fast",
             AcceptableResults = ["Power & battery", "Power Options", "Battery saver", "powercfg"],
             Rationale = "Complaint-shaped query, not a noun. Pure lexical search cannot resolve this.",
+        },
+        new()
+        {
+            Query = "why is my battery draining",
+            AcceptableResults = ["Power & battery", "Power Options", "Battery saver", "powercfg"],
+            Rationale = "Shorter wording of the battery-drain complaint used for manual ranking checks.",
         },
         new()
         {
@@ -100,6 +118,12 @@ public static class RelevanceCorpus
         },
         new()
         {
+            Query = "see what files a process has open",
+            AcceptableResults = ["Process Explorer", "Resource Monitor", "Process Monitor", "handle", "OpenFiles"],
+            Rationale = "Expert troubleshooting query where lexical and semantic evidence should beat generic file apps.",
+        },
+        new()
+        {
             Query = "encrypt my hard drive",
             AcceptableResults = ["BitLocker", "Device encryption", "Manage BitLocker"],
         },
@@ -123,6 +147,12 @@ public static class RelevanceCorpus
         },
         new()
         {
+            Query = "change my screen resolution",
+            AcceptableResults = ["Display", "Advanced display"],
+            Rationale = "Display settings intent with strong profile text should rank ahead of generic screen matches.",
+        },
+        new()
+        {
             Query = "fix a corrupted system file",
             AcceptableResults = ["System File Checker", "sfc", "dism", "chkdsk", "Recovery"],
         },
@@ -139,6 +169,13 @@ public static class RelevanceCorpus
     /// </summary>
     public static IReadOnlyList<RelevanceCase> LiteralName { get; } =
     [
+        new()
+        {
+            Query = "microphone",
+            AcceptableResults = ["Microphone Privacy", "Sound Input Devices", "Sound"],
+            WithinTopN = 1,
+            Rationale = "Single-token literal prefix must keep Start-menu-style behaviour.",
+        },
         new()
         {
             Query = "notepad",
@@ -186,6 +223,20 @@ public static class RelevanceCorpus
     /// </summary>
     public static IReadOnlyList<RelevanceCase> Prefix { get; } =
     [
+        new()
+        {
+            Query = "wor",
+            AcceptableResults = ["Word"],
+            WithinTopN = 1,
+            Rationale = "Short Office app prefix must be rank 1 even though the token is poor semantic input.",
+        },
+        new()
+        {
+            Query = "notep",
+            AcceptableResults = ["Notepad"],
+            WithinTopN = 1,
+            Rationale = "Partial Notepad prefix must prefer the app over optional feature profile text.",
+        },
         new() { Query = "not", AcceptableResults = ["Notepad", "Notifications"], WithinTopN = 3 },
         new() { Query = "tas", AcceptableResults = ["Task Manager", "Task Scheduler", "Taskbar"], WithinTopN = 3 },
         new() { Query = "blue", AcceptableResults = ["Bluetooth & devices", "Bluetooth"], WithinTopN = 3 },
