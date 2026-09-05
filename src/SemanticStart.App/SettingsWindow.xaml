@@ -1,7 +1,7 @@
 <Window x:Class="SemanticStart.App.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SemanticStart Settings" Width="620" Height="660" WindowStartupLocation="CenterScreen"
+        Title="SemanticStart Settings" Width="620" Height="760" WindowStartupLocation="CenterScreen"
         ResizeMode="CanMinimize" FontFamily="{DynamicResource UiFont}"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Ideal"
         Background="{DynamicResource PanelBrush}" Foreground="{DynamicResource PrimaryTextBrush}">
@@ -35,6 +35,35 @@
             <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
             <Setter Property="FontSize" Value="14" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource SearchBoxBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource SearchBoxBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource PrimaryTextBrush}" />
+            <Setter Property="FontFamily" Value="{DynamicResource UiFont}" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Padding" Value="11,7" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </Window.Resources>
 
@@ -98,6 +127,55 @@
                         <CheckBox x:Name="OnlineBox" Content="Allow online enrichment while indexing" />
                         <TextBlock Style="{StaticResource Caption}"
                                    Text="Fetches public documentation to improve descriptions. Searches always stay on this device; only indexing touches the network, and results are cached." />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="Local LLM synthesis" Style="{StaticResource SectionHeader}" />
+
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="Generate richer app descriptions with a small local model" />
+                        <TextBlock Style="{StaticResource Caption}"
+                                   Text="Auto probes local Foundry, Ollama, LM Studio, and OpenAI-compatible servers. Off uses the heuristic fallback only. Custom uses the endpoint below." />
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="130" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Mode" VerticalAlignment="Center" />
+                            <ComboBox x:Name="LocalLlmModeBox" Grid.Row="0" Grid.Column="1" Width="180" HorizontalAlignment="Left"
+                                      Style="{StaticResource FluentComboBox}" SelectedValuePath="Content" FontSize="14">
+                                <ComboBoxItem Content="Off" />
+                                <ComboBoxItem Content="Auto" />
+                                <ComboBoxItem Content="Custom" />
+                            </ComboBox>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Endpoint" VerticalAlignment="Center" Margin="0,10,0,0" />
+                            <TextBox x:Name="LocalLlmEndpointBox" Grid.Row="1" Grid.Column="1" Margin="0,10,0,0"
+                                     ToolTip="Example: http://localhost:11434 for Ollama or http://localhost:1234 for LM Studio" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Model" VerticalAlignment="Center" Margin="0,10,0,0" />
+                            <TextBox x:Name="LocalLlmModelBox" Grid.Row="2" Grid.Column="1" Margin="0,10,0,0"
+                                     ToolTip="Example: qwen2.5:1.5b, llama3.2:1b, phi-3.5-mini" />
+
+                            <Grid Grid.Row="3" Grid.Column="1" Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="TestLocalLlmButton" Content="Test connection" Style="{StaticResource FluentButton}"
+                                        Click="TestLocalLlmButton_Click" />
+                                <TextBlock x:Name="LocalLlmStatusText" Grid.Column="1" Style="{StaticResource Caption}" Margin="12,0,0,0"
+                                           VerticalAlignment="Center" />
+                            </Grid>
+                        </Grid>
                     </StackPanel>
                 </Border>
 

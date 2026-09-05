@@ -1,5 +1,6 @@
 using System.Windows;
 using SemanticStart.Core.Indexing;
+using SemanticStart.Core.Synthesis;
 
 namespace SemanticStart.App;
 
@@ -95,6 +96,10 @@ public partial class SettingsWindow : Window
         OnlineBox.IsChecked = _settings.AllowOnlineEnrichment;
         LoginBox.IsChecked = _settings.LaunchAtLogin;
         LimitSlider.Value = _settings.ResultLimit;
+        LocalLlmModeBox.SelectedValue = _settings.LocalLlmMode.ToString();
+        LocalLlmEndpointBox.Text = _settings.LocalLlmEndpointBaseUrl;
+        LocalLlmModelBox.Text = _settings.LocalLlmModelName;
+        LocalLlmStatusText.Text = "Not tested.";
         UpdateHotKeyStatus();
     }
 
@@ -125,13 +130,45 @@ public partial class SettingsWindow : Window
             AllowOnlineEnrichment = OnlineBox.IsChecked == true,
             LaunchAtLogin = LoginBox.IsChecked == true,
             ResultLimit = (int)Math.Round(LimitSlider.Value),
+            LocalLlmMode = ParseLocalLlmMode(LocalLlmModeBox.SelectedValue?.ToString()),
+            LocalLlmEndpointBaseUrl = LocalLlmEndpointBox.Text.Trim(),
+            LocalLlmModelName = string.IsNullOrWhiteSpace(LocalLlmModelBox.Text)
+                ? LocalLlmOptions.DefaultModelName
+                : LocalLlmModelBox.Text.Trim(),
         };
         _settingsService.Save(_settings);
         _activationManager.ApplySettings(_settings);
         UpdateHotKeyStatus();
     }
 
+    private static LocalLlmMode ParseLocalLlmMode(string? value) =>
+        Enum.TryParse<LocalLlmMode>(value, ignoreCase: true, out var mode) ? mode : LocalLlmMode.Auto;
+
     private async void RebuildButton_Click(object sender, RoutedEventArgs e) => await RebuildIndexAsync(force: true);
+
+    private async void TestLocalLlmButton_Click(object sender, RoutedEventArgs e)
+    {
+        SaveFromControls();
+        TestLocalLlmButton.IsEnabled = false;
+        LocalLlmStatusText.Text = "Testing...";
+
+        try
+        {
+            var result = await LocalLlmProfileSynthesizer.TestConnectionAsync(_settings.ToLocalLlmOptions());
+            LocalLlmStatusText.Text = result.Success
+                ? $"Success: {result.ModelName} at {result.EndpointBaseUrl}"
+                : $"Failed: {result.Message}";
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Local LLM connection test failed");
+            LocalLlmStatusText.Text = "Failed: see log for details.";
+        }
+        finally
+        {
+            TestLocalLlmButton.IsEnabled = true;
+        }
+    }
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {

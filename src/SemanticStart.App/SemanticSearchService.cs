@@ -76,7 +76,7 @@ public sealed class SemanticSearchService : IDisposable
         try
         {
             var synthesizer = new CompositeProfileSynthesizer(
-                new LocalLlmProfileSynthesizer(),
+                new LocalLlmProfileSynthesizer(settings.ToLocalLlmOptions()),
                 new HeuristicProfileSynthesizer());
             var profiler = new EnrichmentPipeline(EnricherRegistry.CreateAll(), synthesizer);
             var builder = new IndexBuilder(CollectorRegistry.CreateAll(), profiler, _embeddingModel, _store);

@@ -1,7 +1,9 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Win32;
 using SemanticStart.Core;
+using SemanticStart.Core.Synthesis;
 
 namespace SemanticStart.App;
 
@@ -26,13 +28,27 @@ public sealed record AppSettings
     public bool AllowOnlineEnrichment { get; init; }
     public int ResultLimit { get; init; } = 8;
     public bool LaunchAtLogin { get; init; }
+    public LocalLlmMode LocalLlmMode { get; init; } = LocalLlmMode.Auto;
+    public string LocalLlmEndpointBaseUrl { get; init; } = string.Empty;
+    public string LocalLlmModelName { get; init; } = LocalLlmOptions.DefaultModelName;
+
+    public LocalLlmOptions ToLocalLlmOptions() => new()
+    {
+        Mode = LocalLlmMode,
+        EndpointBaseUrl = LocalLlmEndpointBaseUrl,
+        ModelName = LocalLlmModelName,
+    };
 }
 
 public sealed class AppSettingsService
 {
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string RunValueName = "SemanticStart";
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() },
+    };
 
     public AppSettings Load()
     {
@@ -57,6 +73,10 @@ public sealed class AppSettingsService
                 HotKey = hotKey,
                 ResultLimit = Math.Clamp(settings.ResultLimit, 3, 20),
                 LaunchAtLogin = IsLaunchAtLoginEnabled(),
+                LocalLlmEndpointBaseUrl = settings.LocalLlmEndpointBaseUrl?.Trim() ?? string.Empty,
+                LocalLlmModelName = string.IsNullOrWhiteSpace(settings.LocalLlmModelName)
+                    ? LocalLlmOptions.DefaultModelName
+                    : settings.LocalLlmModelName.Trim(),
             };
         }
         catch (Exception ex)

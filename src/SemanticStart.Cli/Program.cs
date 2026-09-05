@@ -206,6 +206,12 @@ internal static class Program
             foreach (var group in all.GroupBy(e => e.Entity.Source).OrderByDescending(g => g.Count()))
                 Console.WriteLine($"  {group.Key,-20} {group.Count()}");
 
+            Console.WriteLine();
+            Console.WriteLine("By profile generator:");
+
+            foreach (var group in all.GroupBy(e => e.Profile?.Generator ?? "none").OrderByDescending(g => g.Count()))
+                Console.WriteLine($"  {group.Key,-20} {group.Count()}");
+
             return 0;
         }
     }
