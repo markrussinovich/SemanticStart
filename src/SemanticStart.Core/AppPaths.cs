@@ -6,9 +6,21 @@ namespace SemanticStart.Core;
 /// </summary>
 public static class AppPaths
 {
-    public static string Root { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "SemanticStart");
+    /// <summary>
+    /// Overrides the data directory. Set <c>SEMANTICSTART_HOME</c> to keep an index isolated —
+    /// used by tests and by side-by-side experiments so they cannot corrupt the real index.
+    /// </summary>
+    public const string HomeVariable = "SEMANTICSTART_HOME";
+
+    public static string Root { get; } = ResolveRoot();
+
+    private static string ResolveRoot()
+    {
+        var overridden = Environment.GetEnvironmentVariable(HomeVariable);
+        return string.IsNullOrWhiteSpace(overridden)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SemanticStart")
+            : Path.GetFullPath(overridden);
+    }
 
     /// <summary>SQLite database holding entities, documents, profiles, FTS5 index, and usage stats.</summary>
     public static string IndexDatabase => Path.Combine(Root, "index.sqlite");
