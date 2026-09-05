@@ -55,15 +55,43 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
             if (entity.RawMetadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
             {
                 value = EnrichmentTextNormalizer.ToPlainText(value);
-                if (!EnrichmentTextNormalizer.IsLikelyMarkupLine(value)) return value;
+                if (!EnrichmentTextNormalizer.IsLikelyMarkupLine(value) && AddsInformation(entity, value)) return value;
             }
         foreach (var provider in new[] { "windows-intent-catalog", "pe-version", "msix-manifest", "shortcut", "local-docs", "learn", "winget", "publisher-site" })
         {
             var doc = documents.FirstOrDefault(d => d.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase));
             var value = ExtractUsefulLine(doc?.Text);
-            if (!string.IsNullOrWhiteSpace(value)) return value;
+            if (!string.IsNullOrWhiteSpace(value) && AddsInformation(entity, value)) return value;
         }
         return null;
+    }
+
+    private static readonly HashSet<string> UninformativeWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "the", "a", "an", "and", "or", "for", "of", "to", "in", "on", "with", "by", "from", "is", "are",
+        "app", "apps", "application", "applications", "display", "name", "tool", "tools", "utility",
+        "program", "software", "microsoft", "windows", "suite", "package", "version", "open", "run", "start"
+    };
+
+    /// <summary>
+    /// Rejects a candidate description that only restates the entity's own name. MSIX manifests are
+    /// the worst offender: the Sysinternals suite declares every application's description to be its
+    /// own name, so ZoomIt was summarised as "ZoomIt Application display" and that empty text then
+    /// pre-empted its real documentation from Microsoft Learn. A description must contribute at
+    /// least two words that are neither part of the name nor generic packaging vocabulary.
+    /// </summary>
+    private static bool AddsInformation(Entity entity, string candidate)
+    {
+        var nameWords = Regex.Split(entity.DisplayName, @"\W+")
+            .Where(w => w.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var informative = Regex.Split(candidate, @"\W+")
+            .Where(w => w.Length > 2 && !nameWords.Contains(w) && !UninformativeWords.Contains(w))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
+        return informative >= 2;
     }
 
     private static string? KnownDescription(Entity entity)
@@ -178,7 +206,7 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         if (entity.LaunchTarget.Equals("ms-settings:display", StringComparison.OrdinalIgnoreCase) || entity.DisplayName.Equals("Display", StringComparison.OrdinalIgnoreCase)) { yield return "change screen resolution"; yield return "adjust display scale"; yield return "arrange monitors"; yield return "change brightness"; yield break; }
 
         foreach (var phrase in ExtractLabeledPhrases(documents, "Tasks")) yield return phrase;
-        foreach (var phrase in IntentPhrases(described + " " + string.Join(' ', documents.Select(d => d.Text)))) yield return phrase;
+        foreach (var phrase in IntentPhrases(entity.DisplayName + " " + described)) yield return phrase;
         yield return entity.Kind switch
         {
             EntityKind.SettingsPage => "change Windows settings",
@@ -198,9 +226,16 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         return target is not null && target.Equals(fileName, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Maps vocabulary in an entity's own one-line description to the intent phrasing a user would
+    /// type. The text examined is deliberately narrow. Feeding it the harvested document bodies
+    /// instead matched boilerplate: a Learn page footer mentioning the internet was enough to tell
+    /// the index that a screen-annotation tool helps you connect to the internet, and those phrases
+    /// then steered the entity's embedding away from what it actually does.
+    /// Matching is on whole words, so "power" no longer fires on "PowerPoint".
+    /// </summary>
     private static IEnumerable<string> IntentPhrases(string text)
     {
-        text = text.ToLowerInvariant();
         var mappings = new (string Key, string Task)[]
         {
             ("browser", "search the web"), ("web", "browse websites and search the internet"), ("internet", "connect to the internet"),
@@ -211,7 +246,12 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
             ("device", "manage connected devices"), ("network", "troubleshoot network connections"), ("printer", "manage printers"),
             ("display", "change display settings"), ("security", "review security settings"), ("update", "manage Windows updates"), ("file", "work with files")
         };
-        foreach (var (key, task) in mappings) if (text.Contains(key, StringComparison.Ordinal)) yield return task;
+
+        foreach (var (key, task) in mappings)
+        {
+            if (Regex.IsMatch(text, $@"\b{Regex.Escape(key)}s?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                yield return task;
+        }
     }
 
     private static IEnumerable<string> BuildSynonyms(Entity entity, IReadOnlyList<EnrichmentDocument>? documents = null)
@@ -277,10 +317,16 @@ public sealed class CompositeProfileSynthesizer : IProfileSynthesizer
         if (!_llm.IsAvailable) return heuristic;
         try
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(20));
-            var profile = await _llm.SynthesizeAsync(entity, documents, cts.Token).ConfigureAwait(false);
+            // The synthesizer owns its own per-request timeout. A cap here covered queue wait as
+            // well as the request itself, so once calls were serialised behind a single local model
+            // every entity's budget expired before its turn and the whole index silently fell back.
+            var profile = await _llm.SynthesizeAsync(entity, documents, cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(profile.Summary) || profile.Tasks.Count == 0) return heuristic;
+
+            // Synonyms are merged, tasks are not. Concatenating both task lists was tried and was
+            // measurably worse (38/41 against 39/41): the embedded document is a fixed budget, and
+            // padding it with near-duplicate phrasings of the same intent dilutes the signal that
+            // makes an entity findable. The model's phrasing wins outright when it produced any.
             var synonyms = profile.Synonyms.Concat(heuristic.Synonyms).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToArray();
             return profile with { Synonyms = synonyms, Category = string.IsNullOrWhiteSpace(profile.Category) ? heuristic.Category : profile.Category };
         }

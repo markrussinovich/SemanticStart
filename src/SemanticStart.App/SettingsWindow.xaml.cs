@@ -398,7 +398,7 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private static async Task<int> RunProcessAsync(string fileName, IReadOnlyList<string> args)
+    internal static async Task<int> RunProcessAsync(string fileName, IReadOnlyList<string> args)
     {
         using var process = new Process();
         process.StartInfo = new ProcessStartInfo { FileName = fileName, UseShellExecute = false, CreateNoWindow = true };

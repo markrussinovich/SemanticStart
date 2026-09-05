@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text;
 using SemanticStart.Core.Abstractions;
 using SemanticStart.Core.Model;
@@ -54,18 +54,13 @@ public sealed class CuratedWindowsIntentEnricher : IEnricher
         ["ms-settings:troubleshoot-other"] = new("Run Windows troubleshooters for network, audio, printers, Windows Update, Bluetooth, camera, and other common problems.", ["fix sound problems", "fix printer problems", "run a troubleshooter", "repair network problems"], ["troubleshooters", "fix problems", "diagnostics"]),
     };
 
+    // Only inbox Windows components appear below. They are identical on every Windows installation,
+    // so shipping vocabulary for them is a baseline rather than a description of this machine.
+    // Entries for third-party and Office applications were removed: they could only ever cover the
+    // programs that happened to be known when this file was written, and measurement showed online
+    // enrichment plus local synthesis now describes them without help.
     private static readonly IReadOnlyDictionary<string, IntentEntry> ByFileName = new Dictionary<string, IntentEntry>(StringComparer.OrdinalIgnoreCase)
     {
-        ["msedge.exe"] = new("Browse websites, search the web, use web apps, manage tabs, downloads, favorites, and browser privacy.", ["search the web", "open a website", "browse the internet", "change browser settings", "download a file"], ["browser", "web browser", "internet", "edge"]),
-        ["chrome.exe"] = new("Browse websites, search the web, use web apps, manage tabs, downloads, bookmarks, extensions, and browser privacy.", ["search the web", "open a website", "browse the internet", "manage browser extensions", "download a file"], ["browser", "web browser", "internet", "google chrome", "chrome"]),
-        ["firefox.exe"] = new("Browse websites, search the web, use web apps, manage tabs, downloads, bookmarks, extensions, and browser privacy.", ["search the web", "open a website", "browse the internet", "manage browser add-ons", "download a file"], ["browser", "web browser", "internet", "mozilla firefox", "firefox"]),
-        ["winword.exe"] = new("Create, write, edit, format, review, and print word-processing documents.", ["write a document", "create a report", "edit a Word file", "format a letter", "review a document"], ["word processor", "word document", "docx", "Microsoft Word", "Office Word"]),
-        ["excel.exe"] = new("Create, edit, analyze, chart, and format spreadsheets, workbooks, tables, formulas, and data.", ["edit a spreadsheet", "create a workbook", "analyze data", "make a chart", "work with formulas"], ["spreadsheet", "workbook", "xlsx", "Microsoft Excel", "Office Excel"]),
-        ["powerpnt.exe"] = new("Create, edit, present, and share slide presentations, slideshows, and slide decks.", ["create a presentation", "make slides", "build a slide deck", "present a slideshow", "edit PowerPoint slides"], ["presentation", "slides", "slide deck", "slideshow", "pptx", "Microsoft PowerPoint", "Office PowerPoint"]),
-        ["outlook.exe"] = new("Read, send, organize, and search email, calendars, meetings, contacts, and tasks.", ["write an email", "schedule a meeting", "check my calendar", "search mail", "manage contacts"], ["email", "mail", "calendar", "Microsoft Outlook", "Office Outlook"]),
-        ["onenote.exe"] = new("Capture, organize, sync, and search notes, notebooks, pages, drawings, images, and meeting notes.", ["take notes", "organize a notebook", "write meeting notes", "clip research", "sync notes"], ["notes", "notebook", "Microsoft OneNote", "Office OneNote"]),
-        ["teams.exe"] = new("Chat, meet, call, collaborate, share files, and join video meetings with Microsoft Teams.", ["join a meeting", "chat with coworkers", "start a video call", "share my screen", "collaborate with a team"], ["chat", "meetings", "video call", "Microsoft Teams", "Teams"]),
-        ["onedrive.exe"] = new("Sync, back up, share, and access cloud files and folders with OneDrive.", ["sync my files", "back up desktop documents and pictures", "share a cloud file", "access OneDrive folders"], ["cloud storage", "file sync", "Microsoft OneDrive", "OneDrive"]),
         ["mmsys.cpl"] = ByLaunchTarget["ms-settings:sound"],
         ["powercfg.cpl"] = ByLaunchTarget["ms-settings:powersleep"],
         ["desk.cpl"] = ByLaunchTarget["ms-settings:display"],
@@ -84,8 +79,16 @@ public sealed class CuratedWindowsIntentEnricher : IEnricher
     public string Provider => "windows-intent-catalog";
     public bool RequiresNetwork => false;
 
+    /// <summary>
+    /// Set to disable this catalog entirely. The catalog is hand-written, so it can only ever
+    /// describe entities that were known when it was written; this switch exists so that the
+    /// automatic pipeline can be measured on its own without the catalog masking its gaps.
+    /// </summary>
+    private static readonly bool Disabled =
+        Environment.GetEnvironmentVariable("SEMANTICSTART_NO_CATALOG") is "1";
+
     public bool CanEnrich(Entity entity)
-        => TryResolve(entity) is not null;
+        => !Disabled && TryResolve(entity) is not null;
 
     public Task<IReadOnlyList<EnrichmentDocument>> EnrichAsync(Entity entity, CancellationToken cancellationToken = default)
     {
@@ -109,8 +112,6 @@ public sealed class CuratedWindowsIntentEnricher : IEnricher
             return byFile;
 
         var name = entity.DisplayName;
-        if (name.Contains("Microsoft Edge", StringComparison.OrdinalIgnoreCase) || name.Equals("Edge", StringComparison.OrdinalIgnoreCase))
-            return ByFileName["msedge.exe"];
         if (name.Equals("Task Manager", StringComparison.OrdinalIgnoreCase))
             return ByFileName["taskmgr.exe"];
 
@@ -121,45 +122,20 @@ public sealed class CuratedWindowsIntentEnricher : IEnricher
         return null;
     }
 
+    // Display-name aliases for inbox components whose executable name is not what the collector
+    // reports. Application aliases were removed along with the application entries themselves.
     private static readonly IReadOnlyDictionary<string, IntentEntry> ByAppName = new Dictionary<string, IntentEntry>(StringComparer.OrdinalIgnoreCase)
     {
-        ["edge"] = ByFileName["msedge.exe"],
-        ["microsoft edge"] = ByFileName["msedge.exe"],
-        ["chrome"] = ByFileName["chrome.exe"],
-        ["google chrome"] = ByFileName["chrome.exe"],
-        ["firefox"] = ByFileName["firefox.exe"],
-        ["mozilla firefox"] = ByFileName["firefox.exe"],
-        ["word"] = ByFileName["winword.exe"],
-        ["microsoft word"] = ByFileName["winword.exe"],
-        ["excel"] = ByFileName["excel.exe"],
-        ["microsoft excel"] = ByFileName["excel.exe"],
-        ["powerpoint"] = ByFileName["powerpnt.exe"],
-        ["microsoft powerpoint"] = ByFileName["powerpnt.exe"],
-        ["outlook"] = ByFileName["outlook.exe"],
-        ["microsoft outlook"] = ByFileName["outlook.exe"],
-        ["onenote"] = ByFileName["onenote.exe"],
-        ["microsoft onenote"] = ByFileName["onenote.exe"],
-        ["teams"] = ByFileName["teams.exe"],
-        ["microsoft teams"] = ByFileName["teams.exe"],
-        ["onedrive"] = ByFileName["onedrive.exe"],
-        ["microsoft onedrive"] = ByFileName["onedrive.exe"],
-
-        // Sysinternals ships as a single MSIX package whose manifest sets every application's
-        // description to its own name ("ZoomIt"), so neither the manifest enricher nor any local
-        // file gives these tools a usable description. They are exactly the tools a user cannot
-        // name - "see what files a process has open" is the canonical example - so the intent
-        // vocabulary is curated here instead.
-        ["zoomit"] = new("Zoom into, annotate, draw on, and record the screen during presentations and demos, with a break timer.", ["annotate the screen", "draw on the screen", "zoom into the screen", "record my screen", "screen recording", "presentation timer", "highlight the mouse cursor"], ["screen annotation", "screen zoom", "screen recorder", "presentation tool", "ZoomIt"]),
-        ["process explorer"] = new("Inspect running processes in depth: open handles and files, loaded DLLs, CPU and memory use, process tree, and which program owns a locked file.", ["see what files a process has open", "find which process is locking a file", "kill a process", "inspect open handles", "see loaded DLLs", "find what is using the CPU", "replace task manager"], ["procexp", "process viewer", "handles", "task manager replacement", "Process Explorer"]),
-        ["process monitor"] = new("Capture and filter real-time file system, registry, process, and network activity for troubleshooting.", ["see what files a program is accessing", "trace registry activity", "debug why an app fails to start", "monitor file system activity"], ["procmon", "file monitor", "registry monitor", "activity trace", "Process Monitor"]),
-        ["autoruns"] = new("Show and disable everything configured to start automatically at boot or sign-in, including services, drivers, scheduled tasks, and shell extensions.", ["see what starts with Windows", "disable startup programs", "find malware persistence", "manage auto-start entries"], ["startup programs", "auto-start", "persistence", "Autoruns"]),
-        ["tcpview"] = new("List active TCP and UDP endpoints with the owning process, remote address, and connection state.", ["see which process is using a port", "find open network connections", "check what is listening on a port"], ["netstat", "open ports", "network connections", "TCPView"]),
-
-        // Inbox MSIX apps whose manifests describe them with nothing but their own name.
-        ["snipping tool"] = new("Capture screenshots of a region, window, or the whole screen, record the screen to video, and annotate captures.", ["take a screenshot", "record my screen", "capture part of the screen", "screen recording", "snip a window", "annotate a screenshot"], ["screenshot", "screen capture", "screen recorder", "snip", "print screen", "Snipping Tool"]),
-        ["calculator"] = new("Perform standard, scientific, graphing, and programmer calculations, plus unit and currency conversion.", ["do math", "convert units", "calculate a percentage", "convert currency"], ["calc", "math", "unit converter", "Calculator"]),
-        ["terminal"] = new("Run PowerShell, Command Prompt, and WSL shells in tabs with profiles and split panes.", ["open a command line", "run a shell", "open PowerShell", "use the terminal"], ["console", "command line", "shell", "Windows Terminal"]),
-        ["windows terminal"] = new("Run PowerShell, Command Prompt, and WSL shells in tabs with profiles and split panes.", ["open a command line", "run a shell", "open PowerShell", "use the terminal"], ["console", "command line", "shell", "Windows Terminal"]),
+        ["task manager"] = ByFileName["taskmgr.exe"],
+        ["resource monitor"] = ByFileName["taskmgr.exe"],
+        ["device manager"] = ByFileName["devmgmt.msc"],
+        ["disk management"] = ByFileName["diskmgmt.msc"],
+        ["disk cleanup"] = ByFileName["cleanmgr.exe"],
+        ["event viewer"] = ByFileName["eventvwr.msc"],
+        ["services"] = ByFileName["services.msc"],
+        ["remote desktop connection"] = ByFileName["mstsc.exe"],
+        ["network connections"] = ByFileName["ncpa.cpl"],
+        ["internet options"] = ByFileName["inetcpl.cpl"],
     };
 
     private static string NormalizeAppName(string name)

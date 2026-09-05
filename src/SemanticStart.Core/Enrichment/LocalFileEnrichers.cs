@@ -113,7 +113,25 @@ public sealed class MsixManifestEnricher : IEnricher
             Add(lines, "Display name", root.Descendants().FirstOrDefault(e => e.Name.LocalName == "DisplayName")?.Value);
             Add(lines, "Description", root.Descendants().FirstOrDefault(e => e.Name.LocalName == "Description")?.Value);
             Add(lines, "Publisher", root.Descendants().FirstOrDefault(e => e.Name.LocalName == "PublisherDisplayName")?.Value);
-            foreach (var visual in root.Descendants().Where(e => e.Name.LocalName == "VisualElements"))
+
+            // A package can host many applications - the Sysinternals Suite ships more than seventy
+            // in one manifest. Taking every VisualElements element gave each of them the same
+            // multi-kilobyte blob describing all the others, so ZoomIt was summarised as
+            // "Sysinternals Suite Application display." Select the one Application whose Id matches
+            // this entity's AppUserModelId, and only fall back to all of them for single-app
+            // packages where there is no ambiguity.
+            var appId = GetApplicationId(entity);
+            var applications = root.Descendants().Where(e => e.Name.LocalName == "Application").ToList();
+            var scope = appId is null
+                ? applications
+                : applications
+                    .Where(a => string.Equals(a.Attribute("Id")?.Value, appId, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+            if (scope.Count == 0)
+                scope = applications.Count == 1 ? applications : [];
+
+            foreach (var visual in scope.SelectMany(a => a.Descendants().Where(e => e.Name.LocalName == "VisualElements")))
             {
                 Add(lines, "Application description", visual.Attributes().FirstOrDefault(a => a.Name.LocalName == "Description")?.Value);
                 Add(lines, "Application display name", visual.Attributes().FirstOrDefault(a => a.Name.LocalName == "DisplayName")?.Value);
@@ -138,6 +156,13 @@ public sealed class MsixManifestEnricher : IEnricher
         if (string.IsNullOrWhiteSpace(value)) return null;
         value = Regex.Replace(value.Trim(), @"\s+", " ");
         return value.StartsWith("ms-resource:", StringComparison.OrdinalIgnoreCase) ? null : value;
+    }
+
+    private static string? GetApplicationId(Entity entity)
+    {
+        var aumid = entity.RawMetadata.GetValueOrDefault("appUserModelId") ?? entity.LaunchTarget;
+        var bang = aumid.IndexOf('!');
+        return bang >= 0 && bang < aumid.Length - 1 ? aumid[(bang + 1)..] : null;
     }
 
     private static string? GetPackageFamilyName(Entity entity)

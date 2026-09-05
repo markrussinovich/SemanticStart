@@ -171,9 +171,21 @@ public sealed class HybridSearchEngine : ISearchEngine
             candidate.Score += candidate.VectorContribution;
         }
 
+        // The lexical arm is admitted only where its evidence is competitive with its own best hit.
+        // Reciprocal-rank fusion looks at rank and discards magnitude, so a row that matched a
+        // single low-information token still enters near the top of the lexical list and collects
+        // almost the full arm weight. Asking what is slowing a computer down retrieved the two best
+        // semantic matches in the whole index, then buried them under an applet for adding hardware
+        // whose sole claim was the word "computer". Weak lexical rows can still surface through the
+        // vector or literal arms on their own merit.
+        var lexicalLeader = lexicalHits.Count > 0 ? lexicalHits.Max(h => h.Score) : 0;
+
         for (var rank = 0; rank < lexicalHits.Count; rank++)
         {
             var (entityId, score) = lexicalHits[rank];
+            if (lexicalLeader > 0 && score < lexicalLeader * _options.MinLexicalContributionRatio)
+                continue;
+
             if (!snapshot.IndexById.TryGetValue(entityId, out var index))
                 continue;
 
@@ -271,7 +283,10 @@ public sealed class HybridSearchEngine : ISearchEngine
             return false;
 
         if (!candidate.LexicalScore.HasValue)
-            return vectorScore >= _options.MinVectorOnlySurfaceScore;
+        {
+            return vectorScore >= _options.MinVectorOnlySurfaceScore
+                && (topVector <= 0 || vectorScore >= topVector * _options.MinVectorOnlyLeaderRatio);
+        }
 
         var relativeVector = topVector <= 0
             || vectorScore >= topVector * _options.MinHybridVectorLeaderRatio;
@@ -345,6 +360,8 @@ public sealed class HybridSearchEngine : ISearchEngine
                 Score = x.Boost,
                 Summary = x.Entity.Profile?.Summary,
                 MatchReason = "frequently used",
+                Tasks = x.Entity.Profile?.Tasks ?? [],
+                Category = x.Entity.Profile?.Category,
             })];
     }
 
@@ -368,6 +385,8 @@ public sealed class HybridSearchEngine : ISearchEngine
         LexicalScore = c.LexicalScore,
         Summary = c.Entity.Profile?.Summary,
         MatchReason = c.MatchReason,
+        Tasks = c.Entity.Profile?.Tasks ?? [],
+        Category = c.Entity.Profile?.Category,
     };
 
     [DebuggerDisplay("{Entity.Entity.DisplayName} = {Score}")]

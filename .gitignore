@@ -10,3 +10,12 @@ artifacts/
 # Downloaded ONNX weights and any other large local assets
 models/
 *.onnx
+
+# Throwaway index homes and probe scripts used while evaluating enrichment and
+# synthesis changes. These hold generated indexes and cached HTTP responses.
+.exp-*/
+.llm-probe.json
+.shot/
+*.py
+
+.commitmsg

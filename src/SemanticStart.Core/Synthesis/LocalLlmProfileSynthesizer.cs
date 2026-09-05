@@ -73,6 +73,10 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
     private readonly object _resolveGate = new();
     private Task<ResolvedEndpoint?>? _resolveTask;
     private ResolvedEndpoint? _resolved;
+    private int _recoveryAttempts;
+    private const int MaxRecoveryAttempts = 5;
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(90);
+    private readonly SemaphoreSlim _requestGate = new(1, 1);
 
     public string Generator => _resolved is { } resolved ? $"llm:{resolved.ModelName}" : $"llm:{NormalizedModelName(_options)}";
     public bool IsAvailable => _options.Mode != LocalLlmMode.Off;
@@ -163,9 +167,67 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
 
     public async Task<SynthesizedProfile> SynthesizeAsync(Entity entity, IReadOnlyList<EnrichmentDocument> documents, CancellationToken cancellationToken = default)
     {
+        try
+        {
+            return await SynthesizeOnceAsync(entity, documents, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or System.Net.Sockets.SocketException)
+        {
+            // A local runtime can exit mid-build: Foundry Local's server terminated part way through
+            // a 468-entity index and every remaining entity silently degraded to heuristics, because
+            // the resolved endpoint is cached once and each failure looks like an ordinary synthesis
+            // error. Drop the cached endpoint so the next attempt restarts and reloads the runtime.
+            if (!TryInvalidateEndpoint())
+                throw;
+
+            return await SynthesizeOnceAsync(entity, documents, cancellationToken).ConfigureAwait(false);
+        }
+        catch (JsonException)
+        {
+            // Small models drop a closing brace or trail commentary often enough to matter: this
+            // accounted for most of the entities that still fell back on an otherwise healthy run.
+            return await SynthesizeOnceAsync(entity, documents, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private bool TryInvalidateEndpoint()
+    {
+        lock (_resolveGate)
+        {
+            if (_recoveryAttempts >= MaxRecoveryAttempts)
+                return false;
+
+            _recoveryAttempts++;
+            _resolveTask = null;
+            _resolved = null;
+            return true;
+        }
+    }
+
+    private async Task<SynthesizedProfile> SynthesizeOnceAsync(Entity entity, IReadOnlyList<EnrichmentDocument> documents, CancellationToken cancellationToken)
+    {
         var resolved = await ResolveAsync(cancellationToken).ConfigureAwait(false);
         if (resolved is null) throw new InvalidOperationException("Local LLM synthesis is unavailable.");
 
+        // A single small local model gains nothing from concurrency and loses a great deal to it:
+        // the index pipeline enriches entities in parallel, and the resulting simultaneous
+        // completions pushed every request past its timeout, so all but a handful of entities fell
+        // back to heuristics. Requests are serialised and given a generous budget instead.
+        await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(RequestTimeout);
+            return await SendSynthesisRequestAsync(entity, documents, resolved, timeout.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            _requestGate.Release();
+        }
+    }
+
+    private async Task<SynthesizedProfile> SendSynthesisRequestAsync(Entity entity, IReadOnlyList<EnrichmentDocument> documents, ResolvedEndpoint resolved, CancellationToken cancellationToken)
+    {
         var prompt = BuildPrompt(entity, documents);
         using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(resolved.Endpoint, "/v1/chat/completions"));
         request.Content = JsonContent(new
@@ -225,7 +287,7 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
     private static string BuildPrompt(Entity entity, IReadOnlyList<EnrichmentDocument> documents)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Synthesize semantic launcher metadata for this Windows entity.");
+        sb.AppendLine("You are writing search metadata for a Windows launcher.");
         sb.AppendLine($"Name: {entity.DisplayName}");
         sb.AppendLine($"Kind: {entity.Kind}");
         sb.AppendLine($"Launch target: {entity.LaunchTarget}");
@@ -236,7 +298,26 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
             var text = doc.Text.Length > 1500 ? doc.Text[..1500] : doc.Text;
             sb.AppendLine($"Document from {doc.Provider}: {text}");
         }
-        sb.AppendLine("Return JSON: {\"summary\":\"one sentence\",\"tasks\":[\"user intent phrase\"],\"synonyms\":[\"aliases\"],\"category\":\"broad category\"}");
+
+        // Documents are retrieved by search and are frequently about something else entirely, so the
+        // model is told to discard them rather than summarise them. The task list is where most of
+        // the value is: it must be phrased the way a user types into a search box, because those
+        // words are exactly what the vendor's own documentation never contains. Concrete example
+        // phrases are deliberately absent - supplying them caused small models to copy them
+        // verbatim, and Process Explorer confidently claimed it could free up disk space.
+        //
+        // The instructions are kept deliberately flat. Splitting the list into "plain goals" and
+        // "symptoms" was measurably worse (35/41 against 36/41): a 1.5B model answers a multi-part
+        // instruction with long instructional sentences that name the entity in every entry, which
+        // is the exact wording a lost user cannot produce. One extra constraint is affordable; a
+        // second structure on top of it is not.
+        sb.AppendLine();
+        sb.AppendLine("Some documents may be irrelevant. Ignore any document that is not about this specific entity, and rely on what you already know instead.");
+        sb.AppendLine("summary: one sentence describing what it does for the user. Never restate only the name.");
+        sb.AppendLine("tasks: 6-10 short phrases someone would type into a search box when they want this. Each phrase is a goal in everyday words, starting with a verb, and must be something this entity genuinely does. Do not invent capabilities it lacks. Do not write step-by-step instructions or refer to buttons, menus, or clicking.");
+        sb.AppendLine("Never use this entity's name inside a task phrase, and include the problem or symptom that brings someone here when they do not know the name.");
+        sb.AppendLine("synonyms: other names, abbreviations, and executable names people call it.");
+        sb.AppendLine("Return only JSON: {\"summary\":\"...\",\"tasks\":[\"...\"],\"synonyms\":[\"...\"],\"category\":\"...\"}");
         return sb.ToString();
     }
 
@@ -476,11 +557,72 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
         {
             var preferredProbe = probes.FirstOrDefault(p => p.Models.Any(m => m.Equals(preferred, StringComparison.OrdinalIgnoreCase)));
             if (preferredProbe.Models is not null)
-                return new ResolvedEndpoint(preferredProbe.Candidate.Endpoint, preferred, preferredProbe.Candidate.Runtime);
+            {
+                var exact = new ResolvedEndpoint(preferredProbe.Candidate.Endpoint, preferred, preferredProbe.Candidate.Runtime);
+                await EnsureModelLoadedAsync(http, exact, cancellationToken).ConfigureAwait(false);
+                return exact;
+            }
         }
 
         var selected = probes[0];
-        return new ResolvedEndpoint(selected.Candidate.Endpoint, SelectModel(options, selected.Models), selected.Candidate.Runtime);
+        var resolved = new ResolvedEndpoint(selected.Candidate.Endpoint, SelectModel(options, selected.Models), selected.Candidate.Runtime);
+        await EnsureModelLoadedAsync(http, resolved, cancellationToken).ConfigureAwait(false);
+        return resolved;
+    }
+
+    /// <summary>
+    /// Foundry Local advertises every downloaded model through <c>/v1/models</c> but refuses
+    /// completions until one has been explicitly loaded into memory, answering "Model is not
+    /// loaded" instead. Index builds fall back to heuristics on any synthesis failure, so this
+    /// presented as the LLM silently never running. Loading takes about ten seconds and only has to
+    /// happen once per session, so it is done here rather than asking the user to run a CLI command.
+    /// </summary>
+    private static async Task<bool> EnsureModelLoadedAsync(HttpClient http, ResolvedEndpoint resolved, CancellationToken cancellationToken)
+    {
+        if (resolved.Runtime != LocalLlmRuntime.FoundryLocal)
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(await TestCompletionAsync(http, resolved, cancellationToken).ConfigureAwait(false)))
+            return true;
+
+        var foundry = ResolveFoundryCli();
+        if (foundry is null)
+            return false;
+
+        var alias = await FoundryAliasAsync(http, resolved, cancellationToken).ConfigureAwait(false) ?? resolved.ModelName;
+        try
+        {
+            var result = await ProcessRunner.RunAsync(foundry, ["model", "load", alias], TimeSpan.FromMinutes(3), cancellationToken).ConfigureAwait(false);
+            return result.ExitCode == 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TaskCanceledException) { return false; }
+    }
+
+    /// <summary>
+    /// Maps the served model id (<c>qwen2.5-1.5b-instruct-trtrtx-gpu</c>) back to the alias the
+    /// Foundry CLI accepts (<c>qwen2.5-1.5b</c>), which the catalog exposes as <c>parent</c>.
+    /// </summary>
+    private static async Task<string?> FoundryAliasAsync(HttpClient http, ResolvedEndpoint resolved, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            var json = await http.GetStringAsync(new Uri(resolved.Endpoint, "/v1/models"), timeout.Token).ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
+                return null;
+
+            foreach (var model in data.EnumerateArray())
+            {
+                if (!model.TryGetProperty("id", out var id) || !string.Equals(id.GetString(), resolved.ModelName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (model.TryGetProperty("parent", out var parent) && !string.IsNullOrWhiteSpace(parent.GetString()))
+                    return parent.GetString();
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException) { }
+        return null;
     }
 
     private static string SelectModel(LocalLlmOptions options, IReadOnlyList<string> models)
@@ -718,6 +860,16 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
             var result = await ProcessRunner.RunAsync(foundry, ["server", "status"], TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
             if (result.ExitCode != 0 || !Regex.IsMatch(result.Output, @"https?://(?:localhost|127\.0\.0\.1):\d+"))
                 result = await ProcessRunner.RunAsync(foundry, ["service", "status"], TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+
+            // "Not running" still reports the last URL it used, so an installed-but-stopped runtime
+            // would be advertised as available and then refuse every request. Start it instead.
+            if (result.Output.Contains("Not running", StringComparison.OrdinalIgnoreCase) || !Regex.IsMatch(result.Output, @"https?://(?:localhost|127\.0\.0\.1):\d+"))
+            {
+                var start = await ProcessRunner.RunAsync(foundry, ["server", "start"], TimeSpan.FromSeconds(60), cancellationToken).ConfigureAwait(false);
+                result = Regex.IsMatch(start.Output, @"https?://(?:localhost|127\.0\.0\.1):\d+")
+                    ? start
+                    : await ProcessRunner.RunAsync(foundry, ["server", "status"], TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+            }
 
             return Regex.Matches(result.Output, @"https?://(?:localhost|127\.0\.0\.1):\d+").Select(m => new Uri(m.Value)).ToArray();
         }

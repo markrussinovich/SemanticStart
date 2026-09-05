@@ -32,6 +32,13 @@ public sealed record AppSettings
     public string LocalLlmEndpointBaseUrl { get; init; } = string.Empty;
     public string LocalLlmModelName { get; init; } = LocalLlmOptions.DefaultModelName;
 
+    /// <summary>
+    /// Whether the user has been through first-run setup. The first index build is the expensive,
+    /// hard-to-undo one - it is what decides whether online documentation and local model synthesis
+    /// were used at all - so those choices have to be offered before it starts, not after.
+    /// </summary>
+    public bool SetupCompleted { get; init; }
+
     public LocalLlmOptions ToLocalLlmOptions() => new()
     {
         Mode = LocalLlmMode,
