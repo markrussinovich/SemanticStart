@@ -16,7 +16,19 @@ public sealed record RelevanceCase
     /// Display names that would each be a correct top hit. Multiple are allowed because several
     /// machines and several tools can legitimately satisfy one intent.
     /// </summary>
-    public required string[] AcceptableResults { get; init; }
+    public string[] AcceptableResults { get; init; } = [];
+
+    /// <summary>
+    /// Display names that must not be shown for this query. These guard precision: returning
+    /// obvious junk is worse than returning fewer than the requested number of results.
+    /// </summary>
+    public string[] ForbiddenResults { get; init; } = [];
+
+    /// <summary>When true, the correct result is an empty list with a clean no-match contract.</summary>
+    public bool ExpectNoResults { get; init; }
+
+    /// <summary>Optional ceiling for result count when the corpus is asserting cutoff behaviour.</summary>
+    public int? MaxResults { get; init; }
 
     /// <summary>Rank the expected result must appear within.</summary>
     public int WithinTopN { get; init; } = 3;
@@ -35,6 +47,19 @@ public static class RelevanceCorpus
     [
         new()
         {
+            Query = "default microphone",
+            AcceptableResults = ["Microphone Privacy", "Sound Input Devices", "Sound", "Input"],
+            Rationale = "Regression: usage or raw-score boosts must not outrank the best hybrid semantic+lexical microphone settings hit.",
+        },
+        new()
+        {
+            Query = "search the web",
+            AcceptableResults = ["Microsoft Edge", "Edge", "Bing", "Search"],
+            ForbiddenResults = ["Calculator", "Services", "ADInsight", "Phone Link"],
+            Rationale = "Natural-language web intent should not be buried by unrelated frequently used apps.",
+        },
+        new()
+        {
             Query = "free up disk space",
             AcceptableResults = ["Disk Cleanup", "Storage", "Storage Sense", "cleanmgr"],
             Rationale = "Canonical intent query. No shared words with 'Disk Cleanup' beyond 'disk'.",
@@ -50,6 +75,12 @@ public static class RelevanceCorpus
             Query = "my laptop battery drains too fast",
             AcceptableResults = ["Power & battery", "Power Options", "Battery saver", "powercfg"],
             Rationale = "Complaint-shaped query, not a noun. Pure lexical search cannot resolve this.",
+        },
+        new()
+        {
+            Query = "why is my battery draining",
+            AcceptableResults = ["Power & battery", "Power Options", "Battery saver", "powercfg"],
+            Rationale = "Shorter wording of the battery-drain complaint used for manual ranking checks.",
         },
         new()
         {
@@ -100,6 +131,12 @@ public static class RelevanceCorpus
         },
         new()
         {
+            Query = "see what files a process has open",
+            AcceptableResults = ["Process Explorer", "Resource Monitor", "Process Monitor", "handle", "OpenFiles"],
+            Rationale = "Expert troubleshooting query where lexical and semantic evidence should beat generic file apps.",
+        },
+        new()
+        {
             Query = "encrypt my hard drive",
             AcceptableResults = ["BitLocker", "Device encryption", "Manage BitLocker"],
         },
@@ -123,6 +160,12 @@ public static class RelevanceCorpus
         },
         new()
         {
+            Query = "change my screen resolution",
+            AcceptableResults = ["Display", "Advanced display"],
+            Rationale = "Display settings intent with strong profile text should rank ahead of generic screen matches.",
+        },
+        new()
+        {
             Query = "fix a corrupted system file",
             AcceptableResults = ["System File Checker", "sfc", "dism", "chkdsk", "Recovery"],
         },
@@ -139,6 +182,21 @@ public static class RelevanceCorpus
     /// </summary>
     public static IReadOnlyList<RelevanceCase> LiteralName { get; } =
     [
+        new()
+        {
+            Query = "powerpoint",
+            AcceptableResults = ["PowerPoint"],
+            ForbiddenResults = ["Calculator"],
+            WithinTopN = 1,
+            Rationale = "An exact Office app name should not be padded with unrelated vector-only apps.",
+        },
+        new()
+        {
+            Query = "microphone",
+            AcceptableResults = ["Microphone Privacy", "Sound Input Devices", "Sound"],
+            WithinTopN = 1,
+            Rationale = "Single-token literal prefix must keep Start-menu-style behaviour.",
+        },
         new()
         {
             Query = "notepad",
@@ -186,11 +244,47 @@ public static class RelevanceCorpus
     /// </summary>
     public static IReadOnlyList<RelevanceCase> Prefix { get; } =
     [
+        new()
+        {
+            Query = "wor",
+            AcceptableResults = ["Word"],
+            WithinTopN = 1,
+            Rationale = "Short Office app prefix must be rank 1 even though the token is poor semantic input.",
+        },
+        new()
+        {
+            Query = "notep",
+            AcceptableResults = ["Notepad"],
+            WithinTopN = 1,
+            Rationale = "Partial Notepad prefix must prefer the app over optional feature profile text.",
+        },
         new() { Query = "not", AcceptableResults = ["Notepad", "Notifications"], WithinTopN = 3 },
         new() { Query = "tas", AcceptableResults = ["Task Manager", "Task Scheduler", "Taskbar"], WithinTopN = 3 },
         new() { Query = "blue", AcceptableResults = ["Bluetooth & devices", "Bluetooth"], WithinTopN = 3 },
     ];
 
+    /// <summary>
+    /// Precision and no-result contracts. These intentionally include content-gap cases where the
+    /// right answer has not yet been described well enough by the index; the ranking layer should
+    /// prefer returning nothing over filling the list with generic-token or vector-noise matches.
+    /// </summary>
+    public static IReadOnlyList<RelevanceCase> Precision { get; } =
+    [
+        new()
+        {
+            Query = "create presentation",
+            ForbiddenResults = ["Notepad", "Hyper-V", "Scheduled Tasks", "Claude"],
+            MaxResults = 1,
+            Rationale = "Current PowerPoint fallback text does not mention presentations, so generic 'create' matches must be suppressed.",
+        },
+        new()
+        {
+            Query = "asdfghjkl",
+            ExpectNoResults = true,
+            Rationale = "A nonsense query should produce the empty-state path, not MiniLM noise.",
+        },
+    ];
+
     public static IReadOnlyList<RelevanceCase> All { get; } =
-        [.. SemanticIntent, .. LiteralName, .. Prefix];
+        [.. SemanticIntent, .. LiteralName, .. Prefix, .. Precision];
 }

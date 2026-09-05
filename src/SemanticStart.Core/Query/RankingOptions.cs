@@ -2,8 +2,8 @@ namespace SemanticStart.Core.Query;
 
 /// <summary>
 /// Tunables for the hybrid retrieval pipeline. Defaults were chosen so that literal name
-/// matching still dominates (users expect "wor" to find Word instantly) while semantic recall
-/// handles intent phrases ("free up disk space").
+/// matching remains a first-class retrieval arm (users expect "wor" to find Word instantly)
+/// while semantic recall handles intent phrases ("free up disk space").
 /// </summary>
 public sealed record RankingOptions
 {
@@ -21,28 +21,80 @@ public sealed record RankingOptions
     public double LexicalArmWeight { get; init; } = 1.0;
 
     /// <summary>
+    /// Weight for the literal display-name arm. It is intentionally stronger than either
+    /// semantic arm so exact and prefix app-name queries win, but it is still paid through RRF
+    /// rather than as a raw +1.5/+3.0 score that would dwarf retrieval evidence.
+    /// </summary>
+    public double LiteralArmWeight { get; init; } = 4.0;
+
+    /// <summary>
     /// Cosine floor for the vector arm. Below this a hit is semantic noise; MiniLM assigns
     /// non-trivial similarity to almost any pair of strings, so an explicit floor is required.
     /// </summary>
     public double MinVectorScore { get; init; } = 0.20;
 
-    /// <summary>Score added when the display name starts with the query. This is the "wor" -> "Word" rule.</summary>
+    /// <summary>
+    /// Minimum cosine for a result that has only vector evidence. In this index, unrelated short
+    /// strings routinely cluster around 0.23-0.28, so vector-only hits below this are treated as
+    /// embedding noise rather than padded UI results.
+    /// </summary>
+    public double MinVectorOnlySurfaceScore { get; init; } = 0.35;
+
+    /// <summary>
+    /// Minimum cosine for a result that has both vector and lexical evidence. This is lower than
+    /// the vector-only floor because two independent arms agreeing is meaningful, but it still
+    /// filters generic OR-FTS matches such as a document merely containing "create" or "text".
+    /// </summary>
+    public double MinHybridSurfaceVectorScore { get; init; } = 0.25;
+
+    /// <summary>
+    /// Hybrid hits with weak BM25 must stay within this fraction of the best vector similarity
+    /// for the query. RRF scores are not query-comparable, so this compares the underlying cosine
+    /// signal and cuts the flat MiniLM noise band beneath a clearly separated leader.
+    /// </summary>
+    public double MinHybridVectorLeaderRatio { get; init; } = 0.60;
+
+    /// <summary>
+    /// Minimum BM25 that is strong enough to surface without cosine support. FTS5 now uses OR
+    /// semantics, so moderate BM25 can mean only one generic token matched; values around eight
+    /// in the current corpus correspond to distinctive names or terms.
+    /// </summary>
+    public double StrongLexicalScore { get; init; } = 8.0;
+
+    /// <summary>
+    /// Minimum literal-name strength that counts as independent evidence for surfacing. Exact,
+    /// name-prefix, word-prefix, and acronym matches meet this; loose subsequence matches do not
+    /// and are only allowed to break ties among candidates with other retrieval evidence.
+    /// </summary>
+    public double MinLiteralSurfaceStrength { get; init; } = 0.6;
+
+    /// <summary>
+    /// Results lacking name evidence or strong BM25 must retain at least this fraction of the
+    /// leader's fused score. This removes tail padding after an exact/prefix hit while still
+    /// allowing several close semantic answers for broad intent queries.
+    /// </summary>
+    public double MinRelativeScoreWithoutIndependentEvidence { get; init; } = 0.35;
+
+    /// <summary>Relative literal strength when the display name starts with the query. This is the "wor" -> "Word" rule.</summary>
     public double PrefixBoost { get; init; } = 1.5;
 
-    /// <summary>Score added when the display name equals the query outright.</summary>
+    /// <summary>Relative literal strength when the display name equals the query outright.</summary>
     public double ExactMatchBoost { get; init; } = 3.0;
 
-    /// <summary>Score added when the query matches an acronym of the display name, e.g. "vsc".</summary>
+    /// <summary>Relative literal strength when the query matches an acronym of the display name, e.g. "vsc".</summary>
     public double AcronymBoost { get; init; } = 0.9;
 
-    /// <summary>Score added when a whole word of the display name starts with the query.</summary>
+    /// <summary>Relative literal strength when a whole word of the display name starts with the query.</summary>
     public double WordPrefixBoost { get; init; } = 0.6;
 
-    /// <summary>Ceiling of the frequency component, so a heavily used app cannot permanently bury better matches.</summary>
-    public double MaxFrequencyBoost { get; init; } = 0.8;
+    /// <summary>
+    /// Ceiling of the frequency component. Kept below one rank-1 RRF arm contribution
+    /// (1 / (60 + 1) = 0.0164) so usage can tilt close calls without burying a better match.
+    /// </summary>
+    public double MaxFrequencyBoost { get; init; } = 0.008;
 
-    /// <summary>Ceiling of the recency component.</summary>
-    public double MaxRecencyBoost { get; init; } = 0.4;
+    /// <summary>Ceiling of the recency component, also kept on the RRF scale.</summary>
+    public double MaxRecencyBoost { get; init; } = 0.006;
 
     /// <summary>Half-life used to decay the recency boost.</summary>
     public TimeSpan RecencyHalfLife { get; init; } = TimeSpan.FromDays(7);

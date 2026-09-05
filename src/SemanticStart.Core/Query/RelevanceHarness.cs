@@ -62,7 +62,17 @@ public sealed record RelevanceReport
             foreach (var f in failures)
             {
                 lines.Add($"  \"{f.Case.Query}\"");
-                lines.Add($"    expected within top {f.Case.WithinTopN}: {string.Join(" | ", f.Case.AcceptableResults)}");
+                if (f.Case.ExpectNoResults)
+                    lines.Add("    expected: no results");
+                else if (f.Case.AcceptableResults.Length > 0)
+                    lines.Add($"    expected within top {f.Case.WithinTopN}: {string.Join(" | ", f.Case.AcceptableResults)}");
+
+                if (f.Case.ForbiddenResults.Length > 0)
+                    lines.Add($"    forbidden: {string.Join(" | ", f.Case.ForbiddenResults)}");
+
+                if (f.Case.MaxResults is { } max)
+                    lines.Add($"    max results: {max}");
+
                 lines.Add($"    actual: {(f.ActualTop.Length == 0 ? "(no results)" : string.Join(" > ", f.ActualTop))}");
                 if (f.Case.Rationale is { } r)
                     lines.Add($"    guards: {r}");
@@ -114,10 +124,15 @@ public sealed class RelevanceHarness(ISearchEngine engine)
                 }
             }
 
+            var recallPassed = testCase.AcceptableResults.Length == 0 || matchedRank.HasValue;
+            var noResultsPassed = !testCase.ExpectNoResults || names.Length == 0;
+            var maxResultsPassed = !testCase.MaxResults.HasValue || names.Length <= testCase.MaxResults.Value;
+            var forbiddenPassed = !names.Any(n => testCase.ForbiddenResults.Any(f => IsMatch(n, f)));
+
             outcomes.Add(new RelevanceOutcome
             {
                 Case = testCase,
-                Passed = matchedRank.HasValue,
+                Passed = recallPassed && noResultsPassed && maxResultsPassed && forbiddenPassed,
                 ActualTop = [.. names.Take(5)],
                 MatchedRank = matchedRank,
                 ElapsedMs = sw.Elapsed.TotalMilliseconds,
