@@ -158,7 +158,8 @@
 
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="Mode" VerticalAlignment="Center" />
                             <ComboBox x:Name="LocalLlmModeBox" Grid.Row="0" Grid.Column="1" Width="180" HorizontalAlignment="Left"
-                                      Style="{StaticResource FluentComboBox}" SelectedValuePath="Content" FontSize="14">
+                                      Style="{StaticResource FluentComboBox}" SelectedValuePath="Content" FontSize="14"
+                                      SelectionChanged="LocalLlmModeBox_SelectionChanged">
                                 <ComboBoxItem Content="Off" />
                                 <ComboBoxItem Content="Auto" />
                                 <ComboBoxItem Content="Custom" />

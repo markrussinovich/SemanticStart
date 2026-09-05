@@ -108,6 +108,7 @@ public partial class SettingsWindow : Window
         LocalLlmEndpointBox.Text = _settings.LocalLlmEndpointBaseUrl;
         LocalLlmCustomModelBox.Text = _settings.LocalLlmModelName;
         LocalLlmStatusText.Text = "Not tested.";
+        UpdateLocalLlmEnabledState();
         UpdateHotKeyStatus();
     }
 
@@ -173,10 +174,9 @@ public partial class SettingsWindow : Window
         {
             var catalog = await LocalLlmProfileSynthesizer.DiscoverCatalogAsync(cancellationToken: _catalogCts.Token);
             _modelCatalog = catalog.Models;
-            _hasDetectedRuntime = catalog.DetectedRuntime is not null || _modelCatalog.Any(m => m.CanDownload);
+            _hasDetectedRuntime = catalog.DetectedRuntime is not null;
             LocalLlmModelBox.ItemsSource = _modelCatalog;
             LocalLlmRuntimeStatusText.Text = catalog.StatusMessage;
-            InstallFoundryButton.IsEnabled = !_hasDetectedRuntime;
 
             var configured = _modelCatalog.FirstOrDefault(m => m.ModelName.Equals(_settings.LocalLlmModelName, StringComparison.OrdinalIgnoreCase));
             if (configured is null
@@ -193,7 +193,7 @@ public partial class SettingsWindow : Window
                     ?? _modelCatalog.FirstOrDefault();
                 LocalLlmModelBox.SelectedItem = selected;
             }
-            UpdateSelectedModelDetails();
+            UpdateLocalLlmEnabledState();
         }
         catch (OperationCanceledException)
         {
@@ -206,7 +206,7 @@ public partial class SettingsWindow : Window
         }
         finally
         {
-            RefreshModelsButton.IsEnabled = CustomModelBox.IsChecked != true;
+            UpdateLocalLlmEnabledState();
         }
     }
 
@@ -231,24 +231,61 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>
+    /// Enables each local-LLM control only once the thing it depends on is actually present, so
+    /// the dialog never offers a choice that cannot work yet. The chain is: synthesis must be
+    /// turned on, then a runtime must be detected, then a model must be selected. Without this a
+    /// user could pick a model and press Test with nothing installed to serve it.
+    /// </summary>
+    private void UpdateLocalLlmEnabledState()
+    {
+        var mode = ParseLocalLlmMode(LocalLlmModeBox.SelectedValue?.ToString());
+        var enabled = mode != LocalLlmMode.Off;
+        var custom = CustomModelBox.IsChecked == true;
+        var item = LocalLlmModelBox.SelectedItem as LocalLlmCatalogItem;
+
+        // A custom endpoint is only meaningful in Custom mode; Auto discovers it.
+        LocalLlmEndpointBox.IsEnabled = enabled && mode == LocalLlmMode.Custom;
+
+        // Models cannot be listed or chosen until a runtime exists to host them.
+        LocalLlmModelBox.IsEnabled = enabled && _hasDetectedRuntime && !custom;
+        RefreshModelsButton.IsEnabled = enabled && !custom;
+        CustomModelBox.IsEnabled = enabled;
+        LocalLlmCustomModelBox.IsEnabled = enabled && custom;
+        LocalLlmCustomModelBox.Visibility = custom ? Visibility.Visible : Visibility.Collapsed;
+
+        InstallFoundryButton.IsEnabled = enabled && !_hasDetectedRuntime;
+        DownloadModelButton.IsEnabled = enabled && _hasDetectedRuntime && !custom && item is { IsReady: false, CanDownload: true };
+        TestLocalLlmButton.IsEnabled = enabled && (_hasDetectedRuntime || mode == LocalLlmMode.Custom);
+
+        UpdateSelectedModelDetails();
+    }
+
     private void UpdateSelectedModelDetails()
     {
+        if (!_hasDetectedRuntime)
+        {
+            LocalLlmStatusText.Text = ParseLocalLlmMode(LocalLlmModeBox.SelectedValue?.ToString()) == LocalLlmMode.Off
+                ? "Local LLM synthesis is off; descriptions come from built-in heuristics."
+                : "No runtime detected yet. Install Foundry Local, then choose Refresh to list models.";
+            return;
+        }
+
         if (CustomModelBox.IsChecked == true)
         {
-            DownloadModelButton.IsEnabled = false;
+            LocalLlmStatusText.Text = "Using a custom model identifier.";
             return;
         }
 
         if (LocalLlmModelBox.SelectedItem is not LocalLlmCatalogItem item)
         {
-            DownloadModelButton.IsEnabled = false;
+            LocalLlmStatusText.Text = "Select a model.";
             return;
         }
 
         if (!string.IsNullOrWhiteSpace(item.EndpointBaseUrl))
             LocalLlmEndpointBox.Text = item.EndpointBaseUrl;
 
-        DownloadModelButton.IsEnabled = item is { IsReady: false, CanDownload: true };
         LocalLlmStatusText.Text = $"{item.DisplayName}: {(item.IsReady ? "ready" : "download required")}. {item.BestFor}";
     }
 
@@ -259,17 +296,22 @@ public partial class SettingsWindow : Window
 
     private async void RefreshModelsButton_Click(object sender, RoutedEventArgs e) => await RefreshLocalLlmCatalogAsync();
 
-    private void LocalLlmModelBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) => UpdateSelectedModelDetails();
+    private void LocalLlmModelBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) => UpdateLocalLlmEnabledState();
+
+    private void LocalLlmModeBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (!IsInitialized)
+            return;
+
+        UpdateLocalLlmEnabledState();
+    }
 
     private void CustomModelBox_Changed(object sender, RoutedEventArgs e)
     {
         if (!IsInitialized)
             return;
 
-        LocalLlmCustomModelBox.Visibility = CustomModelBox.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
-        LocalLlmModelBox.IsEnabled = CustomModelBox.IsChecked != true;
-        RefreshModelsButton.IsEnabled = CustomModelBox.IsChecked != true;
-        UpdateSelectedModelDetails();
+        UpdateLocalLlmEnabledState();
     }
 
     private async void TestLocalLlmButton_Click(object sender, RoutedEventArgs e)
@@ -292,7 +334,7 @@ public partial class SettingsWindow : Window
         }
         finally
         {
-            TestLocalLlmButton.IsEnabled = true;
+            UpdateLocalLlmEnabledState();
         }
     }
 
@@ -326,7 +368,7 @@ public partial class SettingsWindow : Window
         finally
         {
             LocalLlmProgressBar.IsIndeterminate = false;
-            DownloadModelButton.IsEnabled = LocalLlmModelBox.SelectedItem is LocalLlmCatalogItem selected && selected is { IsReady: false, CanDownload: true };
+            UpdateLocalLlmEnabledState();
         }
     }
 
@@ -352,7 +394,7 @@ public partial class SettingsWindow : Window
         }
         finally
         {
-            InstallFoundryButton.IsEnabled = !_hasDetectedRuntime;
+            UpdateLocalLlmEnabledState();
         }
     }
 
