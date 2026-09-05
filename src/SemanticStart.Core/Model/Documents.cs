@@ -106,4 +106,14 @@ public sealed record SearchHit
 
     /// <summary>Why this matched, for debugging and for the relevance harness.</summary>
     public string? MatchReason { get; init; }
+
+    /// <summary>
+    /// The intent phrases from the synthesized profile. Surfaced in the expanded result detail so
+    /// the user can see what a tool is actually for, which for an unfamiliar name is the whole
+    /// point of the index.
+    /// </summary>
+    public IReadOnlyList<string> Tasks { get; init; } = [];
+
+    /// <summary>Broad category from the synthesized profile.</summary>
+    public string? Category { get; init; }
 }

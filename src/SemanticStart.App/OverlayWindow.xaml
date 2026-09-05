@@ -10,6 +10,38 @@
     <Window.Resources>
         <local:NullToVisibilityConverter x:Key="IconVisible" />
         <local:NullToVisibilityConverter x:Key="IconMissing" Invert="True" />
+        <local:BooleanToVisibilityConverter x:Key="BoolToVisible" />
+
+        <!--
+            Chevron that reveals a result's full description. Templated rather than a default
+            ToggleButton so it reads as a quiet affordance next to the kind badge instead of a
+            raised button, and rotates to point down when open.
+        -->
+        <Style x:Key="ChevronToggle" TargetType="ToggleButton">
+            <Setter Property="Width" Value="26" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="4">
+                            <TextBlock x:Name="Glyph" Text="&#xE70D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Glyph" Property="Text" Value="&#xE70E;" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
         <!--
             Search field templated by hand so it can carry a Windows 11 corner radius, a focus
@@ -139,31 +171,64 @@
                 </ListBox.ItemContainerStyle>
                 <ListBox.ItemTemplate>
                     <DataTemplate DataType="{x:Type local:SearchResultItem}">
-                        <Grid MouseLeftButtonUp="Result_MouseLeftButtonUp" Background="Transparent">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <Grid Width="32" Height="32" VerticalAlignment="Center" Margin="4,0,0,0">
-                                <Border Background="{DynamicResource IconBackplateBrush}" CornerRadius="5"
-                                        Visibility="{Binding Icon, Converter={StaticResource IconMissing}}" />
-                                <Image Source="{Binding Icon}" Width="26" Height="26" RenderOptions.BitmapScalingMode="HighQuality"
-                                       Visibility="{Binding Icon, Converter={StaticResource IconVisible}}" />
-                                <TextBlock Text="{Binding FallbackGlyph}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                           FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                           Foreground="{DynamicResource SecondaryTextBrush}"
-                                           Visibility="{Binding Icon, Converter={StaticResource IconMissing}}" />
+                        <Grid Background="Transparent">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid MouseLeftButtonUp="Result_MouseLeftButtonUp" Background="Transparent">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Grid Width="32" Height="32" VerticalAlignment="Center" Margin="4,0,0,0">
+                                    <Border Background="{DynamicResource IconBackplateBrush}" CornerRadius="5"
+                                            Visibility="{Binding Icon, Converter={StaticResource IconMissing}}" />
+                                    <Image Source="{Binding Icon}" Width="26" Height="26" RenderOptions.BitmapScalingMode="HighQuality"
+                                           Visibility="{Binding Icon, Converter={StaticResource IconVisible}}" />
+                                    <TextBlock Text="{Binding FallbackGlyph}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                               FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource SecondaryTextBrush}"
+                                               Visibility="{Binding Icon, Converter={StaticResource IconMissing}}" />
+                                </Grid>
+                                <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding DisplayName}" FontSize="14" Foreground="{DynamicResource PrimaryTextBrush}"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding Summary}" FontSize="12" Foreground="{DynamicResource SecondaryTextBrush}"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="{DynamicResource BadgeBrush}" CornerRadius="4" Padding="7,2"
+                                        VerticalAlignment="Center" Margin="8,0,0,0">
+                                    <TextBlock Text="{Binding KindBadge}" FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" />
+                                </Border>
+                                <ToggleButton Grid.Column="3" x:Name="DetailsToggle" Style="{StaticResource ChevronToggle}"
+                                              IsChecked="{Binding IsExpanded, Mode=TwoWay}"
+                                              ToolTip="Show details"
+                                              AutomationProperties.Name="Show details"
+                                              VerticalAlignment="Center" Margin="4,0,2,0" />
                             </Grid>
-                            <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center">
-                                <TextBlock Text="{Binding DisplayName}" FontSize="14" Foreground="{DynamicResource PrimaryTextBrush}"
-                                           TextTrimming="CharacterEllipsis" />
-                                <TextBlock Text="{Binding Summary}" FontSize="12" Foreground="{DynamicResource SecondaryTextBrush}"
-                                           TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-                            <Border Grid.Column="2" Background="{DynamicResource BadgeBrush}" CornerRadius="4" Padding="7,2"
-                                    VerticalAlignment="Center" Margin="8,0,4,0">
-                                <TextBlock Text="{Binding KindBadge}" FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" />
+
+                            <Border Grid.Row="1" Margin="48,2,8,6" Padding="10,8" CornerRadius="6"
+                                    Background="{DynamicResource BadgeBrush}"
+                                    Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVisible}}">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding DetailSummary}" TextWrapping="Wrap" FontSize="12"
+                                               Foreground="{DynamicResource PrimaryTextBrush}" />
+                                    <ItemsControl ItemsSource="{Binding Tasks}" Margin="0,6,0,0"
+                                                  Visibility="{Binding HasTasks, Converter={StaticResource BoolToVisible}}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding}" FontSize="11" TextWrapping="Wrap" Margin="0,1"
+                                                           Foreground="{DynamicResource SecondaryTextBrush}" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <TextBlock Text="{Binding LaunchTarget}" FontSize="11" Margin="0,6,0,0" TextTrimming="CharacterEllipsis"
+                                               Visibility="{Binding HasLaunchTarget, Converter={StaticResource BoolToVisible}}"
+                                               Foreground="{DynamicResource SecondaryTextBrush}" Opacity="0.8" />
+                                </StackPanel>
                             </Border>
                         </Grid>
                     </DataTemplate>

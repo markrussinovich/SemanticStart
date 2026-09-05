@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -44,6 +45,56 @@ public sealed class SearchResultItem : ObservableObject
     public string Summary { get; }
     public string KindBadge { get; }
     public string FallbackGlyph { get; }
+
+    /// <summary>
+    /// The full synthesized description, shown when the row is expanded. The collapsed row trims the
+    /// summary to one line, which for the longer descriptions is where the useful part gets cut off.
+    /// </summary>
+    public string DetailSummary => Summary;
+
+    /// <summary>
+    /// Synthesis sometimes pads the task list out to ten near-duplicate phrasings. Showing all of
+    /// them makes the panel look like filler, so only the leading few are surfaced.
+    /// </summary>
+    public IReadOnlyList<string> Tasks => Hit.Tasks.Count > MaxDisplayedTasks
+        ? Hit.Tasks.Take(MaxDisplayedTasks).ToList()
+        : Hit.Tasks;
+
+    public bool HasTasks => Hit.Tasks.Count > 0;
+
+    /// <summary>
+    /// A launch target is only worth showing when it tells the user something. An AppUserModelId is
+    /// an opaque package identifier, so it is suppressed in favour of showing nothing.
+    /// </summary>
+    public string LaunchTarget => FormatLaunchTarget(Hit.Entity.LaunchTarget);
+
+    public bool HasLaunchTarget => LaunchTarget.Length > 0;
+
+    private const int MaxDisplayedTasks = 5;
+
+    private static string FormatLaunchTarget(string target)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            return string.Empty;
+        }
+
+        if (target.StartsWith("shell:AppsFolder\\", StringComparison.OrdinalIgnoreCase) ||
+            target.Contains('!', StringComparison.Ordinal))
+        {
+            return string.Empty;
+        }
+
+        return target;
+    }
+
+    private bool _isExpanded;
+
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set => SetProperty(ref _isExpanded, value);
+    }
 
     public ImageSource? Icon
     {

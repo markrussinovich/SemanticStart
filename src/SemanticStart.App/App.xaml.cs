@@ -182,16 +182,44 @@ public partial class App : System.Windows.Application
         try
         {
             await _searchService.InitializeAsync(CancellationToken.None);
-            if (_searchService.Count == 0)
+            if (_searchService.Count > 0)
+                return;
+
+            if (!settings.SetupCompleted)
             {
-                ShowSettingsWindow();
-                await RebuildIndexFromTrayAsync();
+                var buildNow = RunFirstRunSetup(settings);
+                if (buildNow != true)
+                    return;
             }
+
+            await RebuildIndexFromTrayAsync();
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Warm start failed");
         }
+    }
+
+    /// <summary>
+    /// Offers the choices that shape the first index before it is built, since rebuilding to change
+    /// them costs minutes. Returns null if the user dismissed setup without answering, in which case
+    /// nothing is indexed and the tray icon is left to start it.
+    /// </summary>
+    private bool? RunFirstRunSetup(AppSettings settings)
+    {
+        if (_settingsService is null || _searchService is null)
+            return null;
+
+        return Dispatcher.Invoke(() =>
+        {
+            var window = new FirstRunWindow(settings, _activationManager?.ActiveHotKey);
+            if (window.ShowDialog() != true)
+                return (bool?)null;
+
+            _settingsService.Save(window.Result);
+            _activationManager?.ApplySettings(window.Result);
+            return window.BuildRequested;
+        });
     }
 
     private SettingsWindow ShowSettingsWindow()

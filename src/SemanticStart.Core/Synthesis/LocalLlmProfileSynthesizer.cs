@@ -182,6 +182,12 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
 
             return await SynthesizeOnceAsync(entity, documents, cancellationToken).ConfigureAwait(false);
         }
+        catch (JsonException)
+        {
+            // Small models drop a closing brace or trail commentary often enough to matter: this
+            // accounted for most of the entities that still fell back on an otherwise healthy run.
+            return await SynthesizeOnceAsync(entity, documents, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private bool TryInvalidateEndpoint()
@@ -281,7 +287,7 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
     private static string BuildPrompt(Entity entity, IReadOnlyList<EnrichmentDocument> documents)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Synthesize semantic launcher metadata for this Windows entity.");
+        sb.AppendLine("You are writing search metadata for a Windows launcher.");
         sb.AppendLine($"Name: {entity.DisplayName}");
         sb.AppendLine($"Kind: {entity.Kind}");
         sb.AppendLine($"Launch target: {entity.LaunchTarget}");
@@ -292,7 +298,19 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
             var text = doc.Text.Length > 1500 ? doc.Text[..1500] : doc.Text;
             sb.AppendLine($"Document from {doc.Provider}: {text}");
         }
-        sb.AppendLine("Return JSON: {\"summary\":\"one sentence\",\"tasks\":[\"user intent phrase\"],\"synonyms\":[\"aliases\"],\"category\":\"broad category\"}");
+
+        // Documents are retrieved by search and are frequently about something else entirely, so the
+        // model is told to discard them rather than summarise them. The task list is where most of
+        // the value is: it must be phrased the way a user types into a search box, because those
+        // words are exactly what the vendor's own documentation never contains. Concrete example
+        // phrases are deliberately absent - supplying them caused small models to copy them
+        // verbatim, and Process Explorer confidently claimed it could free up disk space.
+        sb.AppendLine();
+        sb.AppendLine("Some documents may be irrelevant. Ignore any document that is not about this specific entity, and rely on what you already know instead.");
+        sb.AppendLine("summary: one sentence describing what it does for the user. Never restate only the name.");
+        sb.AppendLine("tasks: 6-10 short phrases someone would type into a search box when they want this. Each phrase is a goal in everyday words, starting with a verb, and must be something this entity genuinely does. Do not invent capabilities it lacks. Do not write step-by-step instructions or refer to buttons, menus, or clicking.");
+        sb.AppendLine("synonyms: other names, abbreviations, and executable names people call it.");
+        sb.AppendLine("Return only JSON: {\"summary\":\"...\",\"tasks\":[\"...\"],\"synonyms\":[\"...\"],\"category\":\"...\"}");
         return sb.ToString();
     }
 

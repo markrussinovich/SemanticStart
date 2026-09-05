@@ -345,6 +345,8 @@ public sealed class HybridSearchEngine : ISearchEngine
                 Score = x.Boost,
                 Summary = x.Entity.Profile?.Summary,
                 MatchReason = "frequently used",
+                Tasks = x.Entity.Profile?.Tasks ?? [],
+                Category = x.Entity.Profile?.Category,
             })];
     }
 
@@ -368,6 +370,8 @@ public sealed class HybridSearchEngine : ISearchEngine
         LexicalScore = c.LexicalScore,
         Summary = c.Entity.Profile?.Summary,
         MatchReason = c.MatchReason,
+        Tasks = c.Entity.Profile?.Tasks ?? [],
+        Category = c.Entity.Profile?.Category,
     };
 
     [DebuggerDisplay("{Entity.Entity.DisplayName} = {Score}")]
