@@ -35,7 +35,9 @@ vendors name products. The result is embedded with `all-MiniLM-L6-v2` via ONNX R
 lexical FTS5/BM25 arm supplies precision on literal names. Neither is sufficient alone — pure vector
 search fails on short prefixes like `wor`, and pure lexical search cannot answer *"free up disk
 space"*. Results are fused with Reciprocal Rank Fusion, then adjusted by literal-name boosts and by
-what you actually launch.
+what you actually launch. Results whose evidence is weak are dropped rather than padding the list to
+the requested count, so a query nothing answers well shows *"No good matches found"* instead of a
+page of near-misses.
 
 ## Requirements
 
@@ -89,6 +91,33 @@ thumb covers Alt and Space while the pinky holds Win, with no finger doing doubl
 **Single instance.** A named mutex ensures only one copy runs. Launching the executable again does
 not start a second instance; it signals the running one to show its overlay and exits.
 
+### Using a small local model for descriptions
+
+Description quality is what makes intent search work, and the built-in heuristics can only repeat
+what an app already says about itself. Settings has a **Local LLM synthesis** section that hands
+that job to a small model running on your machine.
+
+| Mode | Behaviour |
+|---|---|
+| `Off` | Descriptions come from the built-in heuristics only |
+| `Auto` | Probes Foundry Local, Ollama, and LM Studio, and uses the first one it finds |
+| `Custom` | Talks to any OpenAI-compatible endpoint you point it at |
+
+Choosing a model is a dropdown, not a config file. SemanticStart discovers what is already installed
+(`foundry model ls`, Ollama's `/api/tags`, LM Studio's `/v1/models`) and merges it with a curated
+list of small CPU-friendly models — Qwen2.5 0.5B/1.5B, Llama 3.2 1B/3B, Gemma 2 2B, Phi-3.5 Mini —
+labelled with size and what each is good for. **Download** fetches a curated model through the
+detected runtime, **Test** sends a real chat completion and reports what came back, and if no
+runtime is present at all, **Install Foundry Local** runs the winget install for you.
+
+Controls light up only when their dependencies are ready: with no runtime detected, the model picker
+and **Download** stay disabled while **Install Foundry Local** does not, so the dialog never offers a
+choice that cannot work yet.
+
+Synthesis runs **once, at index time**, never on the query path. Expect roughly 8–15 minutes for a
+typical ~470-entity index with a 1–2B CPU model. Every entity has a timeout and falls back to the
+heuristic profile, so a slow or missing model degrades quality without ever breaking the build.
+
 ### The CLI
 
 `SemanticStart.Cli` is a diagnostic front end over the same engine:
@@ -128,7 +157,7 @@ That is a non-negotiable safety property, and every hook callback is wrapped to 
 
 Queries never leave the machine. The only network traffic is the one-time embedding model download
 and opt-in enrichment during indexing, which is cached to disk and can be disabled entirely; the
-index is fully functional without it.
+index is fully functional without it. Local LLM synthesis talks only to a server on `localhost`.
 
 ## Layout
 
