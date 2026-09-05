@@ -36,49 +36,62 @@ public sealed class EnrichmentTests
     }
 
     [Fact]
-    public async Task CuratedWindowsIntentCatalog_AddsUserIntentVocabulary()
+    public async Task Enrichment_ContainsNoHandWrittenPerProgramKnowledge()
     {
-        var entity = CreateEntity("Power & Battery", EntityKind.SettingsPage, "ms-settings:powersleep") with
+        // Generality contract. Every description, task phrase, and synonym must be derived at index
+        // time from the entity's own metadata and its harvested documentation. Hand-written text for
+        // named programs was removed because it can only describe the software someone happened to
+        // think of while writing the code, which says nothing about the machine the tool installs
+        // on. It also went stale silently: the removed catalog mapped "Resource Monitor" to Task
+        // Manager's description, so the UI confidently showed the wrong summary for a real tool.
+        //
+        // This test fails if a per-program lookup is reintroduced, by asserting that entities the
+        // old catalog covered get nothing at all from the offline enricher set.
+        var pipeline = new EnrichmentPipeline(EnricherRegistry.CreateAll(), new HeuristicProfileSynthesizer(), maxDegreeOfParallelism: 1);
+
+        var previouslyCurated = new[]
         {
-            LaunchKind = LaunchKind.Uri,
-            LaunchTarget = "ms-settings:powersleep"
+            CreateEntity("Power & Battery", EntityKind.SettingsPage, "ms-settings:powersleep"),
+            CreateEntity("Network Connections", EntityKind.ControlPanelApplet, @"C:\Windows\system32\ncpa.cpl"),
+            CreateEntity("Disk Cleanup", EntityKind.Application, @"C:\Windows\system32\cleanmgr.exe"),
+            CreateEntity("Device Manager", EntityKind.Application, @"C:\Windows\system32\devmgmt.msc"),
         };
-        var pipeline = new EnrichmentPipeline([new CuratedWindowsIntentEnricher()], new HeuristicProfileSynthesizer(), maxDegreeOfParallelism: 1);
 
-        var (_, profile) = await pipeline.EnrichAndSynthesizeAsync(entity, new EnrichmentOptions());
-
-        Assert.Contains(profile.Tasks, t => t.Contains("battery is draining", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(profile.Synonyms, s => s.Equals("battery", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
-    public async Task CuratedWindowsIntentCatalog_DoesNotDescribeThirdPartyApplications()
-    {
-        // The catalog is hand-written, so it may only cover components that ship with Windows and
-        // are therefore identical on every machine. Application entries could only ever describe
-        // the programs that happened to be known when the catalog was written, which is not a
-        // property any installed machine can rely on; those descriptions come from online
-        // enrichment and local synthesis instead.
-        var pipeline = new EnrichmentPipeline([new CuratedWindowsIntentEnricher()], new HeuristicProfileSynthesizer(), maxDegreeOfParallelism: 1);
-
-        foreach (var name in new[] { "PowerPoint", "Microsoft Word", "Google Chrome", "Microsoft Teams" })
+        foreach (var entity in previouslyCurated)
         {
-            var entity = CreateEntity(name, EntityKind.Application, name);
-            var (documents, _) = await pipeline.EnrichAndSynthesizeAsync(entity, new EnrichmentOptions());
-
+            var (documents, _) = await pipeline.EnrichAndSynthesizeAsync(entity, new EnrichmentOptions { AllowNetwork = false });
             Assert.DoesNotContain(documents, d => d.Provider == "windows-intent-catalog");
         }
     }
 
     [Fact]
-    public async Task CuratedWindowsIntentCatalog_StillCoversInboxWindowsComponents()
+    public async Task AdjacentDocs_IgnoresLicenseAndChangelogFiles()
     {
-        var entity = CreateEntity("Network Connections", EntityKind.ControlPanelApplet, @"C:\Windows\system32\ncpa.cpl");
-        var pipeline = new EnrichmentPipeline([new CuratedWindowsIntentEnricher()], new HeuristicProfileSynthesizer(), maxDegreeOfParallelism: 1);
+        // Visual Studio Code was summarised as 'THE SOFTWARE IS PROVIDED "AS IS"...' because its
+        // LICENSE file was harvested and sorted ahead of its real description, leaving nothing in
+        // the embedded text saying it is a code editor. Legal and changelog files are never a
+        // description of what a program does, for any program.
+        var dir = Path.Combine(Path.GetTempPath(), "ss-license-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dir, "LICENSE.txt"), "MIT License. THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.");
+            await File.WriteAllTextAsync(Path.Combine(dir, "CHANGELOG.md"), "## 1.2.0 Fixed a crash on startup.");
+            await File.WriteAllTextAsync(Path.Combine(dir, "README.md"), "A lightweight source code editor for building and debugging modern applications.");
+            await File.WriteAllTextAsync(Path.Combine(dir, "app.exe"), string.Empty);
 
-        var (_, profile) = await pipeline.EnrichAndSynthesizeAsync(entity, new EnrichmentOptions());
+            var entity = CreateEntity("Test Editor", EntityKind.Application, Path.Combine(dir, "app.exe"));
+            var documents = await new AdjacentDocsEnricher().EnrichAsync(entity);
+            var text = string.Join(" ", documents.Select(d => d.Text));
 
-        Assert.Contains(profile.Tasks, t => t.Contains("internet not working", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain("AS IS", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Fixed a crash", text, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("source code editor", text, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 
     [Fact]

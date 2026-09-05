@@ -79,6 +79,15 @@ public sealed record RankingOptions
     public double StrongLexicalScore { get; init; } = 8.0;
 
     /// <summary>
+    /// Fraction of the query's best lexical score at which a hit may surface on lexical evidence
+    /// alone, mirroring <see cref="MinVectorOnlyLeaderRatio"/> for the other arm. Deliberately
+    /// near-tie: measured at 0.70 this readmitted the weak single-token matches the evidence floors
+    /// exist to remove and cost three relevance cases to recover one, so it is set to admit only a
+    /// hit that is effectively level with the leader.
+    /// </summary>
+    public double MinLexicalOnlyLeaderRatio { get; init; } = 0.95;
+
+    /// <summary>
     /// Minimum literal-name strength that counts as independent evidence for surfacing. Exact,
     /// name-prefix, word-prefix, and acronym matches meet this; loose subsequence matches do not
     /// and are only allowed to break ties among candidates with other retrieval evidence.

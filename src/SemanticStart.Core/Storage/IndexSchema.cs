@@ -10,7 +10,13 @@ namespace SemanticStart.Core.Storage;
 public static class IndexSchema
 {
     /// <summary>Bump on any breaking schema change. A mismatch triggers a full rebuild.</summary>
-    public const int Version = 2;
+    /// <remarks>
+    /// v3 added the Porter stemmer to the FTS tokenizer. Without it the lexical arm matched only
+    /// exact surface forms, so "edit a file" could not reach a profile that says "code editor" and
+    /// "record a video" could not reach one that says "recording". Stemming is applied to both the
+    /// indexed text and the query, so the two always agree.
+    /// </remarks>
+    public const int Version = 3;
 
     public static void Initialize(SqliteConnection connection)
     {
@@ -91,7 +97,7 @@ public static class IndexSchema
                 tasks,
                 synonyms,
                 publisher,
-                tokenize = 'unicode61 remove_diacritics 2'
+                tokenize = 'porter unicode61 remove_diacritics 2'
             );
             """);
     }

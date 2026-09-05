@@ -23,7 +23,6 @@ public static class EnricherRegistry
             new PeVersionEnricher(),
             new MsixManifestEnricher(),
             new ShortcutMetadataEnricher(),
-            new CuratedWindowsIntentEnricher(),
             new AdjacentDocsEnricher(),
             new CliHelpEnricher(),
             new WingetManifestEnricher(),

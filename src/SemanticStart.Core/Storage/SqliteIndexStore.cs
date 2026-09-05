@@ -242,11 +242,27 @@ public sealed partial class SqliteIndexStore : IIndexStore
         lock (_gate)
         {
             using var cmd = Connection.CreateCommand();
+
+            // Per-column BM25 weights, in declaration order:
+            //   entity_id, display_name, summary, tasks, synonyms, publisher
+            //
+            // BM25 divides term frequency by document length, so a term landing in a very short
+            // field scores enormously. With uniform weights that made the display name the single
+            // strongest lexical signal: "set low power" ranked Power Automate first purely because
+            // "Power" is one of two words in its name, and "record my screen" ranked the Lock
+            // Screen settings page first for the same reason. Neither has anything to do with the
+            // query's intent.
+            //
+            // The name is deliberately weighted *below* the intent fields. Literal-name lookup is
+            // not BM25's job here: exact, prefix, acronym, and subsequence name matching all run
+            // in NameMatcher and are fused separately, so lowering this weight costs nothing on
+            // "wor" -> Word while removing the false intent matches. entity_id is UNINDEXED and
+            // publisher is near-useless for ranking ("Microsoft Corporation" matches everything).
             cmd.CommandText = """
-                SELECT entity_id, -bm25(entities_fts) AS score
+                SELECT entity_id, -bm25(entities_fts, 0.0, 1.0, 3.0, 5.0, 2.0, 0.25) AS score
                 FROM entities_fts
                 WHERE entities_fts MATCH $query
-                ORDER BY bm25(entities_fts)
+                ORDER BY bm25(entities_fts, 0.0, 1.0, 3.0, 5.0, 2.0, 0.25)
                 LIMIT $limit;
                 """;
             cmd.Parameters.AddWithValue("$query", match);

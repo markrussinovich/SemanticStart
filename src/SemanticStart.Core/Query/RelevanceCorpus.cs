@@ -192,6 +192,48 @@ public static class RelevanceCorpus
             Query = "manage my printers",
             AcceptableResults = ["Printers & scanners", "Devices and Printers"],
         },
+
+        // Reported from live use. Each one failed because the entity's synthesized description was
+        // wrong, not because ranking was wrong: a Learn page title, an unrelated article, or a
+        // LICENSE file had become the text that gets embedded.
+        new()
+        {
+            Query = "kill a process",
+            AcceptableResults = ["Task Manager", "Taskkill", "Process Explorer"],
+            Rationale = "Process Explorer was absent because its article body was discarded, leaving only 'Open Process Explorer.'",
+        },
+        new()
+        {
+            Query = "suspend a process",
+            AcceptableResults = ["Process Explorer", "Task Manager", "Resource Monitor"],
+            ForbiddenResults = ["Process Monitor"],
+            Rationale = "Process Monitor traces activity and cannot suspend; Process Explorer can.",
+        },
+        new()
+        {
+            Query = "set low power",
+            AcceptableResults = ["Battery Saver", "Power Options", "Power & Battery", "Power Configuration"],
+            ForbiddenResults = ["Power Automate"],
+            Rationale = "Power Automate shares only the word 'Power' and was described by its licensing limits page.",
+        },
+        new()
+        {
+            Query = "edit a file",
+            AcceptableResults = ["Notepad", "Visual Studio Code", "WordPad"],
+            Rationale = "VS Code was summarised by its LICENSE file, so nothing in its text said 'editor'.",
+        },
+        new()
+        {
+            Query = "ask ai",
+            AcceptableResults = ["Copilot", "GitHub Copilot", "Foundry Local CLI", "Claude"],
+            Rationale = "Copilot had no description beyond 'Open Copilot.'",
+        },
+        new()
+        {
+            Query = "record a video",
+            AcceptableResults = ["Microsoft Clipchamp", "Clipchamp", "Camera", "ZoomIt", "Sound Recorder"],
+            Rationale = "Clipchamp was described by a Microsoft 365 'video analytics' page title.",
+        },
     ];
 
     /// <summary>

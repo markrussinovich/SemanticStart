@@ -22,8 +22,44 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         var summary = BuildSummary(entity, described);
         var category = BuildCategory(entity);
         var tasks = BuildTasks(entity, documents, described).Distinct(StringComparer.OrdinalIgnoreCase).Take(10).ToArray();
-        var synonyms = BuildSynonyms(entity, documents).Distinct(StringComparer.OrdinalIgnoreCase).Take(20).ToArray();
+        var synonyms = BuildSynonyms(entity, documents)
+            .Concat(ActionVerbs(summary))
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToArray();
         return Task.FromResult(new SynthesizedProfile { EntityId = entity.Id, Summary = summary, Tasks = tasks, Synonyms = synonyms, Category = category, Generator = Generator });
+    }
+
+    /// <summary>
+    /// Derives the verb a user would type from the agent noun a vendor writes. Product prose is
+    /// full of "-er"/"-or" nouns naming the tool, while queries use the corresponding verb: a
+    /// profile saying "code editor" is the right answer for "edit a file", "screen recorder" for
+    /// "record my screen", "file manager" for "manage files". Stemming does not bridge this,
+    /// because Porter deliberately leaves agent nouns intact, so the two forms never met in the
+    /// lexical index and entities were not retrieved at all.
+    ///
+    /// This is morphology, not vocabulary: it derives from whatever text the entity actually has
+    /// and so applies to programs that did not exist when this was written.
+    /// </summary>
+    private static IEnumerable<string> ActionVerbs(string text)
+    {
+        foreach (var raw in Regex.Split(text, @"\W+"))
+        {
+            if (raw.Length < 6) continue;
+            var word = raw.ToLowerInvariant();
+            if (!word.EndsWith("er", StringComparison.Ordinal) && !word.EndsWith("or", StringComparison.Ordinal)) continue;
+
+            var stem = word[..^2];
+            if (stem.Length < 3) continue;
+
+            // "debugger" -> "debugg" -> "debug"; "manager" -> "manag" -> "manage".
+            if (stem.Length > 3 && stem[^1] == stem[^2] && !"aeiou".Contains(stem[^1]))
+                yield return stem[..^1];
+            else
+            {
+                yield return stem;
+                if (!"aeiou".Contains(stem[^1]))
+                    yield return stem + "e";
+            }
+        }
     }
 
     internal static IReadOnlyList<string> GetHeuristicSynonyms(Entity entity) => BuildSynonyms(entity).Distinct(StringComparer.OrdinalIgnoreCase).Take(16).ToArray();
@@ -48,16 +84,22 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
     {
         var known = KnownDescription(entity);
         if (!string.IsNullOrWhiteSpace(known)) return known;
-        var curated = documents.FirstOrDefault(d => d.Provider.Equals("windows-intent-catalog", StringComparison.OrdinalIgnoreCase));
-        var curatedValue = ExtractUsefulLine(curated?.Text);
-        if (!string.IsNullOrWhiteSpace(curatedValue)) return curatedValue;
         foreach (var key in new[] { "description", "fileDescription", "comment" })
             if (entity.RawMetadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
             {
                 value = EnrichmentTextNormalizer.ToPlainText(value);
                 if (!EnrichmentTextNormalizer.IsLikelyMarkupLine(value) && AddsInformation(entity, value)) return value;
             }
-        foreach (var provider in new[] { "windows-intent-catalog", "pe-version", "msix-manifest", "shortcut", "local-docs", "learn", "winget", "publisher-site" })
+
+        // Ordered by how directly the source describes the product itself. A packaging manifest or
+        // a winget entry contains a description the publisher wrote *about the program*; a
+        // documentation article is prose about a topic, and its opening sentence is frequently
+        // about something narrower than the product. Power Automate is the clear case: its Learn
+        // hit was a service-region table, while its winget entry says "Automate workflows across
+        // modern and legacy applications on your desktop". Article text remains ahead of shortcut
+        // and adjacent-file text, which describe the installation rather than the program, and it
+        // is the only useful source for inbox Windows features, which have no packaging entry.
+        foreach (var provider in new[] { "pe-version", "msix-manifest", "winget", "learn", "publisher-site", "local-docs", "shortcut" })
         {
             var doc = documents.FirstOrDefault(d => d.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase));
             var value = ExtractUsefulLine(doc?.Text);
@@ -82,6 +124,9 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
     /// </summary>
     private static bool AddsInformation(Entity entity, string candidate)
     {
+        if (IsMachineNoise(candidate) || IsShelfBoilerplate(candidate))
+            return false;
+
         var nameWords = Regex.Split(entity.DisplayName, @"\W+")
             .Where(w => w.Length > 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -94,12 +139,81 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         return informative >= 2;
     }
 
+    /// <summary>
+    /// Rejects text carrying machine-generated identifiers: region codes, GUIDs, deployment slugs,
+    /// hashes. Power Automate was summarised as "URI Power Platform Region Is preview
+    /// prodnorwayeastmmrns-1-whuok7nwdzy2s.", harvested from an app manifest. That is not a
+    /// description of anything, but it contains the word "Power" twice, which was enough to make it
+    /// the top lexical hit for "set low power" and outrank the actual battery settings page.
+    ///
+    /// The test is structural rather than a list of known-bad strings: a token that is long, mixes
+    /// letters and digits, and is not a recognisable word is an identifier, whatever product it
+    /// came from.
+    /// </summary>
+    private static bool IsMachineNoise(string candidate)
+    {
+        var tokens = Regex.Split(candidate, @"[\s,;:()\[\]]+").Where(t => t.Length > 0).ToArray();
+        if (tokens.Length == 0)
+            return true;
+
+        var noisy = tokens.Count(IsIdentifierLike);
+        return noisy > 0;
+    }
+
+    private static bool IsIdentifierLike(string token)
+    {
+        var t = token.Trim('.', ',', '-', '_', ')', '(');
+        if (t.Length < 12)
+            return false;
+
+        var longestRun = 0;
+        var run = 0;
+        var runHasDigit = false;
+        var runHasLetter = false;
+        var mixedRun = false;
+        foreach (var ch in t)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                run++;
+                runHasDigit |= char.IsDigit(ch);
+                runHasLetter |= char.IsLetter(ch);
+                if (run >= 12 && runHasDigit && runHasLetter) mixedRun = true;
+                longestRun = Math.Max(longestRun, run);
+            }
+            else { run = 0; runHasDigit = false; runHasLetter = false; }
+        }
+
+        // Two shapes of identifier, chosen so that ordinary product vocabulary survives:
+        // an unbroken run far longer than an English word ("prodnorwayeastmmrns"), or a long run
+        // mixing letters and digits ("whuok7nwdzy2s"). "PowerShell7" and "Windows11" are shorter
+        // than both thresholds and are kept.
+        return longestRun >= 16 || mixedRun;
+    }
+
+    /// <summary>
+    /// Rejects descriptions that describe the shortcut rather than the program. Visual Studio Code
+    /// was summarised as "Visual Studio Code Categorized under Visual Studio Code in the Start
+    /// Menu", which is true, useless, and crowded out its real description. The Start Menu folder
+    /// is a useful *category* signal and is still indexed as such; it is never a summary.
+    /// </summary>
+    private static bool IsShelfBoilerplate(string candidate)
+        => ShelfMarkers.Any(m => candidate.Contains(m, StringComparison.OrdinalIgnoreCase));
+
+    private static readonly string[] ShelfMarkers =
+    [
+        "categorized under", "in the start menu", "start menu folder", "shortcut to",
+        "installed under", "located in", "this shortcut"
+    ];
+
     private static string? KnownDescription(Entity entity)
     {
-        if (MatchesExact(entity, "Notepad", "notepad.exe")) return "Create, open, and edit plain text notes and files.";
-        if (MatchesExact(entity, "Disk Cleanup", "cleanmgr.exe")) return "Free disk space by removing temporary and unnecessary files.";
-        if (MatchesExact(entity, "Device Manager", "devmgmt.msc")) return "View and manage hardware devices, drivers, and device status.";
-        if (entity.LaunchTarget.Equals("ms-settings:display", StringComparison.OrdinalIgnoreCase) || entity.DisplayName.Equals("Display", StringComparison.OrdinalIgnoreCase)) return "Change monitor layout, brightness, scale, resolution, and advanced display settings.";
+        // Intentionally empty. Hand-written descriptions for specific programs were removed:
+        // they could only ever describe the handful of entities someone thought of while writing
+        // this file, which is worthless on a machine with a different set of software installed.
+        // Descriptions now come exclusively from the entity's own metadata and harvested
+        // documentation, so quality improvements here benefit every entity rather than a list.
+        _ = entity;
         return null;
     }
 
@@ -200,10 +314,6 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
     /// </summary>
     private static IEnumerable<string> BuildTasks(Entity entity, IReadOnlyList<EnrichmentDocument> documents, string? described)
     {
-        if (MatchesExact(entity, "Notepad", "notepad.exe")) { yield return "take quick notes"; yield return "edit a plain text file"; yield return "open a text document"; yield break; }
-        if (MatchesExact(entity, "Disk Cleanup", "cleanmgr.exe")) { yield return "free up disk space"; yield return "delete temporary files"; yield return "clean up old Windows files"; yield break; }
-        if (MatchesExact(entity, "Device Manager", "devmgmt.msc")) { yield return "manage hardware devices"; yield return "update device drivers"; yield return "troubleshoot a missing device"; yield break; }
-        if (entity.LaunchTarget.Equals("ms-settings:display", StringComparison.OrdinalIgnoreCase) || entity.DisplayName.Equals("Display", StringComparison.OrdinalIgnoreCase)) { yield return "change screen resolution"; yield return "adjust display scale"; yield return "arrange monitors"; yield return "change brightness"; yield break; }
 
         foreach (var phrase in ExtractLabeledPhrases(documents, "Tasks")) yield return phrase;
         foreach (var phrase in IntentPhrases(entity.DisplayName + " " + described)) yield return phrase;
@@ -215,15 +325,6 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
             EntityKind.SystemTool => "troubleshoot Windows from the command line",
             _ => "open " + entity.DisplayName.ToLowerInvariant()
         };
-    }
-
-    private static bool MatchesExact(Entity entity, string displayName, string fileName)
-    {
-        if (entity.DisplayName.Equals(displayName, StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        var target = entity.RawMetadata.GetValueOrDefault("fileName") ?? Path.GetFileName(entity.LaunchTarget);
-        return target is not null && target.Equals(fileName, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

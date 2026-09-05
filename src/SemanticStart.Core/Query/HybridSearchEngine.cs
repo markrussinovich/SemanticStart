@@ -266,16 +266,32 @@ public sealed class HybridSearchEngine : ISearchEngine
             .Select(c => c.VectorScore!.Value)
             .DefaultIfEmpty(0)
             .Max();
+        var topLexical = candidates
+            .Where(c => c.LexicalScore.HasValue)
+            .Select(c => c.LexicalScore!.Value)
+            .DefaultIfEmpty(0)
+            .Max();
 
-        return [.. candidates.Where(c => ShouldSurface(c, topScore, topVector))];
+        return [.. candidates.Where(c => ShouldSurface(c, topScore, topVector, topLexical))];
     }
 
-    private bool ShouldSurface(Candidate candidate, double topScore, double topVector)
+    private bool ShouldSurface(Candidate candidate, double topScore, double topVector, double topLexical)
     {
         if (candidate.LiteralStrength >= _options.MinLiteralSurfaceStrength)
             return true;
 
         if (candidate.LexicalScore >= _options.StrongLexicalScore)
+            return true;
+
+        // A hit may also surface on lexical evidence alone, but only when it is essentially tied
+        // with the best lexical score for the query. A looser bar was tried at 0.70 and rejected:
+        // it readmitted the weak single-token matches these floors exist to remove, costing three
+        // other cases to recover one. The remaining recall gap it was aimed at ("edit a file" not
+        // reaching Visual Studio Code) is a profile-quality problem, not a ranking one - VS Code's
+        // harvested text is marketing prose that never states the action - and it is fixed by
+        // better synthesis rather than by lowering the evidence bar for every query.
+        if (candidate.LexicalScore is { } lexical && topLexical > 0
+            && lexical >= topLexical * _options.MinLexicalOnlyLeaderRatio)
             return true;
 
         var relativeScore = topScore <= 0

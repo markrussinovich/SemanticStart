@@ -289,12 +289,20 @@ public sealed class LearnEnricher : IEnricher
             var docs = new List<EnrichmentDocument>();
             foreach (var result in candidates.Where(c => c.Tier == bestTier).Select(c => c.Result).DistinctBy(r => r.Url).Take(2))
             {
+                // The page title is deliberately not used as prose. It reads like a description but
+                // is really a heading, and it became the entity's whole summary: Power Automate was
+                // "Limits of automated, scheduled, and instant flows", Clipchamp was "Video
+                // analytics in Microsoft 365". The synthesizer takes the leading sentences, so
+                // anything put first here becomes what the user sees.
                 var snippets = new List<string>();
-                if (!string.IsNullOrWhiteSpace(result.Title)) snippets.Add(result.Title!);
                 if (!string.IsNullOrWhiteSpace(result.Description)) snippets.Add(result.Description!);
                 var article = await FetchArticleExcerptAsync(result.Url, cancellationToken).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(article)) snippets.Add(article!);
-                var text = EnrichmentTextNormalizer.ToPlainText(string.Join(". ", snippets));
+
+                if (snippets.Count == 0)
+                    continue;
+
+                var text = EnrichmentTextNormalizer.ToPlainText(string.Join(" ", snippets));
                 if (!string.IsNullOrWhiteSpace(text))
                     docs.Add(new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = true, Text = text, SourceUri = result.Url });
             }
@@ -314,8 +322,88 @@ public sealed class LearnEnricher : IEnricher
         if (string.IsNullOrWhiteSpace(html))
             return null;
 
+        // Extraction precedence follows established practice for documentation pages: structured
+        // data first, then link-preview prose, then the SEO meta tag, then body text. The page
+        // <title> is deliberately never used. Titles are written to be clicked, not read: they
+        // carry site suffixes and describe the article rather than the product, which is how
+        // Clipchamp came to be summarised as "Video analytics in Microsoft 365" and Claude as
+        // "Configure Claude Code for Microsoft Foundry".
+        var parts = new List<string>();
+        var title = PageTitle(html);
+        var lead = StructuredDescription(html, title);
+        if (!string.IsNullOrWhiteSpace(lead))
+            parts.Add(lead!);
+
         var prose = EnrichmentTextNormalizer.ToPlainText(html);
-        return SelectUsefulSentences(prose, 900);
+        var sentences = SelectUsefulSentences(prose, 900);
+        if (!string.IsNullOrWhiteSpace(sentences))
+            parts.Add(sentences);
+
+        return parts.Count == 0 ? null : string.Join(" ", parts);
+    }
+
+    private static string? StructuredDescription(string html, string? title)
+    {
+        foreach (var candidate in new[] { JsonLdDescription(html), MetaContent(html, "og:description", "property"), MetaContent(html, "description", "name") })
+        {
+            if (string.IsNullOrWhiteSpace(candidate) || candidate!.Length < 25)
+                continue;
+
+            // A meta description that merely repeats the title is auto-generated filler and carries
+            // the same problems as using the title directly.
+            if (title is not null && SharesLead(candidate, title))
+                continue;
+
+            return candidate;
+        }
+
+        return null;
+    }
+
+    private static bool SharesLead(string a, string b)
+    {
+        static string Norm(string s) => Regex.Replace(s.Split('|')[0].Split('-')[0], @"\W+", " ").Trim().ToLowerInvariant();
+        var x = Norm(a);
+        var y = Norm(b);
+        return x.Length > 0 && y.Length > 0 && (x.StartsWith(y, StringComparison.Ordinal) || y.StartsWith(x, StringComparison.Ordinal));
+    }
+
+    private static string? PageTitle(string html)
+    {
+        var m = Regex.Match(html, @"<title[^>]*>(?<t>.*?)</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        if (!m.Success) return null;
+        var t = System.Net.WebUtility.HtmlDecode(m.Groups["t"].Value).Trim();
+        return t.Length == 0 ? null : t;
+    }
+
+    private static string? JsonLdDescription(string html)
+    {
+        foreach (Match block in Regex.Matches(html, @"<script[^>]*type\s*=\s*[""']application/ld\+json[""'][^>]*>(?<j>.*?)</script>", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+        {
+            var m = Regex.Match(block.Groups["j"].Value, @"""description""\s*:\s*""(?<d>(?:[^""\\]|\\.)*)""", RegexOptions.IgnoreCase);
+            if (!m.Success) continue;
+            var text = Regex.Unescape(m.Groups["d"].Value).Trim();
+            if (text.Length >= 25) return text;
+        }
+
+        return null;
+    }
+
+    private static string? MetaContent(string html, string key, string attribute)
+    {
+        var pattern = $@"<meta\s+[^>]*{attribute}\s*=\s*[""']{Regex.Escape(key)}[""'][^>]*content\s*=\s*[""'](?<c>[^""']*)[""']";
+        var match = Regex.Match(html, pattern, RegexOptions.IgnoreCase);
+        if (!match.Success)
+        {
+            pattern = $@"<meta\s+[^>]*content\s*=\s*[""'](?<c>[^""']*)[""'][^>]*{attribute}\s*=\s*[""']{Regex.Escape(key)}[""']";
+            match = Regex.Match(html, pattern, RegexOptions.IgnoreCase);
+        }
+
+        if (!match.Success)
+            return null;
+
+        var text = System.Net.WebUtility.HtmlDecode(match.Groups["c"].Value).Trim();
+        return text.Length == 0 ? null : text;
     }
 
     private static IEnumerable<string> BuildQueries(Entity entity)
@@ -448,8 +536,13 @@ public sealed class LearnEnricher : IEnricher
         var normalizedName = Normalize(entity.DisplayName);
         var tokens = IdentifyingTokens(entity).Select(Normalize).Where(t => t.Length >= 4).ToArray();
 
+        // A page that merely *lists* an ms-settings URI is a catalogue, not a description. Learn's
+        // "Launch Windows Settings" page enumerates every URI in Windows, so it matched every
+        // optional feature and settings page at the highest tier — which is how PowerShell ISE and
+        // Notepad came to be summarised as "Launch Windows Settings - Windows apps". Requiring the
+        // URI in the title or description, not the URL or body, keeps genuine per-setting articles.
         if (entity.LaunchTarget.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase)
-            && $"{result.Title} {result.Description} {result.Url}".Contains(entity.LaunchTarget, StringComparison.OrdinalIgnoreCase))
+            && $"{result.Title} {result.Description}".Contains(entity.LaunchTarget, StringComparison.OrdinalIgnoreCase))
             return 3;
 
         if (normalizedName.Length >= 4 && (slug == normalizedName || tokens.Contains(slug)))
@@ -458,13 +551,32 @@ public sealed class LearnEnricher : IEnricher
         // The title must name the entity as a whole word. Substring matching promoted "Maps" from
         // any title containing "Bitmaps", and short names like "Run" match almost anything, so
         // names under four characters are only ever accepted via their URL slug above.
+        //
+        // Names that are ordinary English words are excluded here too. "Files" matched a Defender
+        // for Office article titled "Manage quarantined messages and files as an admin", which then
+        // became that app's entire description. Such names are only ever accepted via their slug.
         if (entity.DisplayName.Length >= 4
+            && !IsGenericName(entity.DisplayName)
             && !string.IsNullOrWhiteSpace(result.Title)
             && ContainsWord(result.Title!, entity.DisplayName))
             return AboutTier;
 
         return 0;
     }
+
+    /// <summary>
+    /// True when the display name is a common word that routinely appears in unrelated article
+    /// titles, so matching it there is not evidence the article is about this entity.
+    /// </summary>
+    private static bool IsGenericName(string displayName) =>
+        !displayName.Contains(' ') && GenericNames.Contains(displayName.Trim());
+
+    private static readonly HashSet<string> GenericNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "files", "file", "photos", "photo", "maps", "map", "mail", "code", "run", "store", "people",
+        "calendar", "clock", "camera", "video", "music", "news", "weather", "notes", "tips", "help",
+        "settings", "search", "home", "chat", "phone", "links", "tasks", "groups", "teams", "media"
+    };
 
     private static bool ContainsWord(string haystack, string needle) =>
         Regex.IsMatch(haystack, $@"(?<![\w]){Regex.Escape(needle)}(?![\w])", RegexOptions.IgnoreCase);
