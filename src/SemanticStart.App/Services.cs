@@ -258,6 +258,9 @@ public sealed class IconProvider : IDisposable
         var buffer = new byte[stride * info.Height];
         Marshal.Copy(info.Bits, buffer, 0, buffer.Length);
 
+        if (IsBottomUp(hBitmap))
+            FlipRows(buffer, stride, info.Height);
+
         // Some icon sources hand back a fully transparent alpha channel for what is really an
         // opaque image. Rendering that as-is produces an invisible icon, which is indistinguishable
         // from having no icon at all, so treat an all-zero alpha channel as opaque.
@@ -283,10 +286,45 @@ public sealed class IconProvider : IDisposable
         return source;
     }
 
+    /// <summary>
+    /// True when the bitmap's pixel rows are stored bottom-to-top.
+    /// <para>
+    /// A <c>BITMAP</c> from <c>GetObject</c> reports only a positive height and says nothing about
+    /// row order, so it cannot be used to decide this. Orientation lives in the DIB section's
+    /// <c>biHeight</c>, which is negative for top-down bitmaps and positive for bottom-up ones.
+    /// Icon sources differ: packaged-app PNG assets come back top-down while some icons extracted
+    /// from executable resources come back bottom-up, which rendered those icons upside down.
+    /// </para>
+    /// </summary>
+    private static bool IsBottomUp(IntPtr hBitmap)
+    {
+        var section = new DibSection();
+        var size = Marshal.SizeOf<DibSection>();
+        return GetObject(hBitmap, size, ref section) == size && section.Header.Height > 0;
+    }
+
+    private static void FlipRows(byte[] buffer, int stride, int height)
+    {
+        var row = new byte[stride];
+        for (var top = 0; top < height / 2; top++)
+        {
+            var bottom = height - 1 - top;
+            Buffer.BlockCopy(buffer, top * stride, row, 0, stride);
+            Buffer.BlockCopy(buffer, bottom * stride, buffer, top * stride, stride);
+            Buffer.BlockCopy(row, 0, buffer, bottom * stride, stride);
+        }
+    }
+
+    /// <summary>
+    /// Bumped whenever icon decoding changes, so stale cache entries produced by an earlier
+    /// (buggy) decode are ignored instead of masking the fix.
+    /// </summary>
+    private const int IconCacheVersion = 2;
+
     private static string GetCachePath(string id)
     {
         AppPaths.EnsureCreated();
-        var hash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(id))).ToLowerInvariant();
+        var hash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"v{IconCacheVersion}:{id}"))).ToLowerInvariant();
         return Path.Combine(AppPaths.IconCacheDirectory, hash + ".png");
     }
 
@@ -329,6 +367,34 @@ public sealed class IconProvider : IDisposable
         public IntPtr Bits;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BitmapInfoHeader
+    {
+        public int Size;
+        public int Width;
+        public int Height;
+        public ushort Planes;
+        public ushort BitCount;
+        public uint Compression;
+        public uint SizeImage;
+        public int XPelsPerMeter;
+        public int YPelsPerMeter;
+        public uint ClrUsed;
+        public uint ClrImportant;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DibSection
+    {
+        public BitmapInfo Bitmap;
+        public BitmapInfoHeader Header;
+        public uint Bitfield0;
+        public uint Bitfield1;
+        public uint Bitfield2;
+        public IntPtr Section;
+        public uint Offset;
+    }
+
     [ComImport]
     [Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -347,6 +413,9 @@ public sealed class IconProvider : IDisposable
 
     [DllImport("gdi32.dll")]
     private static extern int GetObject(IntPtr handle, int count, ref BitmapInfo info);
+
+    [DllImport("gdi32.dll", EntryPoint = "GetObjectW")]
+    private static extern int GetObject(IntPtr handle, int count, ref DibSection section);
 
     [DllImport("gdi32.dll")]
     private static extern bool DeleteObject(IntPtr handle);
