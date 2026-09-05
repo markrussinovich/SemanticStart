@@ -136,13 +136,20 @@
                     <StackPanel>
                         <TextBlock Text="Generate richer app descriptions with a small local model" />
                         <TextBlock Style="{StaticResource Caption}"
-                                   Text="Auto probes local Foundry, Ollama, LM Studio, and OpenAI-compatible servers. Off uses the heuristic fallback only. Custom uses the endpoint below." />
+                                   Text="Auto probes local Foundry, Ollama, LM Studio, and OpenAI-compatible servers. Pick a ready model, or select a curated small model and download it." />
+                        <TextBlock x:Name="LocalLlmRuntimeStatusText" Style="{StaticResource Caption}" Text="Checking local runtimes..." />
+                        <TextBlock x:Name="LastGeneratorStatusText" Style="{StaticResource Caption}" Text="Last index generator: checking..." />
+                        <TextBlock Style="{StaticResource Caption}"
+                                   Text="Expect roughly 8–15 minutes to synthesize ~470 entities with a 1–2B CPU model; larger models can take much longer. Each entity has a timeout and falls back safely." />
                         <Grid Margin="0,12,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="130" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
@@ -162,19 +169,46 @@
                                      ToolTip="Example: http://localhost:11434 for Ollama or http://localhost:1234 for LM Studio" />
 
                             <TextBlock Grid.Row="2" Grid.Column="0" Text="Model" VerticalAlignment="Center" Margin="0,10,0,0" />
-                            <TextBox x:Name="LocalLlmModelBox" Grid.Row="2" Grid.Column="1" Margin="0,10,0,0"
+                            <Grid Grid.Row="2" Grid.Column="1" Margin="0,10,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox x:Name="LocalLlmModelBox" Grid.Column="0" MinWidth="300"
+                                          Style="{StaticResource FluentComboBox}" DisplayMemberPath="PickerLabel" FontSize="14"
+                                          SelectionChanged="LocalLlmModelBox_SelectionChanged" />
+                                <Button x:Name="RefreshModelsButton" Grid.Column="1" Content="Refresh" Style="{StaticResource FluentButton}"
+                                        Margin="8,0,0,0" Click="RefreshModelsButton_Click" />
+                            </Grid>
+
+                            <CheckBox x:Name="CustomModelBox" Grid.Row="3" Grid.Column="1" Margin="0,10,0,0"
+                                      Content="Advanced: use a custom model identifier"
+                                      Checked="CustomModelBox_Changed" Unchecked="CustomModelBox_Changed" />
+
+                            <TextBox x:Name="LocalLlmCustomModelBox" Grid.Row="4" Grid.Column="1" Margin="0,10,0,0"
+                                     Visibility="Collapsed"
                                      ToolTip="Example: qwen2.5:1.5b, llama3.2:1b, phi-3.5-mini" />
 
-                            <Grid Grid.Row="3" Grid.Column="1" Margin="0,12,0,0">
+                            <Grid Grid.Row="5" Grid.Column="1" Margin="0,12,0,0">
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <Button x:Name="TestLocalLlmButton" Content="Test connection" Style="{StaticResource FluentButton}"
                                         Click="TestLocalLlmButton_Click" />
-                                <TextBlock x:Name="LocalLlmStatusText" Grid.Column="1" Style="{StaticResource Caption}" Margin="12,0,0,0"
+                                <Button x:Name="DownloadModelButton" Grid.Column="1" Content="Download model" Style="{StaticResource FluentButton}"
+                                        Margin="8,0,0,0" Click="DownloadModelButton_Click" />
+                                <Button x:Name="InstallFoundryButton" Grid.Column="2" Content="Install Foundry Local" Style="{StaticResource AccentButton}"
+                                        Margin="8,0,0,0" Click="InstallFoundryButton_Click" />
+                                <TextBlock x:Name="LocalLlmStatusText" Grid.Column="3" Style="{StaticResource Caption}" Margin="12,0,0,0"
                                            VerticalAlignment="Center" />
                             </Grid>
+
+                            <ProgressBar x:Name="LocalLlmProgressBar" Grid.Row="6" Grid.Column="1" Height="4" Minimum="0" Maximum="1"
+                                         Margin="0,10,0,0" Background="{DynamicResource ItemHoverBrush}"
+                                         Foreground="{DynamicResource AccentBrush}" BorderThickness="0" Visibility="Collapsed" />
                         </Grid>
                     </StackPanel>
                 </Border>

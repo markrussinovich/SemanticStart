@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows;
 using SemanticStart.Core.Indexing;
 using SemanticStart.Core.Synthesis;
@@ -10,6 +11,9 @@ public partial class SettingsWindow : Window
     private readonly SemanticSearchService _searchService;
     private readonly ActivationManager _activationManager;
     private CancellationTokenSource? _rebuildCts;
+    private CancellationTokenSource? _catalogCts;
+    private IReadOnlyList<LocalLlmCatalogItem> _modelCatalog = [];
+    private bool _hasDetectedRuntime;
     private AppSettings _settings;
 
     public SettingsWindow(AppSettingsService settingsService, SemanticSearchService searchService, ActivationManager activationManager)
@@ -23,6 +27,8 @@ public partial class SettingsWindow : Window
         _settings = settingsService.Load();
         VersionText.Text = $"SemanticStart {ProductVersion}";
         LoadControls();
+        _ = RefreshLocalLlmCatalogAsync();
+        _ = RefreshGeneratorStatusAsync();
     }
 
     /// <summary>
@@ -67,6 +73,7 @@ public partial class SettingsWindow : Window
             await _searchService.RebuildIndexAsync(_settings, force, progress, _rebuildCts.Token);
             ProgressBar.Value = 1;
             ProgressText.Text = $"Rebuild complete. {_searchService.Count} entities loaded.";
+            await RefreshGeneratorStatusAsync();
         }
         catch (OperationCanceledException)
         {
@@ -86,6 +93,7 @@ public partial class SettingsWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _rebuildCts?.Cancel();
+        _catalogCts?.Cancel();
         base.OnClosed(e);
     }
 
@@ -98,7 +106,7 @@ public partial class SettingsWindow : Window
         LimitSlider.Value = _settings.ResultLimit;
         LocalLlmModeBox.SelectedValue = _settings.LocalLlmMode.ToString();
         LocalLlmEndpointBox.Text = _settings.LocalLlmEndpointBaseUrl;
-        LocalLlmModelBox.Text = _settings.LocalLlmModelName;
+        LocalLlmCustomModelBox.Text = _settings.LocalLlmModelName;
         LocalLlmStatusText.Text = "Not tested.";
         UpdateHotKeyStatus();
     }
@@ -132,19 +140,137 @@ public partial class SettingsWindow : Window
             ResultLimit = (int)Math.Round(LimitSlider.Value),
             LocalLlmMode = ParseLocalLlmMode(LocalLlmModeBox.SelectedValue?.ToString()),
             LocalLlmEndpointBaseUrl = LocalLlmEndpointBox.Text.Trim(),
-            LocalLlmModelName = string.IsNullOrWhiteSpace(LocalLlmModelBox.Text)
-                ? LocalLlmOptions.DefaultModelName
-                : LocalLlmModelBox.Text.Trim(),
+            LocalLlmModelName = SelectedModelName(),
         };
         _settingsService.Save(_settings);
         _activationManager.ApplySettings(_settings);
         UpdateHotKeyStatus();
     }
 
+    private string SelectedModelName()
+    {
+        if (CustomModelBox.IsChecked == true)
+            return string.IsNullOrWhiteSpace(LocalLlmCustomModelBox.Text)
+                ? LocalLlmOptions.DefaultModelName
+                : LocalLlmCustomModelBox.Text.Trim();
+
+        return LocalLlmModelBox.SelectedItem is LocalLlmCatalogItem item
+            ? item.ModelName
+            : LocalLlmOptions.DefaultModelName;
+    }
+
+    private async Task RefreshLocalLlmCatalogAsync()
+    {
+        _catalogCts?.Cancel();
+        _catalogCts = new CancellationTokenSource();
+        RefreshModelsButton.IsEnabled = false;
+        DownloadModelButton.IsEnabled = false;
+        InstallFoundryButton.IsEnabled = false;
+        LocalLlmProgressBar.Visibility = Visibility.Collapsed;
+        LocalLlmRuntimeStatusText.Text = "Checking local runtimes...";
+
+        try
+        {
+            var catalog = await LocalLlmProfileSynthesizer.DiscoverCatalogAsync(cancellationToken: _catalogCts.Token);
+            _modelCatalog = catalog.Models;
+            _hasDetectedRuntime = catalog.DetectedRuntime is not null || _modelCatalog.Any(m => m.CanDownload);
+            LocalLlmModelBox.ItemsSource = _modelCatalog;
+            LocalLlmRuntimeStatusText.Text = catalog.StatusMessage;
+            InstallFoundryButton.IsEnabled = !_hasDetectedRuntime;
+
+            var configured = _modelCatalog.FirstOrDefault(m => m.ModelName.Equals(_settings.LocalLlmModelName, StringComparison.OrdinalIgnoreCase));
+            if (configured is null
+                && !string.IsNullOrWhiteSpace(_settings.LocalLlmModelName)
+                && !_settings.LocalLlmModelName.Equals(LocalLlmOptions.DefaultModelName, StringComparison.OrdinalIgnoreCase))
+            {
+                CustomModelBox.IsChecked = true;
+            }
+            else
+            {
+                var selected = configured
+                    ?? _modelCatalog.FirstOrDefault(m => m.IsReady)
+                    ?? _modelCatalog.FirstOrDefault(m => m.ModelName.Equals(LocalLlmOptions.DefaultModelName, StringComparison.OrdinalIgnoreCase))
+                    ?? _modelCatalog.FirstOrDefault();
+                LocalLlmModelBox.SelectedItem = selected;
+            }
+            UpdateSelectedModelDetails();
+        }
+        catch (OperationCanceledException)
+        {
+            LocalLlmRuntimeStatusText.Text = "Model refresh canceled.";
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Local LLM catalog refresh failed");
+            LocalLlmRuntimeStatusText.Text = "Could not refresh model catalog; see log for details.";
+        }
+        finally
+        {
+            RefreshModelsButton.IsEnabled = CustomModelBox.IsChecked != true;
+        }
+    }
+
+    private async Task RefreshGeneratorStatusAsync()
+    {
+        try
+        {
+            var counts = await _searchService.GetGeneratorBreakdownAsync(CancellationToken.None);
+            if (counts.Count == 0)
+            {
+                LastGeneratorStatusText.Text = "Last index generator: no profiles yet.";
+                return;
+            }
+
+            var summary = string.Join(", ", counts.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key} {kv.Value}"));
+            LastGeneratorStatusText.Text = $"Last index generator: {summary}.";
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to read generator breakdown");
+            LastGeneratorStatusText.Text = "Last index generator: unavailable.";
+        }
+    }
+
+    private void UpdateSelectedModelDetails()
+    {
+        if (CustomModelBox.IsChecked == true)
+        {
+            DownloadModelButton.IsEnabled = false;
+            return;
+        }
+
+        if (LocalLlmModelBox.SelectedItem is not LocalLlmCatalogItem item)
+        {
+            DownloadModelButton.IsEnabled = false;
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.EndpointBaseUrl))
+            LocalLlmEndpointBox.Text = item.EndpointBaseUrl;
+
+        DownloadModelButton.IsEnabled = item is { IsReady: false, CanDownload: true };
+        LocalLlmStatusText.Text = $"{item.DisplayName}: {(item.IsReady ? "ready" : "download required")}. {item.BestFor}";
+    }
+
     private static LocalLlmMode ParseLocalLlmMode(string? value) =>
         Enum.TryParse<LocalLlmMode>(value, ignoreCase: true, out var mode) ? mode : LocalLlmMode.Auto;
 
     private async void RebuildButton_Click(object sender, RoutedEventArgs e) => await RebuildIndexAsync(force: true);
+
+    private async void RefreshModelsButton_Click(object sender, RoutedEventArgs e) => await RefreshLocalLlmCatalogAsync();
+
+    private void LocalLlmModelBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) => UpdateSelectedModelDetails();
+
+    private void CustomModelBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsInitialized)
+            return;
+
+        LocalLlmCustomModelBox.Visibility = CustomModelBox.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        LocalLlmModelBox.IsEnabled = CustomModelBox.IsChecked != true;
+        RefreshModelsButton.IsEnabled = CustomModelBox.IsChecked != true;
+        UpdateSelectedModelDetails();
+    }
 
     private async void TestLocalLlmButton_Click(object sender, RoutedEventArgs e)
     {
@@ -156,7 +282,7 @@ public partial class SettingsWindow : Window
         {
             var result = await LocalLlmProfileSynthesizer.TestConnectionAsync(_settings.ToLocalLlmOptions());
             LocalLlmStatusText.Text = result.Success
-                ? $"Success: {result.ModelName} at {result.EndpointBaseUrl}"
+                ? $"Success: {result.ModelName} generated a response at {result.EndpointBaseUrl}"
                 : $"Failed: {result.Message}";
         }
         catch (Exception ex)
@@ -168,6 +294,78 @@ public partial class SettingsWindow : Window
         {
             TestLocalLlmButton.IsEnabled = true;
         }
+    }
+
+    private async void DownloadModelButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (LocalLlmModelBox.SelectedItem is not LocalLlmCatalogItem item)
+            return;
+
+        DownloadModelButton.IsEnabled = false;
+        LocalLlmProgressBar.Visibility = Visibility.Visible;
+        LocalLlmProgressBar.IsIndeterminate = item.Runtime == LocalLlmRuntime.FoundryLocal;
+        LocalLlmProgressBar.Value = 0;
+        LocalLlmStatusText.Text = $"Downloading {item.DisplayName}...";
+
+        try
+        {
+            var progress = new Progress<double>(p =>
+            {
+                LocalLlmProgressBar.IsIndeterminate = false;
+                LocalLlmProgressBar.Value = Math.Clamp(p, 0, 1);
+            });
+            var result = await LocalLlmProfileSynthesizer.DownloadModelAsync(item, progress);
+            LocalLlmStatusText.Text = result.Success ? result.Message : $"Failed: {result.Message}";
+            await RefreshLocalLlmCatalogAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Local LLM model download failed");
+            LocalLlmStatusText.Text = "Download failed; see log for details.";
+        }
+        finally
+        {
+            LocalLlmProgressBar.IsIndeterminate = false;
+            DownloadModelButton.IsEnabled = LocalLlmModelBox.SelectedItem is LocalLlmCatalogItem selected && selected is { IsReady: false, CanDownload: true };
+        }
+    }
+
+    private async void InstallFoundryButton_Click(object sender, RoutedEventArgs e)
+    {
+        InstallFoundryButton.IsEnabled = false;
+        LocalLlmStatusText.Text = "Installing Foundry Local with winget...";
+
+        try
+        {
+            var exitCode = await RunProcessAsync(
+                "winget",
+                ["install", "-e", "--id", "Microsoft.FoundryLocal", "--accept-package-agreements", "--accept-source-agreements"]);
+            LocalLlmStatusText.Text = exitCode == 0
+                ? "Foundry Local install completed. Refreshing model catalog..."
+                : $"Foundry Local installer exited with code {exitCode}.";
+            await RefreshLocalLlmCatalogAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Foundry Local installation failed");
+            LocalLlmStatusText.Text = "Install failed. Install manually with: winget install Microsoft.FoundryLocal";
+        }
+        finally
+        {
+            InstallFoundryButton.IsEnabled = !_hasDetectedRuntime;
+        }
+    }
+
+    private static async Task<int> RunProcessAsync(string fileName, IReadOnlyList<string> args)
+    {
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo { FileName = fileName, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var arg in args)
+            process.StartInfo.ArgumentList.Add(arg);
+
+        process.Start();
+        await process.WaitForExitAsync();
+        return process.ExitCode;
     }
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)

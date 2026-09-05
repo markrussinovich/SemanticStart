@@ -25,6 +25,15 @@ public sealed class SemanticSearchService : IDisposable
 
     public int Count => _engine?.Count ?? 0;
 
+    public async Task<IReadOnlyDictionary<string, int>> GetGeneratorBreakdownAsync(CancellationToken cancellationToken)
+    {
+        await InitializeAsync(cancellationToken);
+        var all = await _store.GetAllAsync(cancellationToken);
+        return all
+            .GroupBy(e => e.Profile?.Generator ?? "none", StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+    }
+
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         if (_initialized)
