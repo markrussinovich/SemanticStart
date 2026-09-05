@@ -125,8 +125,26 @@ public static class RelevanceCorpus
         },
         new()
         {
-            Query = "which process has this file locked",
-            AcceptableResults = ["Resource Monitor", "Process Explorer", "Task Manager", "resmon"],
+            Query = "kill a process",
+            AcceptableResults = ["Task Manager", "Process Explorer", "Taskkill"],
+            Rationale = "Everyday phrasing for ending a process; Task Manager's profile says \"end\", not \"kill\", so this depends on curated intent vocabulary.",
+        },
+        new()
+        {
+            Query = "record my screen",
+            AcceptableResults = ["Snipping Tool", "ZoomIt", "Steps Recorder", "Xbox Game Bar"],
+            WithinTopN = 2,
+            Rationale = "Screen-capture intent. Asserted at top 2 rather than forbidding Lock Screen: a settings page that shares the word \"screen\" is tolerable noise further down, and forbidding it invites over-fitting the ranker.",
+        },
+        new()
+        {
+            Query = "annotate the screen during a demo",
+            AcceptableResults = ["ZoomIt", "Snipping Tool"],
+            Rationale = "MSIX-packaged tool whose manifest description is only its own name; requires curated or online documentation.",
+        },
+        new()
+        {
+            Query = "which process has this file locked",            AcceptableResults = ["Resource Monitor", "Process Explorer", "Task Manager", "resmon"],
             Rationale = "Expert intent; the answer is a tool most users cannot name.",
         },
         new()

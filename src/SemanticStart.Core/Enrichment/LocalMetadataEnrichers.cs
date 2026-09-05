@@ -73,7 +73,7 @@ public sealed class CuratedWindowsIntentEnricher : IEnricher
         ["inetcpl.cpl"] = new("Configure legacy Internet Options including browser security zones, certificates, proxy, privacy, and connection settings.", ["change internet options", "configure proxy", "manage browser certificates", "clear browsing settings"], ["internet options", "internet properties", "security zones"]),
         ["devmgmt.msc"] = new("View hardware devices, update drivers, disable devices, scan for hardware changes, and troubleshoot device errors.", ["update a driver", "fix an unknown device", "disable hardware", "view device status"], ["device manager", "drivers", "hardware"]),
         ["diskmgmt.msc"] = new("Create, format, extend, shrink, and assign letters to disks, partitions, and volumes.", ["partition a drive", "format a disk", "change drive letter", "initialize a new disk"], ["disk management", "partitions", "volumes"]),
-        ["taskmgr.exe"] = new("View and end running apps and processes, inspect startup apps, performance, users, services, and resource usage.", ["see what is slowing down my PC", "end a frozen app", "disable startup apps", "check CPU or memory usage"], ["task manager", "processes", "startup apps"]),
+        ["taskmgr.exe"] = new("View and end running apps and processes, inspect startup apps, performance, users, services, and resource usage.", ["see what is slowing down my PC", "end a frozen app", "kill a process", "end a process", "force quit an application", "close a hung program", "disable startup apps", "check CPU or memory usage"], ["task manager", "processes", "startup apps", "taskmgr"]),
         ["services.msc"] = new("Start, stop, disable, and configure Windows services that run in the background.", ["stop a service", "disable background service", "restart Windows service", "change service startup type"], ["services", "background services", "service manager"]),
         ["eventvwr.msc"] = new("Review Windows event logs for application, security, setup, and system errors or warnings.", ["find crash logs", "view system errors", "troubleshoot event logs", "inspect audit events"], ["event viewer", "logs", "windows logs"]),
         ["mstsc.exe"] = new("Connect to another Windows computer using Remote Desktop Protocol.", ["connect to another computer remotely", "open an RDP session", "remote into a PC", "connect to a work computer"], ["remote desktop connection", "rdp", "mstsc"]),
@@ -143,6 +143,23 @@ public sealed class CuratedWindowsIntentEnricher : IEnricher
         ["microsoft teams"] = ByFileName["teams.exe"],
         ["onedrive"] = ByFileName["onedrive.exe"],
         ["microsoft onedrive"] = ByFileName["onedrive.exe"],
+
+        // Sysinternals ships as a single MSIX package whose manifest sets every application's
+        // description to its own name ("ZoomIt"), so neither the manifest enricher nor any local
+        // file gives these tools a usable description. They are exactly the tools a user cannot
+        // name - "see what files a process has open" is the canonical example - so the intent
+        // vocabulary is curated here instead.
+        ["zoomit"] = new("Zoom into, annotate, draw on, and record the screen during presentations and demos, with a break timer.", ["annotate the screen", "draw on the screen", "zoom into the screen", "record my screen", "screen recording", "presentation timer", "highlight the mouse cursor"], ["screen annotation", "screen zoom", "screen recorder", "presentation tool", "ZoomIt"]),
+        ["process explorer"] = new("Inspect running processes in depth: open handles and files, loaded DLLs, CPU and memory use, process tree, and which program owns a locked file.", ["see what files a process has open", "find which process is locking a file", "kill a process", "inspect open handles", "see loaded DLLs", "find what is using the CPU", "replace task manager"], ["procexp", "process viewer", "handles", "task manager replacement", "Process Explorer"]),
+        ["process monitor"] = new("Capture and filter real-time file system, registry, process, and network activity for troubleshooting.", ["see what files a program is accessing", "trace registry activity", "debug why an app fails to start", "monitor file system activity"], ["procmon", "file monitor", "registry monitor", "activity trace", "Process Monitor"]),
+        ["autoruns"] = new("Show and disable everything configured to start automatically at boot or sign-in, including services, drivers, scheduled tasks, and shell extensions.", ["see what starts with Windows", "disable startup programs", "find malware persistence", "manage auto-start entries"], ["startup programs", "auto-start", "persistence", "Autoruns"]),
+        ["tcpview"] = new("List active TCP and UDP endpoints with the owning process, remote address, and connection state.", ["see which process is using a port", "find open network connections", "check what is listening on a port"], ["netstat", "open ports", "network connections", "TCPView"]),
+
+        // Inbox MSIX apps whose manifests describe them with nothing but their own name.
+        ["snipping tool"] = new("Capture screenshots of a region, window, or the whole screen, record the screen to video, and annotate captures.", ["take a screenshot", "record my screen", "capture part of the screen", "screen recording", "snip a window", "annotate a screenshot"], ["screenshot", "screen capture", "screen recorder", "snip", "print screen", "Snipping Tool"]),
+        ["calculator"] = new("Perform standard, scientific, graphing, and programmer calculations, plus unit and currency conversion.", ["do math", "convert units", "calculate a percentage", "convert currency"], ["calc", "math", "unit converter", "Calculator"]),
+        ["terminal"] = new("Run PowerShell, Command Prompt, and WSL shells in tabs with profiles and split panes.", ["open a command line", "run a shell", "open PowerShell", "use the terminal"], ["console", "command line", "shell", "Windows Terminal"]),
+        ["windows terminal"] = new("Run PowerShell, Command Prompt, and WSL shells in tabs with profiles and split panes.", ["open a command line", "run a shell", "open PowerShell", "use the terminal"], ["console", "command line", "shell", "Windows Terminal"]),
     };
 
     private static string NormalizeAppName(string name)
