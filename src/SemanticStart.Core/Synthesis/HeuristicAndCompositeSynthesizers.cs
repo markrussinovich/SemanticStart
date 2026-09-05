@@ -18,18 +18,19 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
     public Task<SynthesizedProfile> SynthesizeAsync(Entity entity, IReadOnlyList<EnrichmentDocument> documents, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var summary = BuildSummary(entity, documents);
+        var described = BestDescription(entity, documents);
+        var summary = BuildSummary(entity, described);
         var category = BuildCategory(entity);
-        var tasks = BuildTasks(entity, documents, summary).Distinct(StringComparer.OrdinalIgnoreCase).Take(10).ToArray();
+        var tasks = BuildTasks(entity, documents, described).Distinct(StringComparer.OrdinalIgnoreCase).Take(10).ToArray();
         var synonyms = BuildSynonyms(entity, documents).Distinct(StringComparer.OrdinalIgnoreCase).Take(20).ToArray();
         return Task.FromResult(new SynthesizedProfile { EntityId = entity.Id, Summary = summary, Tasks = tasks, Synonyms = synonyms, Category = category, Generator = Generator });
     }
 
     internal static IReadOnlyList<string> GetHeuristicSynonyms(Entity entity) => BuildSynonyms(entity).Distinct(StringComparer.OrdinalIgnoreCase).Take(16).ToArray();
 
-    private static string BuildSummary(Entity entity, IReadOnlyList<EnrichmentDocument> documents)
+    private static string BuildSummary(Entity entity, string? described)
     {
-        var best = BestDescription(entity, documents);
+        var best = described;
         if (string.IsNullOrWhiteSpace(best))
             best = entity.Kind switch
             {
@@ -160,7 +161,16 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         };
     }
 
-    private static IEnumerable<string> BuildTasks(Entity entity, IReadOnlyList<EnrichmentDocument> documents, string summary)
+    /// <summary>
+    /// Derives the intent phrases a user might search for. <paramref name="described"/> is the
+    /// harvested description or null when nothing was found; the placeholder summary is
+    /// deliberately not accepted here. Feeding the placeholder in meant intents were inferred from
+    /// an entity's own name: the Windows optional feature "Browser Internet Explorer" was assigned
+    /// "search the web" and "connect to the internet" purely because those words appear in its
+    /// title, and it then outranked Microsoft Edge for exactly that query. An entity with no
+    /// documentation now claims no intents.
+    /// </summary>
+    private static IEnumerable<string> BuildTasks(Entity entity, IReadOnlyList<EnrichmentDocument> documents, string? described)
     {
         if (MatchesExact(entity, "Notepad", "notepad.exe")) { yield return "take quick notes"; yield return "edit a plain text file"; yield return "open a text document"; yield break; }
         if (MatchesExact(entity, "Disk Cleanup", "cleanmgr.exe")) { yield return "free up disk space"; yield return "delete temporary files"; yield return "clean up old Windows files"; yield break; }
@@ -168,7 +178,7 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         if (entity.LaunchTarget.Equals("ms-settings:display", StringComparison.OrdinalIgnoreCase) || entity.DisplayName.Equals("Display", StringComparison.OrdinalIgnoreCase)) { yield return "change screen resolution"; yield return "adjust display scale"; yield return "arrange monitors"; yield return "change brightness"; yield break; }
 
         foreach (var phrase in ExtractLabeledPhrases(documents, "Tasks")) yield return phrase;
-        foreach (var phrase in IntentPhrases(summary + " " + string.Join(' ', documents.Select(d => d.Text)))) yield return phrase;
+        foreach (var phrase in IntentPhrases(described + " " + string.Join(' ', documents.Select(d => d.Text)))) yield return phrase;
         yield return entity.Kind switch
         {
             EntityKind.SettingsPage => "change Windows settings",
