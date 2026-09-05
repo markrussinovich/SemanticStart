@@ -305,10 +305,17 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
         // words are exactly what the vendor's own documentation never contains. Concrete example
         // phrases are deliberately absent - supplying them caused small models to copy them
         // verbatim, and Process Explorer confidently claimed it could free up disk space.
+        //
+        // The instructions are kept deliberately flat. Splitting the list into "plain goals" and
+        // "symptoms" was measurably worse (35/41 against 36/41): a 1.5B model answers a multi-part
+        // instruction with long instructional sentences that name the entity in every entry, which
+        // is the exact wording a lost user cannot produce. One extra constraint is affordable; a
+        // second structure on top of it is not.
         sb.AppendLine();
         sb.AppendLine("Some documents may be irrelevant. Ignore any document that is not about this specific entity, and rely on what you already know instead.");
         sb.AppendLine("summary: one sentence describing what it does for the user. Never restate only the name.");
         sb.AppendLine("tasks: 6-10 short phrases someone would type into a search box when they want this. Each phrase is a goal in everyday words, starting with a verb, and must be something this entity genuinely does. Do not invent capabilities it lacks. Do not write step-by-step instructions or refer to buttons, menus, or clicking.");
+        sb.AppendLine("Never use this entity's name inside a task phrase, and include the problem or symptom that brings someone here when they do not know the name.");
         sb.AppendLine("synonyms: other names, abbreviations, and executable names people call it.");
         sb.AppendLine("Return only JSON: {\"summary\":\"...\",\"tasks\":[\"...\"],\"synonyms\":[\"...\"],\"category\":\"...\"}");
         return sb.ToString();

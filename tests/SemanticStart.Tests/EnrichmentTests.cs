@@ -52,16 +52,33 @@ public sealed class EnrichmentTests
     }
 
     [Fact]
-    public async Task CuratedWindowsIntentCatalog_CoversMainstreamOfficeApps()
+    public async Task CuratedWindowsIntentCatalog_DoesNotDescribeThirdPartyApplications()
     {
-        var entity = CreateEntity("PowerPoint", EntityKind.Application, "PowerPoint");
+        // The catalog is hand-written, so it may only cover components that ship with Windows and
+        // are therefore identical on every machine. Application entries could only ever describe
+        // the programs that happened to be known when the catalog was written, which is not a
+        // property any installed machine can rely on; those descriptions come from online
+        // enrichment and local synthesis instead.
+        var pipeline = new EnrichmentPipeline([new CuratedWindowsIntentEnricher()], new HeuristicProfileSynthesizer(), maxDegreeOfParallelism: 1);
+
+        foreach (var name in new[] { "PowerPoint", "Microsoft Word", "Google Chrome", "Microsoft Teams" })
+        {
+            var entity = CreateEntity(name, EntityKind.Application, name);
+            var (documents, _) = await pipeline.EnrichAndSynthesizeAsync(entity, new EnrichmentOptions());
+
+            Assert.DoesNotContain(documents, d => d.Provider == "windows-intent-catalog");
+        }
+    }
+
+    [Fact]
+    public async Task CuratedWindowsIntentCatalog_StillCoversInboxWindowsComponents()
+    {
+        var entity = CreateEntity("Network Connections", EntityKind.ControlPanelApplet, @"C:\Windows\system32\ncpa.cpl");
         var pipeline = new EnrichmentPipeline([new CuratedWindowsIntentEnricher()], new HeuristicProfileSynthesizer(), maxDegreeOfParallelism: 1);
 
         var (_, profile) = await pipeline.EnrichAndSynthesizeAsync(entity, new EnrichmentOptions());
 
-        Assert.Contains("presentation", profile.Summary, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(profile.Tasks, t => t.Contains("create a presentation", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(profile.Synonyms, s => s.Equals("slide deck", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(profile.Tasks, t => t.Contains("internet not working", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

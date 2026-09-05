@@ -206,7 +206,7 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         if (entity.LaunchTarget.Equals("ms-settings:display", StringComparison.OrdinalIgnoreCase) || entity.DisplayName.Equals("Display", StringComparison.OrdinalIgnoreCase)) { yield return "change screen resolution"; yield return "adjust display scale"; yield return "arrange monitors"; yield return "change brightness"; yield break; }
 
         foreach (var phrase in ExtractLabeledPhrases(documents, "Tasks")) yield return phrase;
-        foreach (var phrase in IntentPhrases(described + " " + string.Join(' ', documents.Select(d => d.Text)))) yield return phrase;
+        foreach (var phrase in IntentPhrases(entity.DisplayName + " " + described)) yield return phrase;
         yield return entity.Kind switch
         {
             EntityKind.SettingsPage => "change Windows settings",
@@ -226,9 +226,16 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         return target is not null && target.Equals(fileName, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Maps vocabulary in an entity's own one-line description to the intent phrasing a user would
+    /// type. The text examined is deliberately narrow. Feeding it the harvested document bodies
+    /// instead matched boilerplate: a Learn page footer mentioning the internet was enough to tell
+    /// the index that a screen-annotation tool helps you connect to the internet, and those phrases
+    /// then steered the entity's embedding away from what it actually does.
+    /// Matching is on whole words, so "power" no longer fires on "PowerPoint".
+    /// </summary>
     private static IEnumerable<string> IntentPhrases(string text)
     {
-        text = text.ToLowerInvariant();
         var mappings = new (string Key, string Task)[]
         {
             ("browser", "search the web"), ("web", "browse websites and search the internet"), ("internet", "connect to the internet"),
@@ -239,7 +246,12 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
             ("device", "manage connected devices"), ("network", "troubleshoot network connections"), ("printer", "manage printers"),
             ("display", "change display settings"), ("security", "review security settings"), ("update", "manage Windows updates"), ("file", "work with files")
         };
-        foreach (var (key, task) in mappings) if (text.Contains(key, StringComparison.Ordinal)) yield return task;
+
+        foreach (var (key, task) in mappings)
+        {
+            if (Regex.IsMatch(text, $@"\b{Regex.Escape(key)}s?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                yield return task;
+        }
     }
 
     private static IEnumerable<string> BuildSynonyms(Entity entity, IReadOnlyList<EnrichmentDocument>? documents = null)
@@ -310,6 +322,11 @@ public sealed class CompositeProfileSynthesizer : IProfileSynthesizer
             // every entity's budget expired before its turn and the whole index silently fell back.
             var profile = await _llm.SynthesizeAsync(entity, documents, cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(profile.Summary) || profile.Tasks.Count == 0) return heuristic;
+
+            // Synonyms are merged, tasks are not. Concatenating both task lists was tried and was
+            // measurably worse (38/41 against 39/41): the embedded document is a fixed budget, and
+            // padding it with near-duplicate phrasings of the same intent dilutes the signal that
+            // makes an entity findable. The model's phrasing wins outright when it produced any.
             var synonyms = profile.Synonyms.Concat(heuristic.Synonyms).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToArray();
             return profile with { Synonyms = synonyms, Category = string.IsNullOrWhiteSpace(profile.Category) ? heuristic.Category : profile.Category };
         }

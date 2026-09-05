@@ -55,6 +55,23 @@ public sealed record RankingOptions
     public double MinHybridVectorLeaderRatio { get; init; } = 0.60;
 
     /// <summary>
+    /// Vector-only hits must stay within this fraction of the best vector similarity for the query.
+    /// The bar is deliberately stricter than <see cref="MinHybridVectorLeaderRatio"/>: a hit with no
+    /// lexical corroboration is resting on a single signal, so it has to be close to the leader to
+    /// be worth showing. Searching for a presentation tool surfaced the right app at cosine 0.63 and
+    /// then padded the list with a wireless-projection settings page at 0.38, which clears the
+    /// absolute floor while being visibly unrelated to what was asked.
+    /// </summary>
+    public double MinVectorOnlyLeaderRatio { get; init; } = 0.75;
+
+    /// <summary>
+    /// Minimum share of the query's best BM25 that a lexical hit must reach before it contributes
+    /// to fusion. Reciprocal-rank fusion is rank-based, so without this a row matching one generic
+    /// token earns nearly the same arm weight as a row matching the whole query.
+    /// </summary>
+    public double MinLexicalContributionRatio { get; init; } = 0.45;
+
+    /// <summary>
     /// Minimum BM25 that is strong enough to surface without cosine support. FTS5 now uses OR
     /// semantics, so moderate BM25 can mean only one generic token matched; values around eight
     /// in the current corpus correspond to distinctive names or terms.

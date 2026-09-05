@@ -3,6 +3,7 @@ using SemanticStart.Core.Collectors;
 using SemanticStart.Core.Embeddings;
 using SemanticStart.Core.Enrichment;
 using SemanticStart.Core.Indexing;
+using SemanticStart.Core.Model;
 using SemanticStart.Core.Query;
 using SemanticStart.Core.Storage;
 using SemanticStart.Core.Synthesis;
@@ -29,6 +30,7 @@ internal static class Program
                 "eval" => await EvalAsync(),
                 "stats" => await StatsAsync(),
                 "llm-test" => await LlmTestAsync(),
+                "enrich" => await EnrichAsync(args),
                 _ => Help(),
             };
         }
@@ -44,12 +46,89 @@ internal static class Program
         Console.WriteLine("""
             SemanticStart - semantic search over installed apps and Windows features
 
-              index [--online] [--force]   Build or refresh the index
+              index [--online] [--force] [--no-llm]   Build or refresh the index
               search <query> [-n N]        Query the index
               eval                         Run the relevance harness
               stats                        Show index statistics
               llm-test                     Diagnose local LLM discovery and connectivity
+              enrich <name> [--online]     Show what each enricher produces for one entity
             """);
+        return 0;
+    }
+
+    /// <summary>
+    /// Runs the enrichment pipeline for a single entity with every failure printed. The pipeline
+    /// deliberately swallows per-enricher exceptions so one bad network response cannot fail an
+    /// index build, but that also makes a broken enricher indistinguishable from one that simply
+    /// found nothing. This command is the way to tell those apart.
+    /// </summary>
+    private static async Task<int> EnrichAsync(string[] args)
+    {
+        var name = args.Skip(1).FirstOrDefault(a => !a.StartsWith("--", StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            Console.Error.WriteLine("usage: enrich <name> [--online]");
+            return 1;
+        }
+
+        var online = args.Contains("--online", StringComparer.OrdinalIgnoreCase);
+        var entities = new List<Entity>();
+        foreach (var collector in CollectorRegistry.CreateAll().Where(c => c.IsSupported))
+        {
+            await foreach (var entity in collector.CollectAsync().ConfigureAwait(false))
+                entities.Add(entity);
+        }
+
+        var matches = entities
+            .Where(e => e.DisplayName.Contains(name, StringComparison.OrdinalIgnoreCase))
+            .Take(3)
+            .ToArray();
+
+        if (matches.Length == 0)
+        {
+            Console.Error.WriteLine($"no entity matching '{name}'");
+            return 1;
+        }
+
+        using var http = new HttpClient();
+        var enrichers = EnricherRegistry.CreateAll(http);
+
+        foreach (var entity in matches)
+        {
+            Console.WriteLine($"=== {entity.DisplayName}  [{entity.Kind}]  {entity.Id}");
+            foreach (var enricher in enrichers)
+            {
+                if (!enricher.CanEnrich(entity))
+                    continue;
+                if (enricher.RequiresNetwork && !online)
+                {
+                    Console.WriteLine($"  {enricher.Provider,-16} skipped (needs --online)");
+                    continue;
+                }
+
+                try
+                {
+                    var docs = await enricher.EnrichAsync(entity).ConfigureAwait(false);
+                    if (docs.Count == 0)
+                    {
+                        Console.WriteLine($"  {enricher.Provider,-16} no documents");
+                        continue;
+                    }
+
+                    foreach (var doc in docs)
+                    {
+                        var text = doc.Text.Replace("\n", " ", StringComparison.Ordinal);
+                        Console.WriteLine($"  {enricher.Provider,-16} {doc.SourceUri}");
+                        Console.WriteLine($"  {"",-16} {text[..Math.Min(200, text.Length)]}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  {enricher.Provider,-16} FAILED {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+        }
+
         return 0;
     }
 
@@ -78,6 +157,11 @@ internal static class Program
         var allowNetwork = args.Contains("--online");
         var force = args.Contains("--force");
 
+        // Local synthesis is opt-out rather than implicit. It used to be wired in unconditionally,
+        // which meant "--llm" was accepted but meaningless and there was no way to exercise or
+        // measure the heuristic-only path that machines without a local runtime actually get.
+        var useLlm = !args.Contains("--no-llm");
+
         Console.WriteLine("Preparing embedding model...");
         var embeddings = await CreateEmbeddingModelAsync();
 
@@ -85,8 +169,14 @@ internal static class Program
         {
             using var store = new SqliteIndexStore();
 
+            var llm = new LocalLlmProfileSynthesizer(
+                new LocalLlmOptions { Mode = useLlm ? LocalLlmMode.Auto : LocalLlmMode.Off });
+            Console.WriteLine(useLlm
+                ? "Local model synthesis: enabled (falls back to heuristics per entity)."
+                : "Local model synthesis: disabled (--no-llm).");
+
             var synthesizer = new CompositeProfileSynthesizer(
-                new LocalLlmProfileSynthesizer(),
+                llm,
                 new HeuristicProfileSynthesizer());
 
             var profiler = new EnrichmentPipeline(EnricherRegistry.CreateAll(), synthesizer);

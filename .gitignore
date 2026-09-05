@@ -17,3 +17,5 @@ models/
 .llm-probe.json
 .shot/
 *.py
+
+.commitmsg
