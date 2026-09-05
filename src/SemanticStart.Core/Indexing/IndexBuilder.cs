@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using SemanticStart.Core.Abstractions;
+using SemanticStart.Core.Collectors;
 using SemanticStart.Core.Model;
 
 namespace SemanticStart.Core.Indexing;
@@ -109,7 +110,7 @@ public sealed class IndexBuilder
         CancellationToken cancellationToken)
     {
         var discovered = new Dictionary<string, Entity>(StringComparer.Ordinal);
-        var seenTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenTargets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var collector in _collectors)
         {
@@ -127,9 +128,20 @@ public sealed class IndexBuilder
                     if (discovered.ContainsKey(entity.Id))
                         continue;
 
-                    if (!IsDistinct(entity, seenTargets))
+                    var key = DedupeKey(entity);
+                    if (seenTargets.TryGetValue(key, out var survivorId))
+                    {
+                        // The duplicate is suppressed from the results, but its metadata is not
+                        // thrown away: the losing record is frequently the richer one. Microsoft
+                        // Edge arrives from the AppsFolder carrying nothing but an AppUserModelId
+                        // and from the Start Menu carrying the msedge.exe path, and it is that
+                        // path the local enrichers need to read a real product description.
+                        if (discovered.TryGetValue(survivorId, out var survivor))
+                            discovered[survivorId] = Absorb(survivor, entity);
                         continue;
+                    }
 
+                    seenTargets[key] = entity.Id;
                     discovered[entity.Id] = entity;
                 }
             }
@@ -161,19 +173,51 @@ public sealed class IndexBuilder
     /// because a shared target does not imply a duplicate: all Windows optional features
     /// legitimately deep-link to the same ms-settings:optionalfeatures page.
     /// </summary>
-    private static bool IsDistinct(Entity entity, HashSet<string> seenTargets)
+    private static string DedupeKey(Entity entity) => entity.Kind switch
     {
-        var key = entity.Kind switch
-        {
-            // Runnable programs are deduplicated across kinds as well as across collectors. Disk
-            // Cleanup is reported both as an AppsFolder application and as a System32 tool; they
-            // are the same thing to the user, and showing both twice in a row looks broken.
-            EntityKind.Application or EntityKind.PackagedApp or EntityKind.SystemTool =>
-                "app|" + Normalize(entity.DisplayName),
-            _ => entity.LaunchKind + "|" + entity.LaunchTarget + "|" + Normalize(entity.DisplayName),
-        };
+        // Runnable programs are deduplicated across kinds as well as across collectors. Disk
+        // Cleanup is reported both as an AppsFolder application and as a System32 tool; they
+        // are the same thing to the user, and showing both twice in a row looks broken.
+        EntityKind.Application or EntityKind.PackagedApp or EntityKind.SystemTool =>
+            "app|" + Normalize(entity.DisplayName),
+        _ => entity.LaunchKind + "|" + entity.LaunchTarget + "|" + Normalize(entity.DisplayName),
+    };
 
-        return seenTargets.Add(key);
+    /// <summary>
+    /// Folds a suppressed duplicate's metadata into the entity that beat it, filling only keys the
+    /// survivor does not already have so dedupe precedence still decides every contested value.
+    /// The launch target is deliberately never overwritten: the winning collector's launch path is
+    /// the higher-fidelity one, and only the descriptive payload is being salvaged here.
+    ///
+    /// The content hash is recomputed, otherwise an entity whose text changed would keep its old
+    /// hash and the incremental rebuild would skip re-enriching it.
+    /// </summary>
+    private static Entity Absorb(Entity survivor, Entity duplicate)
+    {
+        var merged = new Dictionary<string, string>(survivor.RawMetadata, StringComparer.Ordinal);
+        var added = false;
+
+        foreach (var (key, value) in duplicate.RawMetadata)
+        {
+            if (string.IsNullOrWhiteSpace(value) || merged.ContainsKey(key))
+                continue;
+
+            merged[key] = value;
+            added = true;
+        }
+
+        var iconSource = survivor.IconSource ?? duplicate.IconSource;
+        var publisher = survivor.Publisher ?? duplicate.Publisher;
+
+        if (!added && ReferenceEquals(iconSource, survivor.IconSource) && ReferenceEquals(publisher, survivor.Publisher))
+            return survivor;
+
+        return CollectorEntity.WithContentHash(survivor with
+        {
+            RawMetadata = merged,
+            IconSource = iconSource,
+            Publisher = publisher,
+        });
     }
 
     /// <summary>Lowercases and strips non-alphanumerics so "Git Bash" and "Git  Bash" collide.</summary>

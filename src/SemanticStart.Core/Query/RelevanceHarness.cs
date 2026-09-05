@@ -127,7 +127,7 @@ public sealed class RelevanceHarness(ISearchEngine engine)
             var recallPassed = testCase.AcceptableResults.Length == 0 || matchedRank.HasValue;
             var noResultsPassed = !testCase.ExpectNoResults || names.Length == 0;
             var maxResultsPassed = !testCase.MaxResults.HasValue || names.Length <= testCase.MaxResults.Value;
-            var forbiddenPassed = !names.Any(n => testCase.ForbiddenResults.Any(f => IsMatch(n, f)));
+            var forbiddenPassed = !names.Any(n => testCase.ForbiddenResults.Any(f => IsForbiddenMatch(n, f)));
 
             outcomes.Add(new RelevanceOutcome
             {
@@ -153,4 +153,14 @@ public sealed class RelevanceHarness(ISearchEngine engine)
 
         return a.Contains(e, StringComparison.Ordinal) || e.Contains(a, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Strict comparison, deliberately different from <see cref="IsMatch"/>. A recall assertion is
+    /// lenient because it only has to recognise the right answer under a different name, but a
+    /// prohibition must be precise: with containment, forbidding the "Services" console also
+    /// forbids "Internet Information Services (IIS)", failing a query the engine answered well.
+    /// Prohibitions therefore require the whole normalized name to be equal.
+    /// </summary>
+    private static bool IsForbiddenMatch(string actual, string forbidden) =>
+        NameMatcher.Normalize(actual).Equals(NameMatcher.Normalize(forbidden), StringComparison.Ordinal);
 }
