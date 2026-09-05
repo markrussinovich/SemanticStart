@@ -78,6 +78,13 @@ public sealed class OverlayViewModel : ObservableObject
 {
     private const string IdleStatus = "Type to search apps, settings, tools, and features";
 
+    /// <summary>
+    /// Shown when the query ran successfully but nothing cleared the relevance bar. The engine
+    /// deliberately returns nothing rather than padding the list with weak matches, so this is a
+    /// normal outcome and must not read like an error.
+    /// </summary>
+    private const string NoMatchStatus = "No good matches found";
+
     private readonly SemanticSearchService _searchService;
     private readonly IconProvider _iconProvider;
     private readonly AppSettings _settings;
@@ -145,7 +152,7 @@ public sealed class OverlayViewModel : ObservableObject
                 Results.Add(new SearchResultItem(hit));
 
             SelectedIndex = Results.Count > 0 ? 0 : -1;
-            Status = Results.Count == 0 ? (string.IsNullOrWhiteSpace(query) ? IdleStatus : "No results") : string.Empty;
+            Status = Results.Count == 0 ? (string.IsNullOrWhiteSpace(query) ? IdleStatus : NoMatchStatus) : string.Empty;
             _ = LoadIconsAsync(cancellationToken);
         }
         catch (OperationCanceledException)
