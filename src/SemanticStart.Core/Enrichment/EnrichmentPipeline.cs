@@ -23,6 +23,7 @@ public static class EnricherRegistry
             new PeVersionEnricher(),
             new MsixManifestEnricher(),
             new ShortcutMetadataEnricher(),
+            new CuratedWindowsIntentEnricher(),
             new AdjacentDocsEnricher(),
             new CliHelpEnricher(),
             new WingetManifestEnricher(),
@@ -71,8 +72,12 @@ public sealed class EnrichmentPipeline : IEntityProfiler
                 try
                 {
                     var docs = await enricher.EnrichAsync(entity, ct).ConfigureAwait(false);
-                    foreach (var doc in docs.Where(d => !string.IsNullOrWhiteSpace(d.Text)))
-                        documents.Add(doc);
+                    foreach (var doc in docs)
+                    {
+                        var text = EnrichmentTextNormalizer.ToPlainText(doc.Text);
+                        if (!string.IsNullOrWhiteSpace(text))
+                            documents.Add(doc with { Text = text });
+                    }
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { Debug.WriteLine($"Enricher '{enricher.Provider}' failed for {entity.Id}: {ex.Message}"); }
