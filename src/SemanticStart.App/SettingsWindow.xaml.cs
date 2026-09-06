@@ -96,6 +96,12 @@ public partial class SettingsWindow : Window
     {
         _rebuildCts?.Cancel();
         _catalogCts?.Cancel();
+
+        // Closing while the recorder still has focus would otherwise leave the hotkey suspended,
+        // so the shortcut would stop working until the app was restarted. Re-applying is harmless
+        // when nothing was suspended.
+        _activationManager.ResumeAfterCapture();
+
         base.OnClosed(e);
     }
 
@@ -159,6 +165,24 @@ public partial class SettingsWindow : Window
     /// shortcut silently does not work.
     /// </summary>
     private void HotKeyBox_HotKeyRejected(object? sender, string reason) => HotKeyStatus.Text = reason;
+
+    /// <summary>
+    /// Hands the keyboard to the recorder. The currently assigned chord is the one a user is most
+    /// likely to press while editing, and the OS delivers a registered hotkey to us as an
+    /// activation rather than as key input, so without releasing it the overlay would pop up over
+    /// this window and the field would never see the press.
+    /// </summary>
+    private void HotKeyBox_RecordingStarted(object? sender, EventArgs e)
+    {
+        _activationManager.SuspendForCapture();
+        HotKeyStatus.Text = "Press the shortcut you want. Esc keeps the current one.";
+    }
+
+    private void HotKeyBox_RecordingStopped(object? sender, EventArgs e)
+    {
+        _activationManager.ResumeAfterCapture();
+        UpdateHotKeyStatus();
+    }
 
     private void SaveFromControls()
     {

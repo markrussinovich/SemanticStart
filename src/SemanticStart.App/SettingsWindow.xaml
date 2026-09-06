@@ -99,7 +99,9 @@
                         </StackPanel>
                         <local:HotKeyRecorder x:Name="HotKeyBox" Grid.Column="1" VerticalAlignment="Center"
                                               HotKeyChanged="HotKeyBox_HotKeyChanged"
-                                              HotKeyRejected="HotKeyBox_HotKeyRejected" />
+                                              HotKeyRejected="HotKeyBox_HotKeyRejected"
+                                              RecordingStarted="HotKeyBox_RecordingStarted"
+                                              RecordingStopped="HotKeyBox_RecordingStopped" />
                     </Grid>
                 </Border>
 

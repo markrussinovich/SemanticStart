@@ -80,6 +80,22 @@ public sealed class ActivationManager : IDisposable
         _watchdog.Start();
     }
 
+    /// <summary>
+    /// Releases the global hotkey and the Start-key hook so the chord can be typed into the
+    /// recorder instead of activating the overlay. Without this the one shortcut a user is most
+    /// likely to press while editing - the one already assigned - is swallowed by the OS and
+    /// delivered to us as an activation, so the field never sees it and the overlay appears on
+    /// top of the settings window.
+    /// </summary>
+    public void SuspendForCapture()
+    {
+        UnregisterHotKey();
+        UninstallHooks();
+    }
+
+    /// <summary>Restores whatever the current settings ask for after <see cref="SuspendForCapture"/>.</summary>
+    public void ResumeAfterCapture() => ApplySettings(_settings);
+
     public void ApplySettings(AppSettings settings)
     {
         _settings = settings;

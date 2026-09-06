@@ -30,6 +30,12 @@ public partial class HotKeyRecorder : System.Windows.Controls.UserControl
     /// <summary>Raised when a press was rejected, carrying the reason to show the user.</summary>
     public event EventHandler<string>? HotKeyRejected;
 
+    /// <summary>Raised when the field starts listening, so the global hotkey can be released.</summary>
+    public event EventHandler? RecordingStarted;
+
+    /// <summary>Raised when the field stops listening, however it stopped.</summary>
+    public event EventHandler? RecordingStopped;
+
     private bool _recording;
 
     public HotKeyRecorder()
@@ -113,16 +119,24 @@ public partial class HotKeyRecorder : System.Windows.Controls.UserControl
 
     private void StartRecording()
     {
+        if (_recording)
+            return;
+
         _recording = true;
         Surface.BorderBrush = (System.Windows.Media.Brush)FindResource("AccentBrush");
         Render();
+        RecordingStarted?.Invoke(this, EventArgs.Empty);
     }
 
     private void StopRecording()
     {
+        if (!_recording)
+            return;
+
         _recording = false;
         Surface.BorderBrush = (System.Windows.Media.Brush)FindResource("SearchBoxBorderBrush");
         Render();
+        RecordingStopped?.Invoke(this, EventArgs.Empty);
     }
 
     private void Render()
