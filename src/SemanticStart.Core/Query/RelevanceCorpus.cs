@@ -82,6 +82,22 @@ public static class RelevanceCorpus
         },
         new()
         {
+            Query = "list processes",
+            AcceptableResults = ["Tasklist", "Task Manager", "Sysinternals PsList", "PsList", "Process Explorer", "Sysinternals Process Explorer"],
+            RequiredResults = ["Task Manager"],
+            WithinTopN = 3,
+            Rationale = "Reported as missing Task Manager. The command-line tools answer it and may lead, but the program Windows ships for looking at running processes has to be in the list. It was retrieved by both arms and rejected by both floors by a hair - 57% of the best cosine against 60%, 40% of the best BM25 against 45% - because BM25 divides by field length and Tasklist's whole summary is 'List running processes and services' while Task Manager's evidence is a sentence inside a paragraph. Raising the weight of the field holding that paragraph does not help; agreement between the arms is what distinguishes it.",
+        },
+        new()
+        {
+            Query = "view memory usage",
+            AcceptableResults = ["RAMMap", "RamMap", "Resource Monitor", "Task Manager", "Performance Monitor", "VMMap"],
+            RequiredResults = ["Process Explorer"],
+            WithinTopN = 5,
+            Rationale = "Reported as missing Process Explorer. KNOWN GAP, and a pure source-coverage one: the word 'memory' appears zero times in everything indexed about it - the MSIX manifest and version resource give only its name, its Microsoft Learn page talks about handles and DLLs, and its Wikipedia lead calls it a freeware system monitor. The vector arm still places it at 0.285, which is the model recognising what its neighbours are, not evidence of what it does. No ranking change can fix this and none should be made to; it needs a source that states the capability.",
+        },
+        new()
+        {
             Query = "process memory usage",
             AcceptableResults = ["Resource Monitor", "Task Manager", "Performance Monitor", "VMMap", "RAMMap", "Sysinternals Process Explorer", "Process Explorer"],
             RequiredResults = ["Resource Monitor"],
