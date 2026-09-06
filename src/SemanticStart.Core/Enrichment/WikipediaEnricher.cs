@@ -94,6 +94,18 @@ public sealed class WikipediaEnricher : IEnricher
             ? extract
             : shortDescription + ". " + extract;
 
+        // Only the lead. Harvesting article bodies was tried twice and measured both times: the
+        // whole body (capped at 4000 characters) took relevance from 53/59 to 51/59 and top-1 from
+        // 81% to 74%, and restricting it to the first section - the one that says what the subject
+        // does - was no better at 50/59. Sweeping the details BM25 weight did not recover either,
+        // and setting that weight to zero still did not restore the baseline, which is the
+        // measurement that settles it: a longer column changes which entities MATCH at all, so body
+        // text enlarges the candidate pool whether or not it is allowed to score. What it admits is
+        // topical neighbours, not answers - "file edit" began returning a video editor whose
+        // article says "file" and "edit" throughout its release history while Notepad fell out.
+        //
+        // The one query this would have fixed, "process memory usage" reaching Resource Monitor,
+        // is left as a recorded gap in the corpus rather than paid for with two other cases.
         var canonical = root.TryGetProperty("content_urls", out var urls)
                         && urls.TryGetProperty("desktop", out var desktop)
                         && desktop.TryGetProperty("page", out var page)

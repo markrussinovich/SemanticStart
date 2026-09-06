@@ -53,6 +53,11 @@ internal static class ProfileText
     /// part that names capabilities. Chunking buys the tail of a document, which is history,
     /// provenance, and links. The ceiling here is source coverage, not extraction: "change what
     /// happens when I close the lid" still fails because no document on the machine says "lid".
+    ///
+    /// Raising the cap was tried, to 2500 characters, when the Wikipedia enricher was briefly
+    /// returning article bodies. It cost two corpus cases and 0.05 MRR and was reverted along with
+    /// the bodies; see WikipediaEnricher for the measurements. Length is not free here even at a
+    /// low BM25 weight, because a longer column changes which entities MATCH at all.
     /// </summary>
     public static string? Details(IReadOnlyList<Model.EnrichmentDocument> documents, int maxCharacters = 600)
     {
