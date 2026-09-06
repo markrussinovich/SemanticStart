@@ -3,6 +3,7 @@ using System.Diagnostics;
 using SemanticStart.Core.Abstractions;
 using SemanticStart.Core.Collectors;
 using SemanticStart.Core.Model;
+using SemanticStart.Core.Query;
 
 namespace SemanticStart.Core.Indexing;
 
@@ -173,6 +174,59 @@ public sealed class IndexBuilder
             {
                 // One broken collector must not prevent the rest of the index from building.
                 Debug.WriteLine($"Collector '{collector.Source}' failed: {ex}");
+            }
+        }
+
+        return FoldCommandAliases(discovered);
+    }
+
+    /// <summary>
+    /// Folds a command alias into the program it launches.
+    ///
+    /// App Paths registrations arrive from their own collector and cannot be matched on the
+    /// executable: Copilot registers "copilotapp.exe" directly under its install directory while
+    /// the entry the user sees points at a versioned copy of the same binary one level down, so
+    /// the two paths never compare equal and the same program was listed twice.
+    ///
+    /// Containment alone is not enough to conclude they are the same thing - the Sysinternals
+    /// tools all register aliases inside one install directory and are genuinely separate programs,
+    /// and folding them would undo the work that made AccessChk reachable at all. The alias is
+    /// therefore only folded when it also names the same program, which is what distinguishes
+    /// "copilotapp" describing "Copilot" from "accesschk" describing itself.
+    /// </summary>
+    private static Dictionary<string, Entity> FoldCommandAliases(Dictionary<string, Entity> discovered)
+    {
+        var hosts = discovered.Values
+            .Where(e => !string.Equals(e.Source, "command", StringComparison.Ordinal))
+            .Select(e => (Entity: e, Location: e.RawMetadata.GetValueOrDefault("installLocation")?.Trim().Trim('"')))
+            .Where(h => !string.IsNullOrWhiteSpace(h.Location))
+            .ToArray();
+
+        if (hosts.Length == 0)
+            return discovered;
+
+        foreach (var alias in discovered.Values.Where(e => string.Equals(e.Source, "command", StringComparison.Ordinal)).ToArray())
+        {
+            if (ExecutablePath(alias) is not { } executable)
+                continue;
+
+            var claimed = alias.RawMetadata.GetValueOrDefault("description") ?? alias.DisplayName;
+
+            foreach (var (host, location) in hosts)
+            {
+                if (!discovered.ContainsKey(host.Id))
+                    continue;
+
+                var prefix = location!.TrimEnd('\\') + "\\";
+                if (!executable.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (!NameMatcher.Normalize(claimed).Equals(NameMatcher.Normalize(host.DisplayName), StringComparison.Ordinal))
+                    continue;
+
+                discovered[host.Id] = Absorb(discovered[host.Id], alias);
+                discovered.Remove(alias.Id);
+                break;
             }
         }
 
