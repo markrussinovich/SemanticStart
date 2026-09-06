@@ -52,8 +52,15 @@ public sealed record RankingOptions
     /// Minimum cosine for a result that has both vector and lexical evidence. This is lower than
     /// the vector-only floor because two independent arms agreeing is meaningful, but it still
     /// filters generic OR-FTS matches such as a document merely containing "create" or "text".
+    ///
+    /// Lowered from 0.25 to make results stop changing while a word is being typed. An absolute
+    /// cosine floor is the one part of this pipeline that a partially-typed query moves: the
+    /// lexical arm folds "process", "processe" and "processes" to a byte-identical result list,
+    /// while MiniLM scores Task Manager at 0.248, 0.298 and 0.367 for them - straddling 0.25, so
+    /// an answer appeared, vanished and reappeared as the user typed. Swept at 0.25, 0.22 and
+    /// 0.20; 0.22 leaves the corpus untouched and 0.20 costs a case.
     /// </summary>
-    public double MinHybridSurfaceVectorScore { get; init; } = 0.25;
+    public double MinHybridSurfaceVectorScore { get; init; } = 0.22;
 
     /// <summary>
     /// Hybrid hits with weak BM25 must stay within this fraction of the best vector similarity
@@ -68,8 +75,15 @@ public sealed record RankingOptions
     /// own floor. Set from measurement, not intuition: see the corroboration clause in
     /// HybridSearchEngine.ShouldSurface. Read it as "half the leader in one arm needs about half
     /// the leader in the other"; a candidate carried by a single-token match cannot reach it.
+    ///
+    /// Swept at 0.15, 0.17, 0.18, 0.19, 0.20, 0.25 and 0.30. The corpus is flat from 0.18 to 0.20
+    /// and loses a case outside that band, and 0.18 is taken because it is what the shortest form
+    /// of a typed query needs: "list process" puts Task Manager at 0.188, the fuller spellings at
+    /// 0.21 and 0.23. Choosing the bottom of a flat band rather than its middle is deliberate -
+    /// the cost is nothing measurable and the gain is that a result stops depending on whether a
+    /// word has been finished.
     /// </summary>
-    public double MinCorroboratedEvidenceProduct { get; init; } = 0.20;
+    public double MinCorroboratedEvidenceProduct { get; init; } = 0.18;
 
     /// <summary>
     /// Vector-only hits must stay within this fraction of the best vector similarity for the query.
@@ -85,6 +99,13 @@ public sealed record RankingOptions
     /// Minimum share of the query's best BM25 that a lexical hit must reach before it contributes
     /// to fusion. Reciprocal-rank fusion is rank-based, so without this a row matching one generic
     /// token earns nearly the same arm weight as a row matching the whole query.
+    ///
+    /// Swept at 0.45, 0.40, 0.35 and 0.30 against the corpus. 0.35 scores better in aggregate -
+    /// same cases passing, MRR 0.851 to 0.874, correct answer first 80% of the time to 83% - and
+    /// is not used, because what it trades is the reported case. Admitting more weak lexical rows
+    /// to fusion gives them rank credit, and they push Task Manager from tenth to twelfth for
+    /// "list processes", out of the window entirely. An aggregate gain paid for with the specific
+    /// thing a user said was broken is not an improvement.
     /// </summary>
     public double MinLexicalContributionRatio { get; init; } = 0.45;
 
@@ -163,8 +184,15 @@ public sealed record RankingOptions
     /// what BM25 rewards most, so a tool called "Local and remote password changer" outscored the
     /// Windows sign-in settings for "change my password". The multiplier makes them win on being
     /// clearly right rather than on being tersely described.
+    ///
+    /// Strengthened from 0.85 after "list processes" returned nine console tools before Task
+    /// Manager, most of them claiming only the word "list" - PipeList, ListDLLs, LogonSessions.
+    /// That is the failure this multiplier already existed to correct, set too weakly to correct
+    /// it. Swept at 0.85, 0.75, 0.65 and 0.55: everything from 0.75 down passes the same cases,
+    /// 0.65 is where MRR and top-1 peak, and 0.55 does no better while pushing console tools
+    /// further down, which eventually costs the queries they are the right answer to.
     /// </summary>
-    public double UnlistedCommandPenalty { get; init; } = 0.85;
+    public double UnlistedCommandPenalty { get; init; } = 0.65;
 
     /// <summary>
     /// Share of entities that must use a word before a partial-name match on it is fully

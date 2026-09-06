@@ -415,6 +415,14 @@ public sealed class HybridSearchEngine : ISearchEngine
         // product, so a candidate weak in one arm has to be correspondingly strong in the other.
         // A single-token FTS coincidence sitting at the lexical floor with noise-band cosine
         // yields around 0.13 and stays out; Task Manager yields 0.23.
+        //
+        // The absolute cosine floor is kept here even though it is the reason a result can appear
+        // and vanish while a word is being typed: cosine is not comparable across queries and a
+        // half-typed word depresses all of it, so "list process", "list processe" and "list
+        // processes" - which retrieve a byte-identical lexical list, porter stemming folding all
+        // three - score Task Manager at 0.248, 0.298 and 0.367 across a 0.25 floor. Dropping it
+        // and letting the product carry the decision alone was measured at three thresholds and
+        // cost a corpus case at every one. Stability is worth buying, but not with accuracy.
         if (topVector > 0 && topLexical > 0
             && vectorScore >= _options.MinHybridSurfaceVectorScore
             && vectorScore / topVector * (candidate.LexicalScore.Value / topLexical)
