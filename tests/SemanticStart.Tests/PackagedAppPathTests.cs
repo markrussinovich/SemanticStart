@@ -113,6 +113,36 @@ public sealed class PackagedAppPathTests : IDisposable
     }
 
     /// <summary>
+    /// The stub is a stub whether or not a second application shares it. On this machine ZoomIt is
+    /// the only entry pointing at RunUnpackaged.exe, and reporting that path told the user the
+    /// application lives in a file that has nothing to do with it.
+    /// </summary>
+    [Fact]
+    public async Task ResolveExecutable_PrefersTheNamedBinaryEvenWhenOnlyOneApplicationUsesTheStub()
+    {
+        WriteManifest(("ZoomIt", "RunUnpackaged.exe"), ("Autoruns", @"Tools\Autoruns.exe"));
+        Touch(@"Tools\ZoomIt.exe");
+
+        var resolved = await PackageCatalog.ResolveExecutableInAsync(_dir, "ZoomIt");
+
+        Assert.Equal(Path.Combine(_dir, @"Tools\ZoomIt.exe"), resolved);
+    }
+
+    /// <summary>
+    /// The manifest stays authoritative when nothing contradicts it: an application whose id is a
+    /// generic "App" is not evidence of a stub, so its declared executable is still the answer.
+    /// </summary>
+    [Fact]
+    public async Task ResolveExecutable_KeepsTheManifestExecutableWhenNoBetterNamedBinaryExists()
+    {
+        WriteManifest(("App", @"Notepad\Notepad.exe"), ("Other", @"Tools\Other.exe"));
+
+        var resolved = await PackageCatalog.ResolveExecutableInAsync(_dir, "App");
+
+        Assert.Equal(Path.Combine(_dir, @"Notepad\Notepad.exe"), resolved);
+    }
+
+    /// <summary>
     /// The details panel used to show nothing at all for packaged apps, because the only thing the
     /// AppsFolder supplies is an AppUserModelId and that is deliberately never displayed.
     /// </summary>

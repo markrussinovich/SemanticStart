@@ -108,14 +108,25 @@ public static class PackageCatalog
         if (string.IsNullOrWhiteSpace(relative))
             return null;
 
-        // Several applications declaring the same executable means it is a launcher stub that
-        // dispatches on its command line - the Sysinternals Suite starts ZoomIt through a shared
-        // RunUnpackaged.exe. Such a path identifies nothing: showing it would name the wrong file,
-        // and using it as a dedupe key would collapse every application in the package into
-        // whichever one was seen first. Prefer a binary named after the application, and report
-        // nothing at all rather than the stub.
-        if (executables.Values.Count(v => string.Equals(v, relative, StringComparison.OrdinalIgnoreCase)) > 1)
-            return applicationId is null ? null : FindExecutableNamed(installLocation, applicationId);
+        // A launcher stub dispatches on its command line rather than being the program: the
+        // Sysinternals Suite starts ZoomIt through a shared RunUnpackaged.exe. Such a path names
+        // the wrong file in the details panel, and as a dedupe key it would collapse every
+        // application behind the stub into whichever one was seen first. The tell is the file name
+        // not matching the application it claims to be, so in that case prefer a binary that is
+        // named after the application.
+        var shared = executables.Values.Count(v => string.Equals(v, relative, StringComparison.OrdinalIgnoreCase)) > 1;
+        var named = applicationId is not null
+            && !string.Equals(Path.GetFileNameWithoutExtension(relative), applicationId, StringComparison.OrdinalIgnoreCase)
+                ? FindExecutableNamed(installLocation, applicationId)
+                : null;
+
+        if (named is not null)
+            return named;
+
+        // Nothing to fall back to. A stub identifies no single application, so report nothing at
+        // all rather than a path that would be wrong for every one of them.
+        if (shared)
+            return null;
 
         var full = Path.Combine(installLocation, relative.Replace('/', '\\'));
         return File.Exists(full) ? full : null;
