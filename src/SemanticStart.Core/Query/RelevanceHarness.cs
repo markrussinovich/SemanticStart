@@ -47,11 +47,40 @@ public sealed record RelevanceReport
         }
     }
 
+    /// <summary>
+    /// Mean reciprocal rank over the cases that expect a specific result. Pass/fail only asks
+    /// whether the right entry landed inside the allowed window, so two configurations can tie on
+    /// it while one consistently places the answer first and the other consistently places it
+    /// third. A case that finds nothing contributes zero.
+    /// </summary>
+    public double MeanReciprocalRank
+    {
+        get
+        {
+            var ranked = Outcomes.Where(o => o.Case.AcceptableResults.Length > 0).ToArray();
+            if (ranked.Length == 0)
+                return 0;
+
+            return ranked.Sum(o => o.MatchedRank is { } rank ? 1.0 / rank : 0.0) / ranked.Length;
+        }
+    }
+
+    /// <summary>How often the expected result is the very first thing shown.</summary>
+    public double TopOneRate
+    {
+        get
+        {
+            var ranked = Outcomes.Where(o => o.Case.AcceptableResults.Length > 0).ToArray();
+            return ranked.Length == 0 ? 0 : (double)ranked.Count(o => o.MatchedRank == 1) / ranked.Length;
+        }
+    }
+
     public string ToSummary()
     {
         var lines = new List<string>
         {
             $"Relevance: {Passed}/{Total} passed ({PassRate:P0})",
+            $"Ranking:   MRR {MeanReciprocalRank:F3}, top-1 {TopOneRate:P0}",
             $"Latency:   median {MedianLatencyMs:F1} ms, p95 {P95LatencyMs:F1} ms",
         };
 
