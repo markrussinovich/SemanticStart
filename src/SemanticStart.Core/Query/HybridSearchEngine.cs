@@ -217,14 +217,21 @@ public sealed class HybridSearchEngine : ISearchEngine
         for (var rank = 0; rank < lexicalHits.Count; rank++)
         {
             var (entityId, score) = lexicalHits[rank];
-            if (lexicalLeader > 0 && score < lexicalLeader * _options.MinLexicalContributionRatio)
-                continue;
-
             if (!snapshot.IndexById.TryGetValue(entityId, out var index))
                 continue;
 
             var candidate = GetOrAdd(snapshot, candidates, index);
+
+            // The score is recorded even when it is too weak to be paid for, because being unfit
+            // to move a ranking and being absent are not the same fact. Discarding it made the
+            // engine forget that the lexical arm had found the entity at all, so a candidate the
+            // two arms agreed on arrived at the surfacing floors looking like a vector-only guess
+            // and was judged by the stricter bar meant for exactly that.
             candidate.LexicalScore = score;
+
+            if (lexicalLeader > 0 && score < lexicalLeader * _options.MinLexicalContributionRatio)
+                continue;
+
             candidate.LexicalContribution = _options.LexicalArmWeight * LexicalCoverageWeight(snapshot, candidate.Entity, queryTerms)
                 / (_options.RrfK + lexicalRanks[rank] + 1);
             candidate.Score += candidate.LexicalContribution;
@@ -387,7 +394,34 @@ public sealed class HybridSearchEngine : ISearchEngine
         var relativeVector = topVector <= 0
             || vectorScore >= topVector * _options.MinHybridVectorLeaderRatio;
 
-        return vectorScore >= _options.MinHybridSurfaceVectorScore && relativeVector;
+        if (vectorScore >= _options.MinHybridSurfaceVectorScore && relativeVector)
+            return true;
+
+        // Corroboration. Every floor above judges one arm against that arm's leader, which asks
+        // whether this is the best answer by that measure. Two arms independently placing a
+        // candidate at half the leader is a different fact from one arm doing so, and nothing
+        // above can see it: "list processes" retrieved Task Manager at 57% of the best cosine and
+        // 40% of the best BM25 and dropped it for missing 60% and 45% - each floor by a hair, both
+        // of them, on the entity Windows ships for exactly that request.
+        //
+        // The evidence is real and correctly placed. Task Manager's indexed text says "names of
+        // running processes" four times over; what beats it is Tasklist, whose entire summary is
+        // "List running processes and services", and BM25 divides by field length. Raising the
+        // weight of the field holding the longer text does not fix it - swept from 0.75 to 2.0,
+        // the ratio never reached the floor and the corpus never moved - because the leader's
+        // advantage is brevity, not weight.
+        //
+        // So this is stated as agreement rather than as a lower bar: the two ratios must clear a
+        // product, so a candidate weak in one arm has to be correspondingly strong in the other.
+        // A single-token FTS coincidence sitting at the lexical floor with noise-band cosine
+        // yields around 0.13 and stays out; Task Manager yields 0.23.
+        if (topVector > 0 && topLexical > 0
+            && vectorScore >= _options.MinHybridSurfaceVectorScore
+            && vectorScore / topVector * (candidate.LexicalScore.Value / topLexical)
+                >= _options.MinCorroboratedEvidenceProduct)
+            return true;
+
+        return false;
     }
 
     /// <summary>

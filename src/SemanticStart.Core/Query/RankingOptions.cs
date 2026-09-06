@@ -63,6 +63,15 @@ public sealed record RankingOptions
     public double MinHybridVectorLeaderRatio { get; init; } = 0.60;
 
     /// <summary>
+    /// Product of a candidate's two leader ratios - cosine against the best cosine, BM25 against
+    /// the best BM25 - at which agreement between the arms substitutes for clearing either arm's
+    /// own floor. Set from measurement, not intuition: see the corroboration clause in
+    /// HybridSearchEngine.ShouldSurface. Read it as "half the leader in one arm needs about half
+    /// the leader in the other"; a candidate carried by a single-token match cannot reach it.
+    /// </summary>
+    public double MinCorroboratedEvidenceProduct { get; init; } = 0.20;
+
+    /// <summary>
     /// Vector-only hits must stay within this fraction of the best vector similarity for the query.
     /// The bar is deliberately stricter than <see cref="MinHybridVectorLeaderRatio"/>: a hit with no
     /// lexical corroboration is resting on a single signal, so it has to be close to the leader to
