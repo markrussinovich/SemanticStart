@@ -7,7 +7,7 @@ namespace SemanticStart.Core.Enrichment;
 /// Normalizes enrichment payloads before synthesis because embeddings are damaged by chrome,
 /// markup, script, and other transport artifacts that are not user intent vocabulary.
 /// </summary>
-internal static class EnrichmentTextNormalizer
+public static class EnrichmentTextNormalizer
 {
     private const int MaxNormalizedChars = 12 * 1024;
 
@@ -24,8 +24,54 @@ internal static class EnrichmentTextNormalizer
 
         text = Regex.Replace(text, @"(?im)^\s*(html|xml)\s*:\s*", " ");
         text = Regex.Replace(text, @"\b(Skip to main content|Summarize this article for me|In this article|Was this page helpful\??|Feedback|Additional resources|Previous Versions)\b", " ", RegexOptions.IgnoreCase);
+        text = ScrubNonDescriptive(text);
         text = Regex.Replace(text, @"\s+", " ").Trim();
         return text.Length > MaxNormalizedChars ? text[..MaxNormalizedChars] : text;
+    }
+
+    /// <summary>
+    /// Removes tokens that are addresses rather than descriptions: URLs, protocol URIs, file and
+    /// registry paths, GUIDs, and hashes.
+    ///
+    /// Documentation pages are full of these, and they are pure cost in an index. They contribute
+    /// no word a user would ever type, and because the tokenizer splits them into fragments they
+    /// match at random - "ms-settings:signinoptions" becomes evidence for the query "options". The
+    /// Windows settings pages were the worst affected: the Learn article that documents them is a
+    /// two-column table of names and URIs, so entities were being described by a column of
+    /// addresses.
+    ///
+    /// Scrubbing tokens rather than rejecting whole documents is what makes this worth doing. The
+    /// same table also carries the only plain-English statement of what several settings pages are
+    /// for, and a document-level filter throws that away with the noise.
+    /// </summary>
+    public static string ScrubNonDescriptive(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var text = value!;
+
+        text = Regex.Replace(text, @"\b[a-zA-Z][a-zA-Z0-9+.\-]*://\S+", " ");
+        text = Regex.Replace(text, @"\b[\w.+\-]+@[\w\-]+\.[\w.\-]+\b", " ");
+        text = Regex.Replace(text, @"\{?\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b\}?", " ");
+        text = Regex.Replace(text, @"(?i)\bHKEY_[A-Z_]+(?:\\[^\s]+)?", " ");
+        text = Regex.Replace(text, @"(?i)\b(?:HKLM|HKCU|HKCR|HKU)\\[^\s]+", " ");
+        text = Regex.Replace(text, @"\b[a-zA-Z]:\\[^\s]*", " ");
+        text = Regex.Replace(text, @"%[A-Za-z_][A-Za-z0-9_()]*%[^\s]*", " ");
+        text = Regex.Replace(text, @"\b[0-9a-fA-F]{16,}\b", " ");
+
+        // Protocol URIs such as "ms-settings:signinoptions" or "shell:AppsFolder". The scheme must
+        // be lowercase and the remainder unbroken, which is what keeps ordinary prose punctuation
+        // ("Note: the following", "3:30", "Chapter 2: Setup") out of the pattern.
+        text = Regex.Replace(text, @"(?<![\w-])[a-z][a-z0-9+.\-]{1,20}:[^\s]{2,}", " ");
+
+        // Whatever is left behind - empty brackets, stranded separators, doubled stops.
+        text = Regex.Replace(text, @"\(\s*\)|\[\s*\]|\{\s*\}", " ");
+        text = Regex.Replace(text, @"(?:\s*[|·•>/-]\s*){2,}", " ");
+        text = Regex.Replace(text, @"\s+([.,;:])", "$1");
+        text = Regex.Replace(text, @"(?:\.\s*){2,}", ". ");
+
+        return Regex.Replace(text, @"\s+", " ").Trim();
     }
 
     public static string StripHtml(string html)

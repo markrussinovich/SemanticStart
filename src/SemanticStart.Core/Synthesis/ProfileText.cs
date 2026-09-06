@@ -83,8 +83,14 @@ internal static class ProfileText
     /// be read. Documentation pages routinely carry reference tables - one Windows optional feature
     /// came back with a column of "ms-settings:" URIs as its entire description - and indexing that
     /// contributes no vocabulary a user would ever type while adding tokens that match at random.
+    ///
+    /// Public because the same judgement is needed before handing a document to a language model.
+    /// A small model asked to describe Startup Apps from the Learn page that tabulates every
+    /// settings URI dutifully reports that it can "download maps" and "set up a kiosk", because
+    /// those are the neighbouring rows. Filtering the input is far more effective than instructing
+    /// the model to ignore it.
     /// </summary>
-    private static bool IsProse(string text)
+    public static bool IsProse(string text)
     {
         var tokens = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (tokens.Length < 8)
@@ -96,8 +102,29 @@ internal static class ProfileText
             || t.Contains('\\', StringComparison.Ordinal)
             || (t.Length > 14 && t.All(char.IsLower)));
 
-        return (double)identifierLike / tokens.Length < 0.15;
+        if ((double)identifierLike / tokens.Length >= 0.15)
+            return false;
+
+        // A listing is also recognisable by what it lacks. Once the URIs are scrubbed out of that
+        // same reference table what remains is "Default browser settings Manage optional features
+        // Offline Maps Storage Sense" - a column of page titles with no sentence around them.
+        // Function words are the cheapest available evidence that someone wrote this to be read,
+        // and they are the one part of English vocabulary that carries no topic, so requiring a
+        // few of them cannot bias the index toward any subject.
+        var functionWords = tokens.Count(t => FunctionWords.Contains(t.Trim(TokenPunctuation)));
+        return (double)functionWords / tokens.Length >= 0.06;
     }
+
+    private static readonly char[] TokenPunctuation = ['.', ',', ';', ':', '(', ')', '"', '\'', '!', '?'];
+
+    private static readonly HashSet<string> FunctionWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "the", "a", "an", "of", "to", "in", "on", "for", "with", "by", "from", "as", "at", "into",
+        "is", "are", "was", "were", "be", "been", "it", "its", "this", "that", "these", "those",
+        "and", "or", "but", "if", "when", "which", "who", "whose", "you", "your", "their", "them",
+        "can", "will", "would", "should", "may", "not", "than", "then", "there", "such", "each",
+        "any", "all", "more", "most", "other", "between", "about", "over", "up", "out",
+    };
 
     /// <summary>
     /// Cuts at the last sentence boundary before the limit so the field never ends mid-clause.

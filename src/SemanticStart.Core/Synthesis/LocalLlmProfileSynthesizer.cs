@@ -296,6 +296,14 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
         foreach (var kv in entity.RawMetadata.Take(12)) sb.AppendLine($"Metadata {kv.Key}: {kv.Value}");
         foreach (var doc in documents.Take(8))
         {
+            // Online documents are retrieved by title match and are often directory pages that
+            // describe everything except this entity. A reference table has no sentence structure,
+            // which is what the prose test detects; local documents are exempt because a captured
+            // help screen is a usage listing by nature and is still the best evidence there is
+            // about a command-line tool.
+            if (doc.IsOnline && !ProfileText.IsProse(doc.Text))
+                continue;
+
             var text = doc.Text.Length > 1500 ? doc.Text[..1500] : doc.Text;
             sb.AppendLine($"Document from {doc.Provider}: {text}");
         }
