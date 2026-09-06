@@ -284,6 +284,7 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
     private static bool IsUsefulDescriptionLine(string line)
         => line.Length >= 8
            && line.Count(char.IsWhiteSpace) >= 2
+           && !ProfileText.IsListing(line)
            && !line.Contains("copyright", StringComparison.OrdinalIgnoreCase)
            && !line.Contains("all rights reserved", StringComparison.OrdinalIgnoreCase)
            && !line.Contains("Theme Auto Light Dark", StringComparison.OrdinalIgnoreCase)

@@ -69,6 +69,7 @@ internal static class ProfileText
                 continue;
 
             var clean = Regex.Replace(Enrichment.EnrichmentTextNormalizer.ToPlainText(text), @"\s+", " ").Trim();
+            clean = WithoutListings(clean);
             if (clean.Length < 40 || !IsProse(clean))
                 continue;
 
@@ -76,6 +77,21 @@ internal static class ProfileText
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Drops the sentence-shaped runs that are actually columns of labels, keeping the prose around
+    /// them. Applied before the length cap because these listings sit at the top of a documentation
+    /// page, so a capped extract is otherwise made almost entirely of them.
+    /// </summary>
+    private static string WithoutListings(string text)
+    {
+        var kept = text
+            .Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(segment => !IsListing(segment))
+            .ToArray();
+
+        return kept.Length == 0 ? string.Empty : string.Join(". ", kept) + ".";
     }
 
     /// <summary>
@@ -114,6 +130,31 @@ internal static class ProfileText
     }
 
     private static readonly char[] TokenPunctuation = ['.', ',', ';', ':', '(', ')', '"', '\'', '!', '?'];
+
+    /// <summary>
+    /// True when a single line is a run of labels rather than a sentence.
+    ///
+    /// <see cref="IsProse"/> judges a whole document, which lets a page that opens with a
+    /// reference table and then explains itself pass as a unit - and the opening is exactly the
+    /// part a summary takes. The Learn page that tabulates every settings URI did this to 56
+    /// Windows features at once, each of them described as "Default browser settings Manage
+    /// optional features Offline Maps Startup apps Video playback". Every one of those is a real
+    /// page title, none of them is about the feature being described, and no scrubbing of URIs
+    /// helps because the URIs are in the neighbouring column.
+    ///
+    /// Only long lines are judged. A genuine short description - "Browse the web." - has no room
+    /// for function words and needs none, while ten or more words strung together with none of
+    /// them is not something anybody wrote as a sentence.
+    /// </summary>
+    public static bool IsListing(string line)
+    {
+        var tokens = line.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length < 10)
+            return false;
+
+        var functionWords = tokens.Count(t => FunctionWords.Contains(t.Trim(TokenPunctuation)));
+        return (double)functionWords / tokens.Length < 0.06;
+    }
 
     private static readonly HashSet<string> FunctionWords = new(StringComparer.OrdinalIgnoreCase)
     {
