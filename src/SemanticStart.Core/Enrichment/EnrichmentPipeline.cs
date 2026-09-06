@@ -27,6 +27,7 @@ public static class EnricherRegistry
             new CliHelpEnricher(),
             new WingetManifestEnricher(),
             new LearnEnricher(http),
+            new WikipediaEnricher(http),
             new PublisherSiteEnricher(http),
         ];
     }

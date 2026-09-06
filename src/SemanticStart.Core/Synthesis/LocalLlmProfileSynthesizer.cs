@@ -257,6 +257,7 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
             Tasks = CleanList(dto.Tasks),
             Synonyms = CleanList(dto.Synonyms),
             Category = string.IsNullOrWhiteSpace(dto.Category) ? null : dto.Category.Trim(),
+            Details = ProfileText.Details(documents),
             Generator = Generator
         };
     }
@@ -346,7 +347,7 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
         return null;
     }
 
-    private static IReadOnlyList<string> CleanList(IEnumerable<string>? values) => values?.Select(v => Regex.Replace(v.Trim(), @"\s+", " ")).Where(v => v.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(12).ToArray() ?? [];
+    private static IReadOnlyList<string> CleanList(IEnumerable<string>? values) => ProfileText.Distinctive(values, 12);
 
     private static async Task<string?> TestCompletionAsync(HttpClient http, ResolvedEndpoint resolved, CancellationToken cancellationToken)
     {

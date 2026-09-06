@@ -21,11 +21,11 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         var described = BestDescription(entity, documents);
         var summary = BuildSummary(entity, described);
         var category = BuildCategory(entity);
-        var tasks = BuildTasks(entity, documents, described).Distinct(StringComparer.OrdinalIgnoreCase).Take(10).ToArray();
+        var tasks = ProfileText.Distinctive(BuildTasks(entity, documents, described), 10).ToArray();
         var synonyms = BuildSynonyms(entity, documents)
-            .Concat(ActionVerbs(summary))
+            .Concat(ActionVerbs(summary, entity.DisplayName))
             .Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToArray();
-        return Task.FromResult(new SynthesizedProfile { EntityId = entity.Id, Summary = summary, Tasks = tasks, Synonyms = synonyms, Category = category, Generator = Generator });
+        return Task.FromResult(new SynthesizedProfile { EntityId = entity.Id, Summary = summary, Tasks = tasks, Synonyms = synonyms, Category = category, Details = ProfileText.Details(documents), Generator = Generator });
     }
 
     /// <summary>
@@ -38,13 +38,26 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
     ///
     /// This is morphology, not vocabulary: it derives from whatever text the entity actually has
     /// and so applies to programs that did not exist when this was written.
+    ///
+    /// Words belonging to the entity's own name are excluded, because deriving a verb from a name
+    /// is circular - it manufactures evidence of function out of the label alone. Registry Editor
+    /// and Local Group Policy Editor have no harvested description at all, so their summaries are
+    /// the placeholder "Open {name}"; taking "edit" from that made both of them outrank every text
+    /// editor on the machine for "edit a file", despite neither having anything to do with files.
+    /// A description that independently says "video editor" or "code editor" still contributes,
+    /// because that word is evidence rather than a restatement of the name.
     /// </summary>
-    private static IEnumerable<string> ActionVerbs(string text)
+    private static IEnumerable<string> ActionVerbs(string text, string displayName)
     {
+        var nameWords = new HashSet<string>(
+            Regex.Split(displayName ?? string.Empty, @"\W+").Where(w => w.Length > 0).Select(w => w.ToLowerInvariant()),
+            StringComparer.Ordinal);
+
         foreach (var raw in Regex.Split(text, @"\W+"))
         {
             if (raw.Length < 6) continue;
             var word = raw.ToLowerInvariant();
+            if (nameWords.Contains(word)) continue;
             if (!word.EndsWith("er", StringComparison.Ordinal) && !word.EndsWith("or", StringComparison.Ordinal)) continue;
 
             var stem = word[..^2];
@@ -99,7 +112,14 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         // modern and legacy applications on your desktop". Article text remains ahead of shortcut
         // and adjacent-file text, which describe the installation rather than the program, and it
         // is the only useful source for inbox Windows features, which have no packaging entry.
-        foreach (var provider in new[] { "pe-version", "msix-manifest", "winget", "learn", "publisher-site", "local-docs", "shortcut" })
+        //
+        // An encyclopedia lead sits between the two. It is written to explain a thing to someone
+        // who does not know it, so it names capabilities in ordinary words, where vendor
+        // documentation names them in product terms or describes the article instead of the
+        // product. It ranks below the publisher's own manifest, which is authoritative about what
+        // the program is, and above documentation prose.
+        foreach (var provider in new[] { "pe-version", "msix-manifest", "winget", "wikipedia", "learn", "publisher-site", "local-docs", "shortcut" })
+
         {
             var doc = documents.FirstOrDefault(d => d.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase));
             var value = ExtractUsefulLine(doc?.Text);

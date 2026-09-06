@@ -171,7 +171,7 @@ public sealed partial class SqliteIndexStore : IIndexStore
                 SELECT e.id, e.kind, e.display_name, e.launch_kind, e.launch_target,
                        e.launch_arguments, e.icon_source, e.publisher, e.source,
                        e.raw_metadata, e.content_hash, e.vector_ordinal,
-                       p.summary, p.tasks, p.synonyms, p.category, p.generator
+                       p.summary, p.tasks, p.synonyms, p.category, p.generator, p.details
                 FROM entities e
                 LEFT JOIN profiles p ON p.entity_id = e.id
                 ORDER BY e.id;
@@ -205,7 +205,8 @@ public sealed partial class SqliteIndexStore : IIndexStore
                         Tasks = DeserializeList(reader.GetString(13)),
                         Synonyms = DeserializeList(reader.GetString(14)),
                         Category = GetNullableString(reader, 15),
-                        Generator = reader.GetString(16)
+                        Generator = reader.GetString(16),
+                        Details = GetNullableString(reader, 17)
                     };
                 }
 
@@ -244,7 +245,7 @@ public sealed partial class SqliteIndexStore : IIndexStore
             using var cmd = Connection.CreateCommand();
 
             // Per-column BM25 weights, in declaration order:
-            //   entity_id, display_name, summary, tasks, synonyms, publisher
+            //   entity_id, display_name, summary, tasks, synonyms, publisher, details
             //
             // BM25 divides term frequency by document length, so a term landing in a very short
             // field scores enormously. With uniform weights that made the display name the single
@@ -258,11 +259,14 @@ public sealed partial class SqliteIndexStore : IIndexStore
             // in NameMatcher and are fused separately, so lowering this weight costs nothing on
             // "wor" -> Word while removing the false intent matches. entity_id is UNINDEXED and
             // publisher is near-useless for ranking ("Microsoft Corporation" matches everything).
+            // Details is weighted low. It is many sentences of harvested prose, so it is the field
+            // most likely to contain an incidental term; it is here to make a genuinely relevant
+            // entity reachable at all, not to outrank a curated task phrase.
             cmd.CommandText = """
-                SELECT entity_id, -bm25(entities_fts, 0.0, 1.0, 3.0, 5.0, 2.0, 0.25) AS score
+                SELECT entity_id, -bm25(entities_fts, 0.0, 1.0, 3.0, 5.0, 2.0, 0.25, 0.75) AS score
                 FROM entities_fts
                 WHERE entities_fts MATCH $query
-                ORDER BY bm25(entities_fts, 0.0, 1.0, 3.0, 5.0, 2.0, 0.25)
+                ORDER BY bm25(entities_fts, 0.0, 1.0, 3.0, 5.0, 2.0, 0.25, 0.75)
                 LIMIT $limit;
                 """;
             cmd.Parameters.AddWithValue("$query", match);
@@ -491,13 +495,14 @@ public sealed partial class SqliteIndexStore : IIndexStore
         using var cmd = Connection.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO profiles (entity_id, summary, tasks, synonyms, category, generator)
-            VALUES ($entity_id, $summary, $tasks, $synonyms, $category, $generator)
+            INSERT INTO profiles (entity_id, summary, tasks, synonyms, category, details, generator)
+            VALUES ($entity_id, $summary, $tasks, $synonyms, $category, $details, $generator)
             ON CONFLICT(entity_id) DO UPDATE SET
                 summary = excluded.summary,
                 tasks = excluded.tasks,
                 synonyms = excluded.synonyms,
                 category = excluded.category,
+                details = excluded.details,
                 generator = excluded.generator;
             """;
         cmd.Parameters.AddWithValue("$entity_id", profile.EntityId);
@@ -505,6 +510,7 @@ public sealed partial class SqliteIndexStore : IIndexStore
         cmd.Parameters.AddWithValue("$tasks", JsonSerializer.Serialize(profile.Tasks, JsonOptions));
         cmd.Parameters.AddWithValue("$synonyms", JsonSerializer.Serialize(profile.Synonyms, JsonOptions));
         AddNullable(cmd, "$category", profile.Category);
+        AddNullable(cmd, "$details", profile.Details);
         cmd.Parameters.AddWithValue("$generator", profile.Generator);
         cmd.ExecuteNonQuery();
     }
@@ -522,9 +528,9 @@ public sealed partial class SqliteIndexStore : IIndexStore
         using var insert = Connection.CreateCommand();
         insert.Transaction = tx;
         insert.CommandText = """
-            INSERT INTO entities_fts (entity_id, display_name, summary, tasks, synonyms, publisher)
+            INSERT INTO entities_fts (entity_id, display_name, summary, tasks, synonyms, publisher, details)
             SELECT e.id, e.display_name, COALESCE(p.summary, ''), COALESCE(p.tasks, '[]'),
-                   COALESCE(p.synonyms, '[]'), COALESCE(e.publisher, '')
+                   COALESCE(p.synonyms, '[]'), COALESCE(e.publisher, ''), COALESCE(p.details, '')
             FROM entities e
             LEFT JOIN profiles p ON p.entity_id = e.id
             WHERE e.id = $id;

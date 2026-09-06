@@ -15,8 +15,12 @@ public static class IndexSchema
     /// exact surface forms, so "edit a file" could not reach a profile that says "code editor" and
     /// "record a video" could not reach one that says "recording". Stemming is applied to both the
     /// indexed text and the query, so the two always agree.
+    /// v4 added a details column carrying bounded prose from the best harvested document. Profiles
+    /// previously kept only a one-line summary, so text like Wikipedia's "forcibly terminate
+    /// processes" was fetched, used to pick a single sentence, and then thrown away - which is why
+    /// Task Manager could not be found by "kill a process" no matter how good the enrichment was.
     /// </remarks>
-    public const int Version = 3;
+    public const int Version = 4;
 
     public static void Initialize(SqliteConnection connection)
     {
@@ -76,6 +80,7 @@ public static class IndexSchema
                 tasks     TEXT NOT NULL DEFAULT '[]',
                 synonyms  TEXT NOT NULL DEFAULT '[]',
                 category  TEXT,
+                details   TEXT,
                 generator TEXT NOT NULL
             );
 
@@ -97,6 +102,7 @@ public static class IndexSchema
                 tasks,
                 synonyms,
                 publisher,
+                details,
                 tokenize = 'porter unicode61 remove_diacritics 2'
             );
             """);

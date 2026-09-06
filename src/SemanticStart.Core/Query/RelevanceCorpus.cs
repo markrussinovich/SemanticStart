@@ -200,7 +200,7 @@ public static class RelevanceCorpus
         {
             Query = "kill a process",
             AcceptableResults = ["Task Manager", "Taskkill", "Process Explorer"],
-            Rationale = "Process Explorer was absent because its article body was discarded, leaving only 'Open Process Explorer.'",
+            Rationale = "Any of the process-ending tools is a good answer; the command-line one leading is fine. This case exists to catch the state where none of them are reachable by intent at all.",
         },
         new()
         {
@@ -218,9 +218,16 @@ public static class RelevanceCorpus
         },
         new()
         {
+            Query = "end a frozen app",
+            AcceptableResults = ["Task Manager", "Taskkill"],
+            Rationale = "Second phrasing of the same intent, sharing no words with the first, so a fix cannot be a single lucky vocabulary overlap. Either process-ending tool is a good answer.",
+        },
+        new()
+        {
             Query = "edit a file",
             AcceptableResults = ["Notepad", "Visual Studio Code", "WordPad"],
-            Rationale = "VS Code was summarised by its LICENSE file, so nothing in its text said 'editor'.",
+            ForbiddenResults = ["Registry Editor", "Local Group Policy Editor"],
+            Rationale = "VS Code was summarised by its LICENSE file, so nothing in its text said 'editor'. The forbidden entries edit a specific system store rather than files, and were matching purely because '-editor' yields the verb 'edit'; the object of the query has to count for something.",
         },
         new()
         {
@@ -333,9 +340,10 @@ public static class RelevanceCorpus
         new()
         {
             Query = "create presentation",
+            AcceptableResults = ["PowerPoint"],
+            WithinTopN = 1,
             ForbiddenResults = ["Notepad", "Hyper-V", "Scheduled Tasks", "Claude"],
-            MaxResults = 1,
-            Rationale = "Current PowerPoint fallback text does not mention presentations, so generic 'create' matches must be suppressed.",
+            Rationale = "PowerPoint must lead. The original form of this case instead capped the result list at one, which failed even when PowerPoint ranked first, because a second plausible entry followed it; that asserted a property of the pruner rather than of the ranking, and the forbidden list already covers the results that would be genuinely wrong.",
         },
         new()
         {

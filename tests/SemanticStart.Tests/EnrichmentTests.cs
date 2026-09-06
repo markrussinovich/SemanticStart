@@ -111,6 +111,67 @@ public sealed class EnrichmentTests
         Assert.DoesNotContain(profile.Tasks, t => t.Contains("quick notes", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task Details_CarryCapabilityVocabularyFromHarvestedProse()
+    {
+        var entity = CreateEntity("Task Manager", EntityKind.Application, "taskmgr.exe");
+        var wikipedia = "Task Manager is a task manager, system monitor, and startup manager included with Microsoft Windows. "
+                        + "It can be used to set process priorities, start and stop services, and forcibly terminate processes.";
+
+        var profile = await new HeuristicProfileSynthesizer().SynthesizeAsync(
+            entity,
+            [new EnrichmentDocument { EntityId = entity.Id, Provider = "wikipedia", IsOnline = true, Text = wikipedia }]);
+
+        // The summary is one sentence by design, so without a details field the words that make an
+        // entity findable are harvested and then discarded.
+        Assert.NotNull(profile.Details);
+        Assert.Contains("terminate processes", profile.Details!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Details_RejectMachineReadableListings()
+    {
+        var entity = CreateEntity("Windows Notepad System", EntityKind.OptionalFeature, "notepad");
+        var uriDump = "Default browser settings ms-settings:defaultbrowsersettings Manage optional features "
+                      + "ms-settings:optionalfeatures Offline Maps ms-settings:maps ms-settings:maps-downloadmaps "
+                      + "Storage Sense ms-settings:storagesense Sign-in options ms-settings:signinoptions";
+
+        var profile = await new HeuristicProfileSynthesizer().SynthesizeAsync(
+            entity,
+            [new EnrichmentDocument { EntityId = entity.Id, Provider = "learn", IsOnline = true, Text = uriDump }]);
+
+        // A reference table contributes no vocabulary a user would type, while adding tokens that
+        // match at random.
+        Assert.Null(profile.Details);
+    }
+
+    [Fact]
+    public async Task ActionVerbs_AreNotDerivedFromTheEntityName()
+    {
+        var entity = CreateEntity("Registry Editor", EntityKind.Application, "regedit.exe");
+
+        // No enrichment succeeded, so the summary is the generated "Open {name}" placeholder.
+        var profile = await new HeuristicProfileSynthesizer().SynthesizeAsync(entity, []);
+
+        // Deriving "edit" from the name manufactures evidence of function out of the label alone,
+        // and made Registry Editor outrank every text editor on the machine for "edit a file".
+        Assert.DoesNotContain("edit", profile.Synonyms, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ActionVerbs_AreStillDerivedFromIndependentDescriptions()
+    {
+        var entity = CreateEntity("Clipchamp", EntityKind.Application, "clipchamp.exe");
+
+        var profile = await new HeuristicProfileSynthesizer().SynthesizeAsync(
+            entity,
+            [new EnrichmentDocument { EntityId = entity.Id, Provider = "winget", IsOnline = true, Text = "Online video editor by Microsoft." }]);
+
+        // "editor" here is evidence rather than a restatement of the name, so the verb it implies
+        // is exactly the vocabulary bridge the synonyms field exists to provide.
+        Assert.Contains("edit", profile.Synonyms, StringComparer.OrdinalIgnoreCase);
+    }
+
     private static Entity CreateEntity(string name, EntityKind kind, string target) => new()
     {
         Id = "test:" + target,

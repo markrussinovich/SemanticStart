@@ -48,6 +48,15 @@ public sealed record SynthesizedProfile
     public string? Category { get; init; }
 
     /// <summary>
+    /// Bounded prose from the best document harvested for this entity, describing what it can
+    /// actually do. The summary is deliberately one sentence, which is right for display but drops
+    /// almost all of the capability vocabulary the enrichers worked to find; this keeps a little of
+    /// it for retrieval. It is evidence rather than generated text, so it is populated the same way
+    /// whether or not a language model is available.
+    /// </summary>
+    public string? Details { get; init; }
+
+    /// <summary>
     /// Which generator produced this. "llm:{model}" when synthesized, or "fallback" when the
     /// generative model was unavailable and we degraded to raw documentation.
     /// </summary>
@@ -71,6 +80,9 @@ public sealed record SynthesizedProfile
 
         if (Synonyms.Count > 0)
             parts.Add(string.Join(", ", Synonyms));
+
+        if (!string.IsNullOrWhiteSpace(Details))
+            parts.Add(Details!);
 
         if (!string.IsNullOrWhiteSpace(entity.Publisher))
             parts.Add(entity.Publisher!);

@@ -108,15 +108,118 @@ public sealed class WingetManifestEnricher : IEnricher
         return null;
     }
 
+    /// <summary>
+    /// Decides whether a winget search hit is really this entity's package.
+    ///
+    /// Matching is on whole words rather than substrings. Substring containment silently attached
+    /// third-party lookalikes to inbox tools: Windows' own Notepad matched a package called
+    /// "SkyNotepad" by an unrelated author, and every description, tag, and task on the Notepad
+    /// entry then came from that clone - which is why "edit a file" could not find the real Notepad.
+    /// Identifiers are split only on punctuation, never on case. Splitting "SkyNotepad" into "sky"
+    /// and "notepad" reintroduces exactly the false match, and buys nothing: winget reports a
+    /// separate, already-tokenised name column, so a genuine package is matched through that.
+    /// </summary>
     private static bool IsPlausibleMatch(Entity entity, string name, string id)
     {
-        var normalizedName = NormalizeForMatch(entity.DisplayName);
-        var haystack = NormalizeForMatch(name + " " + id);
-        if (normalizedName.Length >= 4 && haystack.Contains(normalizedName, StringComparison.Ordinal))
+        var wanted = NormalizeForMatch(entity.DisplayName)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(t => t.Length >= 3)
+            .ToArray();
+
+        if (wanted.Length == 0)
+            return false;
+
+        var candidate = new HashSet<string>(
+            NormalizeForMatch(name + " " + id.Replace('.', ' '))
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries),
+            StringComparer.Ordinal);
+
+        return wanted.All(candidate.Contains) && PublisherAgrees(entity, id);
+    }
+
+    /// <summary>
+    /// Requires the package's vendor to be the entity's vendor, when the machine already told us
+    /// who that is. Name matching alone cannot separate an inbox tool from the third-party programs
+    /// named after it, and winget has no entry for most inbox tools, so every candidate it returns
+    /// for one is wrong by construction: Windows Notepad matched "SkyNotepad" and then "Notepad++",
+    /// each of which then supplied Notepad's description, tags, and tasks.
+    ///
+    /// A winget identifier is "Publisher.Package", and the entity's publisher comes from its own
+    /// MSIX manifest or version resource, so both sides are authoritative. Comparison is on
+    /// normalised text with legal suffixes removed, so "Microsoft Corporation" still matches
+    /// "Microsoft" and "AgileBits" still matches "Agile Bits".
+    /// </summary>
+    private static bool PublisherAgrees(Entity entity, string id)
+    {
+        var publisher = PublisherHint(entity);
+        if (string.IsNullOrWhiteSpace(publisher))
             return true;
 
-        var tokens = normalizedName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(t => t.Length >= 4).ToArray();
-        return tokens.Length > 0 && tokens.All(t => haystack.Contains(t, StringComparison.Ordinal));
+        var separator = id.IndexOf('.');
+        if (separator <= 0)
+            return true;
+
+        var declared = NormalizePublisher(publisher!);
+        var packaged = NormalizePublisher(id[..separator]);
+
+        // Once the vendor is known, a package whose vendor segment does not correspond to it is a
+        // different product regardless of how short that segment is. Treating a brief segment as
+        // "no evidence" and passing was how "ndd.Notepad--" attached itself to Windows Notepad.
+        if (declared.Length < 4 || packaged.Length < 2)
+            return true;
+
+        return declared.Contains(packaged, StringComparison.Ordinal)
+               || packaged.Contains(declared, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The entity's vendor, taken from its declared publisher or, failing that, from the leading
+    /// segment of its MSIX package family name - "Microsoft.WindowsNotepad_8wekyb3d8bbwe" is
+    /// published by Microsoft. Shell-enumerated applications carry no publisher field, which is
+    /// most of the ones that need this check, so the identity string is the only signal available.
+    ///
+    /// Publisher-hash style segments are ignored: some packages use an opaque account id
+    /// ("dc5c6510.2032887045529") that names no vendor, and treating it as one would reject
+    /// perfectly good matches.
+    /// </summary>
+    private static string? PublisherHint(Entity entity)
+    {
+        if (!string.IsNullOrWhiteSpace(entity.Publisher))
+            return entity.Publisher;
+
+        // Only a package identity names a publisher. A file system path does not: reading the
+        // leading segment of "powerpoint.lnk" as a vendor made PowerPoint disagree with
+        // "Microsoft.PowerPoint" and lose a correct match.
+        var identity = entity.RawMetadata.GetValueOrDefault("packageFamilyName")
+                       ?? entity.RawMetadata.GetValueOrDefault("appUserModelId");
+
+        if (string.IsNullOrWhiteSpace(identity) && entity.Id.StartsWith("appsfolder:", StringComparison.OrdinalIgnoreCase))
+            identity = entity.Id["appsfolder:".Length..];
+
+        if (string.IsNullOrWhiteSpace(identity))
+            return null;
+
+        var trimmed = identity!.Split('!')[0];
+        var separator = trimmed.IndexOf('.');
+        if (separator <= 0)
+            return null;
+
+        var segment = trimmed[..separator];
+        if (segment.Count(char.IsLetter) < 4 || segment.Any(char.IsDigit))
+            return null;
+
+        return segment;
+    }
+
+    private static string NormalizePublisher(string value)
+    {
+        var stripped = Regex.Replace(
+            value,
+            @"\b(corporation|corp|incorporated|inc|limited|ltd|llc|gmbh|team|software|technologies|company|co)\b",
+            string.Empty,
+            RegexOptions.IgnoreCase);
+
+        return new string(stripped.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
     }
 
     private static string NormalizeForMatch(string value)
@@ -224,9 +327,14 @@ public sealed class WingetManifestEnricher : IEnricher
 public sealed class LearnEnricher : IEnricher
 {
     private readonly HttpClient _http;
+    private readonly LearnTocCatalog _toc;
     public string Provider => "learn";
     public bool RequiresNetwork => true;
-    public LearnEnricher(HttpClient? http = null) => _http = http ?? new HttpClient();
+    public LearnEnricher(HttpClient? http = null)
+    {
+        _http = http ?? new HttpClient();
+        _toc = new LearnTocCatalog(_http);
+    }
     /// <summary>
     /// Learn documents Windows features and a great many first-party tools. Applications were
     /// excluded, which silently ruled out precisely the tools users cannot name: every Sysinternals
@@ -249,8 +357,20 @@ public sealed class LearnEnricher : IEnricher
             // article was one query away.
             var candidates = new List<(int Tier, LearnResult Result)>();
             var neighbourhood = new List<string>();
+
+            // The publisher's own table of contents is consulted first and trusted above anything
+            // search returns: an exact title match in a docset is a statement that this article is
+            // about this tool, whereas a search hit is a guess. This is the only path that finds
+            // Task Manager and much of Sysinternals at all.
+            var tocUrl = await _toc.FindAsync(entity.DisplayName, TocAliases(entity), cancellationToken).ConfigureAwait(false);
+            if (tocUrl is not null)
+                candidates.Add((SlugTier + 1, new LearnResult(entity.DisplayName, null, tocUrl)));
+
             foreach (var query in BuildQueries(entity).Distinct(StringComparer.OrdinalIgnoreCase).Take(4))
             {
+                if (candidates.Count > 0)
+                    break;
+
                 var uri = "https://learn.microsoft.com/api/search?locale=en-us&$top=5&search=" + Uri.EscapeDataString(query);
                 var json = await CachedHttp.GetStringAsync(_http, uri, TimeSpan.FromSeconds(6), cancellationToken).ConfigureAwait(false);
                 if (string.IsNullOrWhiteSpace(json))
@@ -313,6 +433,26 @@ public sealed class LearnEnricher : IEnricher
         return [];
     }
 
+    /// <summary>
+    /// Extra names to look up in the table of contents. Collectors often report a tool by its
+    /// executable ("taskmgr.exe") or by a suite display name, while the TOC titles it as the
+    /// product, so the file name without extension is tried as well.
+    /// </summary>
+    private static IEnumerable<string> TocAliases(Entity entity)
+    {
+        var file = entity.RawMetadata.GetValueOrDefault("fileName") ?? Path.GetFileName(entity.LaunchTarget);
+        if (!string.IsNullOrWhiteSpace(file))
+        {
+            yield return file;
+            var bare = Path.GetFileNameWithoutExtension(file);
+            if (!string.IsNullOrWhiteSpace(bare))
+                yield return bare;
+        }
+
+        if (entity.RawMetadata.TryGetValue("featureName", out var feature) && !string.IsNullOrWhiteSpace(feature))
+            yield return feature.Replace('-', ' ');
+    }
+
     private async Task<string?> FetchArticleExcerptAsync(string? url, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || !uri.Host.Equals("learn.microsoft.com", StringComparison.OrdinalIgnoreCase))
@@ -341,6 +481,49 @@ public sealed class LearnEnricher : IEnricher
 
         return parts.Count == 0 ? null : string.Join(" ", parts);
     }
+
+    /// <summary>
+    /// Section headings from a documentation page, which are the closest thing the web offers to a
+    /// list of what a tool can do. Prose describes a product; headings name its operations - "End
+    /// task", "Manage startup apps", "Analyze wait chain" - in the imperative form a user actually
+    /// types. Meta descriptions frequently describe the *article* rather than the tool ("Describes
+    /// the features of Task Manager and provides examples..."), which contributes no task
+    /// vocabulary at all, so the headings often carry the only usable signal on the page.
+    /// </summary>
+    private static string[] SectionHeadings(string html)
+    {
+        var results = new List<string>();
+        foreach (Match match in Regex.Matches(html, @"<h[23][^>]*>(.*?)</h[23]>", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+        {
+            var text = EnrichmentTextNormalizer.ToPlainText(match.Groups[1].Value).Trim().TrimEnd('.', ':');
+            if (text.Length is < 3 or > 70)
+                continue;
+
+            if (NavigationHeadings.Contains(text))
+                continue;
+
+            if (!results.Contains(text, StringComparer.OrdinalIgnoreCase))
+                results.Add(text);
+
+            if (results.Count == 12)
+                break;
+        }
+
+        return [.. results];
+    }
+
+    /// <summary>
+    /// Headings that are part of every documentation page's furniture rather than anything about
+    /// the tool being documented.
+    /// </summary>
+    private static readonly HashSet<string> NavigationHeadings = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "In this article", "See also", "Next steps", "Related articles", "Related content",
+        "Prerequisites", "Requirements", "Feedback", "Additional resources", "References",
+        "Applies to", "Summary", "Overview", "Introduction", "Remarks", "Examples", "Syntax",
+        "Parameters", "Notes", "Table of contents", "More information", "Symptoms", "Cause",
+        "Resolution", "Comments", "Contents", "Disclaimer", "Data collection", "Recommended content",
+    };
 
     private static string? StructuredDescription(string html, string? title)
     {
