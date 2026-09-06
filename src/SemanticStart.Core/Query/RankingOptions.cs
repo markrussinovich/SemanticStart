@@ -16,6 +16,14 @@ public sealed record RankingOptions
     /// </summary>
     public double RrfK { get; init; } = 60.0;
 
+    /// <summary>
+    /// How close two scores within one arm have to be before that arm is treated as expressing no
+    /// preference between them and they share a rank. Fusion reads position as preference, so
+    /// without this a hairline margin buys a whole rank of credit while a decisive margin in the
+    /// other arm is flattened away.
+    /// </summary>
+    public double RankTierTolerance { get; init; } = 0.05;
+
     public double VectorArmWeight { get; init; } = 1.0;
 
     public double LexicalArmWeight { get; init; } = 1.0;

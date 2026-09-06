@@ -153,6 +153,34 @@ public sealed class HybridSearchEngine : ISearchEngine
         return results;
     }
 
+    /// <summary>
+    /// Reciprocal-rank fusion reads a position as a preference, which is only true where the arm
+    /// actually preferred one row to another. Registry Editor beat Notepad for "file edit" on a two
+    /// per cent lexical margin - a full rank of credit - while giving up a twenty-eight per cent
+    /// semantic margin that rank threw away. Rows whose scores sit within a tolerance of each other
+    /// share a position, so an arm that barely distinguishes two candidates stops casting a vote
+    /// between them and the arm that does distinguish them decides.
+    /// </summary>
+    private int[] TieredRanks(double[] scoresInRankOrder)
+    {
+        var ranks = new int[scoresInRankOrder.Length];
+        var tier = 0;
+        var leader = scoresInRankOrder.Length > 0 ? scoresInRankOrder[0] : 0;
+
+        for (var i = 0; i < scoresInRankOrder.Length; i++)
+        {
+            if (i > 0 && scoresInRankOrder[i] < leader * (1.0 - _options.RankTierTolerance))
+            {
+                tier = i;
+                leader = scoresInRankOrder[i];
+            }
+
+            ranks[i] = tier;
+        }
+
+        return ranks;
+    }
+
     private List<Candidate> Fuse(
         Snapshot snapshot,
         string query,
@@ -160,6 +188,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         IReadOnlyList<(string EntityId, double Score)> lexicalHits)
     {
         var candidates = new Dictionary<string, Candidate>(StringComparer.Ordinal);
+        var vectorRanks = TieredRanks([.. vectorHits.Select(h => h.Score)]);
 
         for (var rank = 0; rank < vectorHits.Count; rank++)
         {
@@ -169,7 +198,7 @@ public sealed class HybridSearchEngine : ISearchEngine
 
             var candidate = GetOrAdd(snapshot, candidates, index);
             candidate.VectorScore = score;
-            candidate.VectorContribution = _options.VectorArmWeight / (_options.RrfK + rank + 1)
+            candidate.VectorContribution = _options.VectorArmWeight / (_options.RrfK + vectorRanks[rank] + 1)
                 + _options.VectorMagnitudeWeight * score;
             candidate.Score += candidate.VectorContribution;
         }
@@ -183,6 +212,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         // vector or literal arms on their own merit.
         var lexicalLeader = lexicalHits.Count > 0 ? lexicalHits.Max(h => h.Score) : 0;
         var queryTerms = ContentTerms(query);
+        var lexicalRanks = TieredRanks([.. lexicalHits.Select(h => h.Score)]);
 
         for (var rank = 0; rank < lexicalHits.Count; rank++)
         {
@@ -196,7 +226,7 @@ public sealed class HybridSearchEngine : ISearchEngine
             var candidate = GetOrAdd(snapshot, candidates, index);
             candidate.LexicalScore = score;
             candidate.LexicalContribution = _options.LexicalArmWeight * LexicalCoverageWeight(snapshot, candidate.Entity, queryTerms)
-                / (_options.RrfK + rank + 1);
+                / (_options.RrfK + lexicalRanks[rank] + 1);
             candidate.Score += candidate.LexicalContribution;
         }
 
@@ -411,9 +441,8 @@ public sealed class HybridSearchEngine : ISearchEngine
             return 0;
 
         // Logarithmic so the 1st launch matters far more than the 51st.
-        var frequency = Math.Min(
-            _options.MaxFrequencyBoost,
-            Math.Log(1 + stats.LaunchCount) / Math.Log(50) * _options.MaxFrequencyBoost);
+        var familiarity = Math.Min(1.0, Math.Log(1 + stats.LaunchCount) / Math.Log(50));
+        var frequency = familiarity * _options.MaxFrequencyBoost;
 
         var recency = 0.0;
         if (stats.LastLaunchedAt is { } last)
@@ -422,7 +451,14 @@ public sealed class HybridSearchEngine : ISearchEngine
             if (age >= TimeSpan.Zero)
             {
                 var halfLives = age.TotalSeconds / _options.RecencyHalfLife.TotalSeconds;
-                recency = _options.MaxRecencyBoost * Math.Pow(0.5, halfLives);
+
+                // Recency is scaled by familiarity as well as by age. Opened once and never again
+                // is not a habit, and it was being paid almost the full boost: a single launch of
+                // the registry editor earlier the same day was worth a fifth of a result's whole
+                // score, enough to put it above the text editor the semantic arm preferred by a
+                // wide margin for "file edit". Being the last thing you opened only means something
+                // among things you actually open.
+                recency = _options.MaxRecencyBoost * familiarity * Math.Pow(0.5, halfLives);
             }
         }
 
