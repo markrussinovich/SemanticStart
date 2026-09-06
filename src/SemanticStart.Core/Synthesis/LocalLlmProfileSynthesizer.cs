@@ -101,9 +101,13 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
                 return new LocalLlmConnectionResult(false, null, null, "No OpenAI-compatible local LLM endpoint responded.");
 
             var completion = await TestCompletionAsync(http, resolved, cancellationToken).ConfigureAwait(false);
-            return string.IsNullOrWhiteSpace(completion)
-                ? new LocalLlmConnectionResult(false, resolved.Endpoint.ToString().TrimEnd('/'), resolved.ModelName, $"Connected to {resolved.Endpoint}, but {resolved.ModelName} did not complete a test prompt.")
-                : new LocalLlmConnectionResult(true, resolved.Endpoint.ToString().TrimEnd('/'), resolved.ModelName, $"Generated a test completion with {resolved.ModelName}.");
+            if (string.IsNullOrWhiteSpace(completion))
+                return new LocalLlmConnectionResult(false, resolved.Endpoint.ToString().TrimEnd('/'), resolved.ModelName, $"Connected to {resolved.Endpoint}, but {resolved.ModelName} did not complete a test prompt.");
+
+            if (!IsCoherentProbeResponse(completion))
+                return new LocalLlmConnectionResult(false, resolved.Endpoint.ToString().TrimEnd('/'), resolved.ModelName, $"{resolved.ModelName} responded but did not follow the test prompt, which means a broken or mismatched build: \"{Excerpt(completion)}\". Pick another model or runtime.");
+
+            return new LocalLlmConnectionResult(true, resolved.Endpoint.ToString().TrimEnd('/'), resolved.ModelName, $"Generated a test completion with {resolved.ModelName}.");
         }
         finally
         {
@@ -356,6 +360,39 @@ public sealed class LocalLlmProfileSynthesizer : IProfileSynthesizer
     }
 
     private static IReadOnlyList<string> CleanList(IEnumerable<string>? values) => ProfileText.Distinctive(values, 12);
+
+    /// <summary>
+    /// True when a reply to the "Reply with exactly: OK" probe shows the model is actually
+    /// following instructions, rather than merely returning bytes.
+    ///
+    /// Checking only that a response was non-empty is not enough. A Foundry Local CUDA build of
+    /// qwen2.5-7b on the development machine reported itself ready and answered every request, but
+    /// emitted token salad - "\u0e40\u0e02\u0e49\u0e32\u0e21\u0e32yenyenyen a a a laptop laptop's's power power" - for any prompt.
+    /// Connection testing passed, so the model was selectable in Settings, and the damage only
+    /// became visible after a nine-minute index run had written the garbage into every profile.
+    /// A model too broken to say OK cannot write usable descriptions, and failing here costs a
+    /// second where failing later costs the whole index.
+    /// </summary>
+    public static bool IsCoherentProbeResponse(string? completion)
+    {
+        if (string.IsNullOrWhiteSpace(completion))
+            return false;
+
+        // A compliant answer is "OK", possibly quoted, punctuated, or wrapped in a short pleasantry.
+        // Anything much longer is not following an instruction this explicit, and the degenerate
+        // outputs seen in practice were both long and repetitive.
+        var trimmed = completion.Trim();
+        return trimmed.Length <= MaxProbeResponseLength
+            && trimmed.Contains("ok", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private const int MaxProbeResponseLength = 40;
+
+    private static string Excerpt(string text)
+    {
+        var collapsed = text.Trim().ReplaceLineEndings(" ");
+        return collapsed.Length <= 60 ? collapsed : collapsed[..60] + "...";
+    }
 
     private static async Task<string?> TestCompletionAsync(HttpClient http, ResolvedEndpoint resolved, CancellationToken cancellationToken)
     {
