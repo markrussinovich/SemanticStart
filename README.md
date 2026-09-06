@@ -121,6 +121,20 @@ Synthesis runs **once, at index time**, never on the query path. Expect roughly 
 typical ~470-entity index with a 1–2B CPU model. Every entity has a timeout and falls back to the
 heuristic profile, so a slow or missing model degrades quality without ever breaking the build.
 
+Because synthesis happens at index time, **this setting describes the next build, not the index you
+are currently searching.** An index whose descriptions were written by a model keeps them after the
+setting is switched to `Off`; only a rebuild replaces them. Settings shows what actually wrote the
+descriptions on the **Last index generator** line, and `SemanticStart.Cli stats` reports the same
+breakdown. Rebuilding with synthesis off when the current index was model-written asks for
+confirmation first, because the change is otherwise silent and only another full model run undoes it.
+
+The difference is visible rather than theoretical. On a ~550-entity index, `create and edit files`
+returns *Files — "Files is a Microsoft 365 companion app that helps manage and access your files"*
+first with model-written descriptions, versus *Notepad, Paint, Recovery Drive* first with the
+heuristics, where the same entry reads only *"Open Files."* Both configurations score 50/55 on the
+relevance corpus, so the corpus alone does not capture this: it scores whether the right entry is
+retrieved, not how the result reads or how the near-ties order.
+
 ### The CLI
 
 `SemanticStart.Cli` is a diagnostic front end over the same engine:
