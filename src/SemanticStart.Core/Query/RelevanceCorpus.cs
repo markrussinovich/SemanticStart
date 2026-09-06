@@ -41,6 +41,22 @@ public sealed record RelevanceCase
     /// <summary>Rank the expected result must appear within.</summary>
     public int WithinTopN { get; init; } = 3;
 
+    /// <summary>
+    /// Number of trailing characters that may be removed from the query without changing the
+    /// answer. The overlay searches on every keystroke, so a user does not see one result for a
+    /// query - they see the sequence of results for every prefix of it, and a result that appears,
+    /// vanishes and reappears as a word is finished reads as broken even when the final answer is
+    /// right. Reported exactly that way: "it still changes the results between 'process',
+    /// 'processe' and 'processes'".
+    ///
+    /// Set this and the harness re-runs the case for each shortened query, asserting the same
+    /// recall and the same required results. It is opt-in because it is not universally true: one
+    /// character less of "wor" is "wo", and a two-letter prefix legitimately means something else.
+    /// It belongs on cases whose query is a phrase, where the last few characters finish a word
+    /// the rest of the query has already established.
+    /// </summary>
+    public int StableTrailingCharacters { get; init; }
+
     /// <summary>What this case is protecting, shown when it fails.</summary>
     public string? Rationale { get; init; }
 }
@@ -86,7 +102,8 @@ public static class RelevanceCorpus
             AcceptableResults = ["Tasklist", "Task Manager", "Sysinternals PsList", "PsList", "Process Explorer", "Sysinternals Process Explorer"],
             RequiredResults = ["Task Manager"],
             WithinTopN = 3,
-            Rationale = "Reported as missing Task Manager. The command-line tools answer it and may lead, but the program Windows ships for looking at running processes has to be in the list. It was retrieved by both arms and rejected by both floors by a hair - 57% of the best cosine against 60%, 40% of the best BM25 against 45% - because BM25 divides by field length and Tasklist's whole summary is 'List running processes and services' while Task Manager's evidence is a sentence inside a paragraph. Raising the weight of the field holding that paragraph does not help; agreement between the arms is what distinguishes it.",
+            StableTrailingCharacters = 2,
+            Rationale = "Reported as missing Task Manager. The command-line tools answer it and may lead, but the program Windows ships for looking at running processes has to be in the list. It was retrieved by both arms and rejected by both floors by a hair - 57% of the best cosine against 60%, 40% of the best BM25 against 45% - because BM25 divides by field length and Tasklist's whole summary is 'List running processes and services' while Task Manager's evidence is a sentence inside a paragraph. Raising the weight of the field holding that paragraph does not help; agreement between the arms is what distinguishes it. Also reported as unstable while typing, which is why the last two characters are asserted: the lexical arm folds 'process', 'processe' and 'processes' to identical results, so any difference between them came from cosine floors, which a half-typed word moves.",
         },
         new()
         {

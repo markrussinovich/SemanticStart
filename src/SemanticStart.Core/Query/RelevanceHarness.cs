@@ -11,6 +11,9 @@ public sealed record RelevanceOutcome
     public required string[] ActualTop { get; init; }
     public int? MatchedRank { get; init; }
     public double ElapsedMs { get; init; }
+
+    /// <summary>The shortened query that answered differently, or null when typing was stable.</summary>
+    public string? UnstablePrefix { get; init; }
 }
 
 public sealed record RelevanceReport
@@ -107,6 +110,8 @@ public sealed record RelevanceReport
                     lines.Add($"    max results: {max}");
 
                 lines.Add($"    actual: {(f.ActualTop.Length == 0 ? "(no results)" : string.Join(" > ", f.ActualTop))}");
+                if (f.UnstablePrefix is { } prefix)
+                    lines.Add($"    unstable while typing: \"{prefix}\" answers differently");
                 if (f.Case.Rationale is { } r)
                     lines.Add($"    guards: {r}");
             }
@@ -163,17 +168,54 @@ public sealed class RelevanceHarness(ISearchEngine engine)
             var forbiddenPassed = !names.Any(n => testCase.ForbiddenResults.Any(f => IsForbiddenMatch(n, f)));
             var requiredPassed = testCase.RequiredResults.All(r => names.Any(n => IsMatch(n, r)));
 
+            var unstablePrefix = await FindUnstablePrefixAsync(testCase, cancellationToken).ConfigureAwait(false);
+
             outcomes.Add(new RelevanceOutcome
             {
                 Case = testCase,
-                Passed = recallPassed && noResultsPassed && maxResultsPassed && forbiddenPassed && requiredPassed,
+                Passed = recallPassed && noResultsPassed && maxResultsPassed && forbiddenPassed && requiredPassed
+                    && unstablePrefix is null,
                 ActualTop = [.. names.Take(5)],
                 MatchedRank = matchedRank,
                 ElapsedMs = sw.Elapsed.TotalMilliseconds,
+                UnstablePrefix = unstablePrefix,
             });
         }
 
         return new RelevanceReport { Outcomes = outcomes };
+    }
+
+    /// <summary>
+    /// The longest prefix of the query that answers it differently, or null when every prefix
+    /// covered by <see cref="RelevanceCase.StableTrailingCharacters"/> agrees with the whole.
+    /// Only the assertions the case already makes are re-checked: whether an acceptable answer
+    /// is still within the window, and whether the required answers are all still present.
+    /// Exact ordering is deliberately not compared, because it is normal and harmless for the
+    /// order to firm up as a query is completed. What is not normal is an answer disappearing.
+    /// </summary>
+    private async Task<string?> FindUnstablePrefixAsync(RelevanceCase testCase, CancellationToken cancellationToken)
+    {
+        for (var dropped = 1; dropped <= testCase.StableTrailingCharacters; dropped++)
+        {
+            if (testCase.Query.Length - dropped < 2)
+                break;
+
+            var prefix = testCase.Query[..^dropped];
+            var hits = await _engine
+                .SearchAsync(prefix, Math.Max(testCase.WithinTopN, 10), cancellationToken)
+                .ConfigureAwait(false);
+
+            var names = hits.Select(h => h.Entity.DisplayName).ToArray();
+
+            var recalled = testCase.AcceptableResults.Length == 0
+                || names.Take(testCase.WithinTopN).Any(n => testCase.AcceptableResults.Any(a => IsMatch(n, a)));
+            var required = testCase.RequiredResults.All(r => names.Any(n => IsMatch(n, r)));
+
+            if (!recalled || !required)
+                return prefix;
+        }
+
+        return null;
     }
 
     /// <summary>
