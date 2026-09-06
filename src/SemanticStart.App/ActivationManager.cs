@@ -196,19 +196,20 @@ public sealed class ActivationManager : IDisposable
             UnregisterHotKey(handle, HotKeyId);
     }
 
+    /// <summary>
+    /// Parses a chord for registration. Validation lives in <see cref="HotKeySpec"/> so the text
+    /// the user typed is judged by exactly the rules that will later be used to register it.
+    /// Anything unparseable falls back to the default rather than to a silently different chord.
+    /// </summary>
     private static (int Modifiers, int Key) ParseHotKey(string hotKey)
     {
-        var modifiers = 0;
-        var key = KeyInterop.VirtualKeyFromKey(Key.Space);
-        foreach (var part in hotKey.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (part.Equals("Alt", StringComparison.OrdinalIgnoreCase)) modifiers |= ModAlt;
-            else if (part.Equals("Ctrl", StringComparison.OrdinalIgnoreCase) || part.Equals("Control", StringComparison.OrdinalIgnoreCase)) modifiers |= ModControl;
-            else if (part.Equals("Shift", StringComparison.OrdinalIgnoreCase)) modifiers |= ModShift;
-            else if (part.Equals("Win", StringComparison.OrdinalIgnoreCase)) modifiers |= ModWin;
-            else if (Enum.TryParse<Key>(part, ignoreCase: true, out var parsed)) key = KeyInterop.VirtualKeyFromKey(parsed);
-        }
-        return (modifiers == 0 ? ModAlt : modifiers, key);
+        if (HotKeySpec.TryParse(hotKey, out var spec, out _) && spec is not null)
+            return (spec.Modifiers, spec.VirtualKey);
+
+        Log.Info($"Could not parse hotkey '{hotKey}'; falling back to {AppSettings.DefaultHotKey}.");
+        return HotKeySpec.TryParse(AppSettings.DefaultHotKey, out var fallback, out _) && fallback is not null
+            ? (fallback.Modifiers, fallback.VirtualKey)
+            : (ModAlt, KeyInterop.VirtualKeyFromKey(Key.Space));
     }
 
     private void EnsureHooksHealthy()

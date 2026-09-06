@@ -98,7 +98,8 @@
                         </StackPanel>
                         <ComboBox x:Name="HotKeyBox" Grid.Column="1" Width="190" VerticalAlignment="Center"
                                   Style="{StaticResource FluentComboBox}"
-                                  SelectedValuePath="Content" FontSize="14">
+                                  IsEditable="True" StaysOpenOnEdit="True"
+                                  TextBoxBase.TextChanged="HotKeyBox_TextChanged" FontSize="14">
                             <ComboBoxItem Content="Win+Alt+Space" />
                             <ComboBoxItem Content="Win+Alt+S" />
                             <ComboBoxItem Content="Win+Alt+X" />

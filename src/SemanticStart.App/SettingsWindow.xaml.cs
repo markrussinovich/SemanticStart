@@ -101,7 +101,7 @@ public partial class SettingsWindow : Window
 
     private void LoadControls()
     {
-        HotKeyBox.SelectedValue = _settings.HotKey;
+        HotKeyBox.Text = _settings.HotKey;
         TakeStartBox.IsChecked = _settings.TakeOverStartKey;
         OnlineBox.IsChecked = _settings.AllowOnlineEnrichment;
         LoginBox.IsChecked = _settings.LaunchAtLogin;
@@ -115,12 +115,19 @@ public partial class SettingsWindow : Window
     }
 
     /// <summary>
-    /// Shows the hotkey that is genuinely in force. These can differ: if another app already owns
-    /// the chosen combination, registration falls back to a free one, and the user needs to see
-    /// that rather than wonder why nothing happens.
+    /// Shows the hotkey that is genuinely in force. These can differ for two reasons now: the text
+    /// may not be a valid chord at all, or it may be valid but already owned by another app, in
+    /// which case registration falls back to a free one. Both need saying, because in each case
+    /// pressing what was typed does nothing.
     /// </summary>
     private void UpdateHotKeyStatus()
     {
+        if (!HotKeySpec.TryParse(HotKeyBox.Text, out _, out var error))
+        {
+            HotKeyStatus.Text = error;
+            return;
+        }
+
         var active = _activationManager.ActiveHotKey;
 
         HotKeyStatus.Text = active switch
@@ -132,11 +139,30 @@ public partial class SettingsWindow : Window
         };
     }
 
+    /// <summary>
+    /// Validates as the user types, so a rejected chord is reported at the keystroke rather than
+    /// discovered later when the shortcut does not work.
+    /// </summary>
+    private void HotKeyBox_TextChanged(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded)
+            return;
+
+        UpdateHotKeyStatus();
+    }
+
     private void SaveFromControls()
     {
+        // An unparseable chord keeps the previous one rather than falling back to the default:
+        // silently replacing what the user typed with something else is how the old parser turned
+        // a typo into a different working shortcut with no indication anything had happened.
+        var hotKey = HotKeySpec.TryParse(HotKeyBox.Text, out var spec, out _) && spec is not null
+            ? spec.Normalized
+            : _settings.HotKey;
+
         _settings = _settings with
         {
-            HotKey = HotKeyBox.SelectedValue?.ToString() ?? AppSettings.DefaultHotKey,
+            HotKey = hotKey,
             TakeOverStartKey = TakeStartBox.IsChecked == true,
             AllowOnlineEnrichment = OnlineBox.IsChecked == true,
             LaunchAtLogin = LoginBox.IsChecked == true,
@@ -147,6 +173,7 @@ public partial class SettingsWindow : Window
         };
         _settingsService.Save(_settings);
         _activationManager.ApplySettings(_settings);
+        HotKeyBox.Text = _settings.HotKey;
         UpdateHotKeyStatus();
     }
 

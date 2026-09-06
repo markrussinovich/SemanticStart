@@ -8,6 +8,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The hotkey parser is expressed in WPF key codes, because those are what RegisterHotKey is
+         ultimately given. Referenced directly rather than via UseWPF, which swaps the implicit
+         usings for the WPF set and drops System.IO from every existing test file. -->
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -16,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\SemanticStart.Core\SemanticStart.Core.csproj" />
+    <ProjectReference Include="..\..\src\SemanticStart.App\SemanticStart.App.csproj" />
   </ItemGroup>
 
   <ItemGroup>
