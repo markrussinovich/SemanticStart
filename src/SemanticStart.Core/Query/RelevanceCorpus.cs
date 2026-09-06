@@ -144,8 +144,12 @@ public static class RelevanceCorpus
         },
         new()
         {
-            Query = "which process has this file locked",            AcceptableResults = ["Resource Monitor", "Process Explorer", "Task Manager", "resmon"],
-            Rationale = "Expert intent; the answer is a tool most users cannot name.",
+            Query = "which process has this file locked",            AcceptableResults = ["Resource Monitor", "Process Explorer", "Task Manager", "resmon", "Handle"],
+            Rationale = "Expert intent; the answer is a tool most users cannot name. Handle is accepted "
+                + "because it is literally the tool that answers this question - it exists to report which "
+                + "process holds a handle to a file - and it became reachable once command-line tools hidden "
+                + "inside installed suites were collected. Accepting it is not a relaxation: it is a stricter "
+                + "answer than Resource Monitor, which requires the user to know where to look once it opens.",
         },
         new()
         {
@@ -205,9 +209,12 @@ public static class RelevanceCorpus
         new()
         {
             Query = "suspend a process",
-            AcceptableResults = ["Process Explorer", "Task Manager", "Resource Monitor"],
+            AcceptableResults = ["Process Explorer", "Task Manager", "Resource Monitor", "PsSuspend"],
             ForbiddenResults = ["Process Monitor"],
-            Rationale = "Process Monitor traces activity and cannot suspend; Process Explorer can.",
+            Rationale = "Process Monitor traces activity and cannot suspend; Process Explorer can. PsSuspend "
+                + "is accepted because suspending a process is the only thing it does, and it now reaches the "
+                + "index. The forbidden entry is what carries this case: the point has always been that a "
+                + "tool must be able to perform the action, not merely share vocabulary with it.",
         },
         new()
         {

@@ -205,10 +205,24 @@ public sealed class HybridSearchEngine : ISearchEngine
         // meaningfully and may fall outside the lexical arm's candidate cut. The match strength
         // only orders the literal arm; the amount added is still an RRF reciprocal-rank term.
         var literalHits = new List<(int Index, double Strength, string Reason)>();
+        var partialNameCredibility = PartialNameCredibility(snapshot, query);
         for (var i = 0; i < snapshot.Entities.Length; i++)
         {
             var (strength, reason) = NameMatcher.Score(query, snapshot.Entities[i].Entity.DisplayName, _options);
             if (strength <= 0 || reason is null)
+                continue;
+
+            // A prefix or subsequence hit is a bet that the user is part-way through typing a
+            // name. Damp it when the query is an ordinary word of the corpus, because then the
+            // bet is weak: "edit" prefixes "Editor" by morphological accident, and letting that
+            // outrank tools that actually edit things is what buried Notepad under Registry
+            // Editor, Local Group Policy Editor and Boot Configuration Data Editor. "notep" and
+            // "wor" are not words anyone wrote, so they keep the full boost and Notepad and Word
+            // still lead the instant they are typed.
+            if (reason is "word prefix" or "subsequence")
+                strength *= partialNameCredibility;
+
+            if (strength <= 0)
                 continue;
 
             literalHits.Add((i, strength, reason));
@@ -241,6 +255,9 @@ public sealed class HybridSearchEngine : ISearchEngine
 
         foreach (var candidate in candidates.Values)
         {
+            if (IsUnlistedCommand(candidate.Entity.Entity))
+                candidate.Score *= _options.UnlistedCommandPenalty;
+
             candidate.UsageContribution = UsageBoost(snapshot, candidate.Entity.Entity.Id);
             candidate.Score += candidate.UsageContribution;
             candidate.MatchReason = ExplainMatch(candidate);
@@ -248,6 +265,13 @@ public sealed class HybridSearchEngine : ISearchEngine
 
         return [.. candidates.Values];
     }
+
+    /// <summary>
+    /// True for entities that only the command-alias collector found, meaning no app list, Start
+    /// menu, or settings surface shows them. See <see cref="RankingOptions.UnlistedCommandPenalty"/>.
+    /// </summary>
+    private static bool IsUnlistedCommand(Entity entity) =>
+        string.Equals(entity.Source, "command", StringComparison.Ordinal);
 
     /// <summary>
     /// Removes low-confidence tail results instead of padding the UI to the requested count.
@@ -291,7 +315,14 @@ public sealed class HybridSearchEngine : ISearchEngine
         // harvested text is marketing prose that never states the action - and it is fixed by
         // better synthesis rather than by lowering the evidence bar for every query.
         if (candidate.LexicalScore is { } lexical && topLexical > 0
-            && lexical >= topLexical * _options.MinLexicalOnlyLeaderRatio)
+            && lexical >= topLexical * _options.MinLexicalOnlyLeaderRatio
+            // ...but a lexical tie is not evidence of relevance when we also hold a semantic
+            // reading that disagrees. "Local Group Policy Editor" ties on words for "edit a file"
+            // solely because "Editor" contains the verb; its vector score sits below the floor
+            // every other arm must clear. Exempting this clause from that floor made the floor
+            // conditional on which arm found the candidate, which is not a property of the match.
+            && (candidate.VectorScore is not { } tieVector
+                || tieVector >= _options.MinHybridSurfaceVectorScore))
             return true;
 
         var relativeScore = topScore <= 0
@@ -434,8 +465,30 @@ public sealed class HybridSearchEngine : ISearchEngine
     /// Steps Recorder down. Scaling the arm by coverage keeps such rows in play — they are still
     /// legitimate weak matches — without letting them lead.
     /// </summary>
-    private static double LexicalCoverageWeight(IndexedEntity entity, IReadOnlyList<string> queryTerms)
+    /// <summary>
+    /// How much to trust a partial-name match for this query, from 1.0 (the query is not a word
+    /// the corpus uses, so it can only be an abbreviated name) down to
+    /// <see cref="RankingOptions.MinPartialNameCredibility"/> for a word that appears everywhere.
+    ///
+    /// Only single-token queries are affected. A multi-word query never earns a word-prefix boost
+    /// in the first place, and treating it as a partially-typed name would be wrong anyway.
+    /// </summary>
+    private double PartialNameCredibility(Snapshot snapshot, string query)
     {
+        var token = NameMatcher.Normalize(query);
+        if (token.Length == 0 || token.Contains(' ', StringComparison.Ordinal) || snapshot.Entities.Length == 0)
+            return 1.0;
+
+        var frequency = snapshot.DocumentFrequency.GetValueOrDefault(token);
+        if (frequency == 0)
+            return 1.0;
+
+        var share = (double)frequency / snapshot.Entities.Length;
+        var decay = Math.Clamp(share / _options.CommonWordShare, 0.0, 1.0);
+        return 1.0 - (decay * (1.0 - _options.MinPartialNameCredibility));
+    }
+
+    private static double LexicalCoverageWeight(IndexedEntity entity, IReadOnlyList<string> queryTerms)    {
         // A single-token query is a name or a prefix being typed, where the token *is* the whole
         // query and coverage carries no information.
         if (queryTerms.Count < 2)
@@ -497,5 +550,23 @@ public sealed class HybridSearchEngine : ISearchEngine
     {
         public static Snapshot Empty { get; } =
             new([], [], [], [], 0, new Dictionary<string, UsageStats>());
+
+        /// <summary>
+        /// How many entities use each word anywhere in their indexed text. Built once per load;
+        /// at a few thousand entities this is a few hundred thousand tokens and costs milliseconds.
+        /// </summary>
+        public Dictionary<string, int> DocumentFrequency { get; } = BuildDocumentFrequency(Entities);
+
+        private static Dictionary<string, int> BuildDocumentFrequency(IndexedEntity[] entities)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var entity in entities)
+            {
+                foreach (var word in BuildMatchText(entity).Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal))
+                    counts[word] = counts.GetValueOrDefault(word) + 1;
+            }
+
+            return counts;
+        }
     }
 }

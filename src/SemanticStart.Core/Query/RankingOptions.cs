@@ -135,5 +135,29 @@ public sealed record RankingOptions
     /// <summary>Half-life used to decay the recency boost.</summary>
     public TimeSpan RecencyHalfLife { get; init; } = TimeSpan.FromDays(7);
 
+    /// <summary>
+    /// Multiplier applied to entities that Windows itself does not list anywhere a user browses -
+    /// command-line tools reachable only by typing their name, which their own packages mark as
+    /// hidden from the app list.
+    ///
+    /// They belong in the index: they are frequently the exact tool for the job, and PsSuspend
+    /// answers "suspend a process" better than anything on the Start menu does. But their only
+    /// documentation is usually a one-line version resource, and a very short field is precisely
+    /// what BM25 rewards most, so a tool called "Local and remote password changer" outscored the
+    /// Windows sign-in settings for "change my password". The multiplier makes them win on being
+    /// clearly right rather than on being tersely described.
+    /// </summary>
+    public double UnlistedCommandPenalty { get; init; } = 0.85;
+
+    /// <summary>
+    /// Share of entities that must use a word before a partial-name match on it is fully
+    /// discounted. At 5% of a 553-entity index that is roughly 28 entities - well above an
+    /// incidental coincidence, well below a genuinely common verb like "edit".
+    /// </summary>
+    public double CommonWordShare { get; init; } = 0.05;
+
+    /// <summary>Floor for the partial-name discount, so a common word still breaks exact ties.</summary>
+    public double MinPartialNameCredibility { get; init; } = 0.15;
+
     public static RankingOptions Default { get; } = new();
 }
