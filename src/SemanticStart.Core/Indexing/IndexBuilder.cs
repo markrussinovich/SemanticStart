@@ -128,8 +128,18 @@ public sealed class IndexBuilder
                     if (discovered.ContainsKey(entity.Id))
                         continue;
 
-                    var key = DedupeKey(entity);
-                    if (seenTargets.TryGetValue(key, out var survivorId))
+                    // An entity is a duplicate if *any* of its keys has been claimed. Matching on
+                    // several keys rather than one is what catches the same app arriving under
+                    // different names: one installed copy of VS Code appears as "Visual Studio
+                    // Code" from the AppsFolder and "Microsoft Visual Studio Code (User)" from the
+                    // uninstall registry, which no name comparison will ever reconcile, but both
+                    // resolve to the same Code.exe.
+                    var keys = DedupeKeys(entity);
+                    var survivorId = keys
+                        .Select(k => seenTargets.TryGetValue(k, out var id) ? id : null)
+                        .FirstOrDefault(id => id is not null);
+
+                    if (survivorId is not null)
                     {
                         // The duplicate is suppressed from the results, but its metadata is not
                         // thrown away: the losing record is frequently the richer one. Microsoft
@@ -138,10 +148,18 @@ public sealed class IndexBuilder
                         // path the local enrichers need to read a real product description.
                         if (discovered.TryGetValue(survivorId, out var survivor))
                             discovered[survivorId] = Absorb(survivor, entity);
+
+                        // The loser's remaining keys are claimed for the survivor so that a third
+                        // record matching either of them collapses in too.
+                        foreach (var key in keys)
+                            seenTargets.TryAdd(key, survivorId);
+
                         continue;
                     }
 
-                    seenTargets[key] = entity.Id;
+                    foreach (var key in keys)
+                        seenTargets[key] = entity.Id;
+
                     discovered[entity.Id] = entity;
                 }
             }
@@ -173,6 +191,47 @@ public sealed class IndexBuilder
     /// because a shared target does not imply a duplicate: all Windows optional features
     /// legitimately deep-link to the same ms-settings:optionalfeatures page.
     /// </summary>
+    private static IReadOnlyList<string> DedupeKeys(Entity entity)
+    {
+        var keys = new List<string>(2) { DedupeKey(entity) };
+
+        // Runnable programs additionally collapse on the executable they launch. The name key
+        // cannot catch a vendor-prefixed, scope-suffixed uninstall entry against a bare AppsFolder
+        // one, but the resolved binary is identical and is the thing the user actually runs.
+        //
+        // Arguments are part of the key because a shared executable does not imply a shared app:
+        // shortcuts that launch rundll32.exe, control.exe, or msiexec.exe differ only in what they
+        // are told to run, and collapsing those would erase genuinely distinct entries.
+        if (entity.Kind is EntityKind.Application or EntityKind.PackagedApp or EntityKind.SystemTool
+            && ExecutablePath(entity) is { } executable)
+        {
+            keys.Add("exe|" + executable.ToLowerInvariant() + "|" + (entity.LaunchArguments ?? string.Empty).ToLowerInvariant());
+        }
+
+        return keys;
+    }
+
+    /// <summary>
+    /// The executable an entity ultimately runs, if it is knowable. AppsFolder entries launch
+    /// through an AppUserModelId but record the resolved target alongside it, which is what makes
+    /// them comparable with registry and shortcut records at all.
+    /// </summary>
+    private static string? ExecutablePath(Entity entity)
+    {
+        if (entity.RawMetadata.TryGetValue("targetPath", out var target) && IsExecutable(target))
+            return target;
+
+        if (entity.LaunchKind == LaunchKind.Executable && IsExecutable(entity.LaunchTarget))
+            return entity.LaunchTarget;
+
+        return null;
+
+        static bool IsExecutable(string? path) =>
+            !string.IsNullOrWhiteSpace(path)
+            && path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            && Path.IsPathFullyQualified(path);
+    }
+
     private static string DedupeKey(Entity entity) => entity.Kind switch
     {
         // Runnable programs are deduplicated across kinds as well as across collectors. Disk

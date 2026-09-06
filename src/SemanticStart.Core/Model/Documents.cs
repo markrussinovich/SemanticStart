@@ -65,6 +65,12 @@ public sealed record SynthesizedProfile
     /// <summary>
     /// Builds the text that is handed to the embedding model. Ordering matters: the display
     /// name leads so that name similarity still dominates, followed by intent vocabulary.
+    ///
+    /// Text that only restates the entity's own name is dropped. A third of indexed entities have
+    /// no real description and fall back to "Open {name}." with a task of "open {name}", so the
+    /// name was being repeated three times over; the resulting vector encodes nothing but the
+    /// name, which is what let entities merely *called* "... Editor" answer the query "edit"
+    /// ahead of every tool that edits something.
     /// </summary>
     public string ToEmbeddingText(Entity entity)
     {
@@ -73,10 +79,12 @@ public sealed record SynthesizedProfile
         if (!string.IsNullOrWhiteSpace(Category))
             parts.Add(Category!);
 
-        parts.Add(Summary);
+        if (IndexableSummary(entity.DisplayName) is { } summary)
+            parts.Add(summary);
 
-        if (Tasks.Count > 0)
-            parts.Add(string.Join(". ", Tasks));
+        var tasks = IndexableTasks(entity.DisplayName);
+        if (tasks.Count > 0)
+            parts.Add(string.Join(". ", tasks));
 
         if (Synonyms.Count > 0)
             parts.Add(string.Join(", ", Synonyms));
@@ -88,6 +96,79 @@ public sealed record SynthesizedProfile
             parts.Add(entity.Publisher!);
 
         return string.Join(". ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
+    }
+
+    /// <summary>
+    /// The summary as it should be indexed, or null when it carries nothing beyond the name.
+    /// The stored <see cref="Summary"/> is left untouched: "Open Registry Editor." is a poor
+    /// search signal but a perfectly good subtitle, so it is suppressed for retrieval only.
+    /// </summary>
+    public string? IndexableSummary(string displayName) =>
+        RestatesName(Summary, displayName) ? null : Summary;
+
+    /// <summary>Tasks with name-restating placeholders removed. See <see cref="IndexableSummary"/>.</summary>
+    public IReadOnlyList<string> IndexableTasks(string displayName) =>
+        [.. Tasks.Where(t => !RestatesName(t, displayName))];
+
+    /// <summary>
+    /// True when every word of <paramref name="text"/> is either part of the entity's own name or
+    /// a generic framing word, so the text asserts nothing the name did not already say.
+    ///
+    /// This matters more than it looks. Such text is not merely useless: it is actively harmful,
+    /// because BM25 divides term frequency by field length and these placeholders are the shortest
+    /// fields in the index. "Open Registry Editor." in the summary field, weighted three times the
+    /// display name, outscored real descriptions of tools that genuinely edit things - and because
+    /// the resulting top score also sets the confidence floor for pruning, it pushed Notepad,
+    /// Paint and Clipchamp out of the results for "edit" altogether.
+    /// </summary>
+    private static bool RestatesName(string? text, string displayName)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return true;
+
+        var nameWords = Tokenize(displayName);
+        var informative = Tokenize(text).Where(w => !nameWords.Contains(w) && !FramingWords.Contains(w));
+
+        return !informative.Any();
+    }
+
+    /// <summary>
+    /// Words that describe the act of opening something rather than what it does. Kept short on
+    /// purpose: every addition risks blanking a summary that was doing real work, and the point is
+    /// only to see through the fallback phrasing "Open the {name} management console."
+    /// </summary>
+    private static readonly HashSet<string> FramingWords = new(StringComparer.Ordinal)
+    {
+        "open", "opens", "launch", "launches", "start", "starts", "run", "runs", "go", "to",
+        "the", "a", "an", "and", "or", "for", "of", "in", "on", "with", "your", "this", "it",
+        "console", "management", "settings", "setting", "page", "app", "application", "tool",
+        "program", "window", "utility", "snap", "applet",
+    };
+
+    private static HashSet<string> Tokenize(string value)
+    {
+        var words = new HashSet<string>(StringComparer.Ordinal);
+        var current = new System.Text.StringBuilder(value.Length);
+
+        foreach (var ch in value)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                current.Append(char.ToLowerInvariant(ch));
+                continue;
+            }
+
+            if (current.Length > 0)
+            {
+                words.Add(current.ToString());
+                current.Clear();
+            }
+        }
+
+        if (current.Length > 0)
+            words.Add(current.ToString());
+
+        return words;
     }
 }
 

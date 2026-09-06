@@ -121,7 +121,7 @@ public sealed partial class SqliteIndexStore : IIndexStore
             ReplaceProfile(entity.Id, profile, tx);
             if (embedding is not null)
                 Vectors.Write(ordinal!.Value, embedding);
-            RefreshFts(entity.Id, tx);
+            RefreshFts(entity, profile, tx);
             tx.Commit();
         }
 
@@ -262,11 +262,17 @@ public sealed partial class SqliteIndexStore : IIndexStore
             // Details is weighted low. It is many sentences of harvested prose, so it is the field
             // most likely to contain an incidental term; it is here to make a genuinely relevant
             // entity reachable at all, not to outrank a curated task phrase.
-            cmd.CommandText = """
-                SELECT entity_id, -bm25(entities_fts, 0.0, 1.0, 3.0, 5.0, 2.0, 0.25, 0.75) AS score
+            //
+            // The weights are read from the environment so they can be swept against a fixed index
+            // without a rebuild. Retuning them matters whenever the shape of the profiles changes:
+            // weights fitted to one-line heuristic summaries are not the right weights once a
+            // language model has written several sentences and a dozen task phrases per entity.
+            var w = LexicalWeights;
+            cmd.CommandText = $"""
+                SELECT entity_id, -bm25(entities_fts, {w}) AS score
                 FROM entities_fts
                 WHERE entities_fts MATCH $query
-                ORDER BY bm25(entities_fts, 0.0, 1.0, 3.0, 5.0, 2.0, 0.25, 0.75)
+                ORDER BY bm25(entities_fts, {w})
                 LIMIT $limit;
                 """;
             cmd.Parameters.AddWithValue("$query", match);
@@ -279,6 +285,28 @@ public sealed partial class SqliteIndexStore : IIndexStore
 
             return Task.FromResult<IReadOnlyList<(string EntityId, double Score)>>(hits);
         }
+    }
+
+    /// <summary>
+    /// BM25 column weights, in the order the FTS table declares its columns: entity_id,
+    /// display_name, summary, tasks, synonyms, publisher, details. Overridable through
+    /// SEMANTICSTART_BM25 purely so the relevance harness can sweep them; the literal below is the
+    /// shipped default and the only value any user sees.
+    /// </summary>
+    private static string LexicalWeights { get; } = ResolveLexicalWeights();
+
+    private static string ResolveLexicalWeights()
+    {
+        const string shipped = "0.0, 1.0, 3.0, 5.0, 2.0, 0.25, 0.75";
+        var raw = Environment.GetEnvironmentVariable("SEMANTICSTART_BM25");
+        if (string.IsNullOrWhiteSpace(raw))
+            return shipped;
+
+        var parts = raw.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 7 || !parts.All(p => double.TryParse(p, NumberStyles.Float, CultureInfo.InvariantCulture, out _)))
+            return shipped;
+
+        return string.Join(", ", parts.Select(p => double.Parse(p, NumberStyles.Float, CultureInfo.InvariantCulture).ToString("0.####", CultureInfo.InvariantCulture)));
     }
 
     public Task<IReadOnlyDictionary<string, UsageStats>> GetUsageStatsAsync(CancellationToken cancellationToken = default)
@@ -334,16 +362,6 @@ public sealed partial class SqliteIndexStore : IIndexStore
         lock (_gate)
         {
             using var tx = Connection.BeginTransaction();
-            var affected = new List<string>();
-            using (var select = Connection.CreateCommand())
-            {
-                select.Transaction = tx;
-                select.CommandText = "SELECT DISTINCT entity_id FROM documents WHERE is_online = 1;";
-                using var reader = select.ExecuteReader();
-                while (reader.Read())
-                    affected.Add(reader.GetString(0));
-            }
-
             using (var delete = Connection.CreateCommand())
             {
                 delete.Transaction = tx;
@@ -351,9 +369,9 @@ public sealed partial class SqliteIndexStore : IIndexStore
                 delete.ExecuteNonQuery();
             }
 
-            foreach (var id in affected)
-                RefreshFts(id, tx);
-
+            // The searchable mirror is projected from the entity and its profile, never from the
+            // raw documents, so dropping the online corpus leaves it correct as it stands. The
+            // profiles themselves go stale, which is what the caller's subsequent reindex is for.
             tx.Commit();
         }
 
@@ -515,27 +533,38 @@ public sealed partial class SqliteIndexStore : IIndexStore
         cmd.ExecuteNonQuery();
     }
 
-    private void RefreshFts(string entityId, SqliteTransaction tx)
+    /// <summary>
+    /// Rewrites the searchable mirror for one entity. The projection is built in C# rather than by
+    /// copying the profile columns, because what is worth *storing* and what is worth *indexing*
+    /// differ: a summary that only restates the entity's name is a usable subtitle but a harmful
+    /// search signal, so it is written to profiles and withheld from here.
+    /// </summary>
+    private void RefreshFts(Entity entity, SynthesizedProfile? profile, SqliteTransaction tx)
     {
         using (var delete = Connection.CreateCommand())
         {
             delete.Transaction = tx;
             delete.CommandText = "DELETE FROM entities_fts WHERE entity_id = $id;";
-            delete.Parameters.AddWithValue("$id", entityId);
+            delete.Parameters.AddWithValue("$id", entity.Id);
             delete.ExecuteNonQuery();
         }
+
+        var summary = profile?.IndexableSummary(entity.DisplayName) ?? string.Empty;
+        var tasks = profile is null ? [] : profile.IndexableTasks(entity.DisplayName);
 
         using var insert = Connection.CreateCommand();
         insert.Transaction = tx;
         insert.CommandText = """
             INSERT INTO entities_fts (entity_id, display_name, summary, tasks, synonyms, publisher, details)
-            SELECT e.id, e.display_name, COALESCE(p.summary, ''), COALESCE(p.tasks, '[]'),
-                   COALESCE(p.synonyms, '[]'), COALESCE(e.publisher, ''), COALESCE(p.details, '')
-            FROM entities e
-            LEFT JOIN profiles p ON p.entity_id = e.id
-            WHERE e.id = $id;
+            VALUES ($id, $name, $summary, $tasks, $synonyms, $publisher, $details);
             """;
-        insert.Parameters.AddWithValue("$id", entityId);
+        insert.Parameters.AddWithValue("$id", entity.Id);
+        insert.Parameters.AddWithValue("$name", entity.DisplayName);
+        insert.Parameters.AddWithValue("$summary", summary);
+        insert.Parameters.AddWithValue("$tasks", string.Join(". ", tasks));
+        insert.Parameters.AddWithValue("$synonyms", string.Join(", ", profile?.Synonyms ?? []));
+        insert.Parameters.AddWithValue("$publisher", entity.Publisher ?? string.Empty);
+        insert.Parameters.AddWithValue("$details", profile?.Details ?? string.Empty);
         insert.ExecuteNonQuery();
     }
 
