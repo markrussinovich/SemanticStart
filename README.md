@@ -83,6 +83,22 @@ Shell icon (including MSIX/UWP assets) via `IShellItemImageFactory` — the same
 the first one that is free. The hotkey that actually won is reported by a tray balloon at startup
 and shown under **Hotkey** in Settings (the gear in the lower left of the overlay).
 
+**Changing it.** The hotkey field in Settings records rather than reads: click it and press the
+combination you want, and each key appears as its own chip. Escape keeps the current chord. There is
+nothing to spell, which matters because key names are not guessable (`PrintScreen`, `Prior`,
+`OemQuestion`), and the field cannot display a chord it would refuse to store.
+
+While the field is listening, the global hotkey and the Start-key hook are released and restored
+afterwards. Windows delivers a registered hotkey to the owning application as an activation rather
+than as key input, so without this the chord most likely to be pressed while editing — the one
+already assigned — would open the overlay instead of being recorded.
+
+A chord is rejected, with the reason shown inline, if it has no modifier (Windows would register it
+globally and swallow that key everywhere, including inside text boxes), if `Shift` is its only
+modifier (that is ordinary typing), or if the shell claims it before any application sees it
+(`Win+L`, `Win+G`, `Win+Tab`, `Ctrl+Alt+Delete`) — accepting one of those would appear to work and
+then never fire.
+
 **Why this combination.** Bare `Win+<letter>` is impossible: the shell registers every one of them,
 so `RegisterHotKey` fails for `Win+S`, `Win+Q` and `Win+F` alike. That leaves `Win+<modifier>+<key>`,
 where much of the `Win+Alt+<letter>` family (`D`, `F`, `G`, `R`, `T`, `W`) belongs to Xbox Game Bar on
@@ -131,9 +147,12 @@ confirmation first, because the change is otherwise silent and only another full
 The difference is visible rather than theoretical. On a ~550-entity index, `create and edit files`
 returns *Files — "Files is a Microsoft 365 companion app that helps manage and access your files"*
 first with model-written descriptions, versus *Notepad, Paint, Recovery Drive* first with the
-heuristics, where the same entry reads only *"Open Files."* Both configurations score 50/55 on the
-relevance corpus, so the corpus alone does not capture this: it scores whether the right entry is
-retrieved, not how the result reads or how the near-ties order.
+heuristics, where the same entry reads only *"Open Files."*
+
+Retrieval, however, is unchanged. Across the same 55 corpus queries the two score 50/55 either way,
+with MRR 0.821 vs 0.823 and top-1 74% vs 76% — a difference of one case. **A local model does not
+measurably help SemanticStart find things; it changes how the results read.** Budget the extra
+indexing time and the model download against that, and nothing else.
 
 ### The CLI
 
