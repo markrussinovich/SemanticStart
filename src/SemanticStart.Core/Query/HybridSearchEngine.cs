@@ -195,7 +195,7 @@ public sealed class HybridSearchEngine : ISearchEngine
 
             var candidate = GetOrAdd(snapshot, candidates, index);
             candidate.LexicalScore = score;
-            candidate.LexicalContribution = _options.LexicalArmWeight * LexicalCoverageWeight(candidate.Entity, queryTerms)
+            candidate.LexicalContribution = _options.LexicalArmWeight * LexicalCoverageWeight(snapshot, candidate.Entity, queryTerms)
                 / (_options.RrfK + rank + 1);
             candidate.Score += candidate.LexicalContribution;
         }
@@ -542,16 +542,44 @@ public sealed class HybridSearchEngine : ISearchEngine
         return 1.0 - (decay * (1.0 - _options.MinPartialNameCredibility));
     }
 
-    private static double LexicalCoverageWeight(IndexedEntity entity, IReadOnlyList<string> queryTerms)    {
+    /// <summary>
+    /// How much of the query an entity actually accounts for, measured in information rather than
+    /// in words. Counting matched terms equally says a row matching only "list" answers half of
+    /// "todo list", which is how a command that lists running processes came to outrank the
+    /// to-do application: nearly every entity in the index can claim a word that common, while
+    /// "todo" belongs to almost none. Weighting each term by how rare it is makes the distinctive
+    /// half of a query the half that decides.
+    /// </summary>
+    private static double LexicalCoverageWeight(Snapshot snapshot, IndexedEntity entity, IReadOnlyList<string> queryTerms)
+    {
         // A single-token query is a name or a prefix being typed, where the token *is* the whole
         // query and coverage carries no information.
         if (queryTerms.Count < 2)
             return 1.0;
 
         var haystack = BuildMatchText(entity);
-        var matched = queryTerms.Count(term => haystack.Contains(term, StringComparison.Ordinal));
-        var coverage = (double)matched / queryTerms.Count;
-        return Math.Max(coverage, _minimumCoverageWeight);
+        var available = 0.0;
+        var matched = 0.0;
+
+        foreach (var term in queryTerms)
+        {
+            var weight = InverseDocumentFrequency(snapshot, term);
+            available += weight;
+            if (haystack.Contains(term, StringComparison.Ordinal))
+                matched += weight;
+        }
+
+        return available <= 0 ? 1.0 : Math.Max(matched / available, _minimumCoverageWeight);
+    }
+
+    /// <summary>
+    /// A term no entity uses is the most telling one in the query, so an absent term is worth the
+    /// most rather than nothing: it is usually a name the corpus spells differently.
+    /// </summary>
+    private static double InverseDocumentFrequency(Snapshot snapshot, string term)
+    {
+        var frequency = snapshot.DocumentFrequency.GetValueOrDefault(term);
+        return Math.Log(1.0 + (snapshot.Entities.Length / (1.0 + frequency)));
     }
 
     private const double _minimumCoverageWeight = 0.2;

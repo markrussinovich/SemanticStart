@@ -60,6 +60,13 @@ public static class RelevanceCorpus
         },
         new()
         {
+            Query = "todo list",
+            AcceptableResults = ["Microsoft To Do", "To Do", "Sticky Notes", "Tasks"],
+            WithinTopN = 1,
+            Rationale = "Regression: 'list' is a word most of the index can claim and 'todo' is a word almost none can, so a command that lists running processes must not answer half the query and win on it.",
+        },
+        new()
+        {
             Query = "free up disk space",
             AcceptableResults = ["Disk Cleanup", "Storage", "Storage Sense", "cleanmgr"],
             Rationale = "Canonical intent query. No shared words with 'Disk Cleanup' beyond 'disk'.",
