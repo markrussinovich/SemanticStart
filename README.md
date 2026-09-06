@@ -11,10 +11,17 @@ inference runs locally; no query ever leaves the machine.
 
 ## Status
 
-Working end to end. On this Windows 11 machine it indexes **553 entities** and answers
-queries with a **median latency of 2.3 ms (p95 2.9 ms)**, scoring **47/52** on the built-in
-relevance corpus. A full rebuild with online enrichment takes ~4 minutes;
-querying never touches the network.
+Working end to end. On this Windows 11 machine it indexes **534 entities** and answers
+queries with a **median latency of 2.4 ms (p95 3.1 ms)**, scoring **55/61** on the built-in
+relevance corpus (MRR 0.851, correct answer first 80% of the time). A full rebuild with online
+enrichment takes ~7 minutes; querying never touches the network.
+
+Every query ever reported as wrong is a permanent case in that corpus, including the ones still
+failing. The remaining six share a single cause, and it is not ranking: no source on the machine
+uses the words the question does. Nothing indexed about Process Explorer contains "memory";
+nothing about any power setting contains "lid". Cases like these are left failing on purpose
+rather than papered over by lowering an evidence floor or hand-writing knowledge about a specific
+program, because both would trade a general engine for a demo.
 
 ## How it works
 
@@ -136,7 +143,14 @@ dotnet run --project src\SemanticStart.Cli -- index [--force]   # build or rebui
 dotnet run --project src\SemanticStart.Cli -- search "<query>"  # query it
 dotnet run --project src\SemanticStart.Cli -- eval              # run the relevance corpus
 dotnet run --project src\SemanticStart.Cli -- stats             # index statistics
+dotnet run --project src\SemanticStart.Cli -- enrich "<name>"   # what each enricher produced
+dotnet run --project src\SemanticStart.Cli -- diagnose "<query>" --name "<entity>"
 ```
+
+`diagnose` answers the question `search` cannot: why something *didn't* come back. A missing result
+is either "no arm retrieved it" or "an arm retrieved it and a surfacing floor rejected it" - opposite
+fixes, indistinguishable from outside. It runs the query twice against one snapshot, once with the
+shipped floors and once with every floor disabled, and diffs the two.
 
 ## Taking over the Windows key
 
@@ -173,7 +187,7 @@ index is fully functional without it. No inference of any kind leaves the machin
 | Project | Purpose |
 |---|---|
 | `src/SemanticStart.Core` | Collectors, enrichment, synthesis, embeddings, storage, retrieval |
-| `src/SemanticStart.Cli` | Diagnostic CLI (`index`, `search`, `eval`, `stats`) |
+| `src/SemanticStart.Cli` | Diagnostic CLI (`index`, `search`, `eval`, `stats`, `enrich`, `diagnose`) |
 | `src/SemanticStart.App` | WPF overlay, activation, tray icon, settings |
 | `tests/SemanticStart.Tests` | Unit and regression tests |
 
