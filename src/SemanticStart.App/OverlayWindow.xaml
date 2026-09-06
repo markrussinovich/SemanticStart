@@ -132,6 +132,8 @@
             <ListBox x:Name="ResultsList" Grid.Row="2" Margin="0,12,0,4" ItemsSource="{Binding Results}"
                      SelectedIndex="{Binding SelectedIndex, Mode=TwoWay}" Background="Transparent" BorderThickness="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     VirtualizingPanel.ScrollUnit="Pixel"
+                     local:SmoothScroll.Enabled="True"
                      Foreground="{DynamicResource PrimaryTextBrush}">
                 <ListBox.ItemContainerStyle>
                     <Style TargetType="ListBoxItem">
