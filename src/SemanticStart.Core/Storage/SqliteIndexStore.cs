@@ -559,14 +559,40 @@ public sealed partial class SqliteIndexStore : IIndexStore
             VALUES ($id, $name, $summary, $tasks, $synonyms, $publisher, $details);
             """;
         insert.Parameters.AddWithValue("$id", entity.Id);
-        insert.Parameters.AddWithValue("$name", entity.DisplayName);
-        insert.Parameters.AddWithValue("$summary", summary);
-        insert.Parameters.AddWithValue("$tasks", string.Join(". ", tasks));
-        insert.Parameters.AddWithValue("$synonyms", string.Join(", ", profile?.Synonyms ?? []));
+        insert.Parameters.AddWithValue("$name", WithFoldedCompounds(entity.DisplayName));
+        insert.Parameters.AddWithValue("$summary", WithFoldedCompounds(summary));
+        insert.Parameters.AddWithValue("$tasks", WithFoldedCompounds(string.Join(". ", tasks)));
+        insert.Parameters.AddWithValue("$synonyms", WithFoldedCompounds(string.Join(", ", profile?.Synonyms ?? [])));
         insert.Parameters.AddWithValue("$publisher", entity.Publisher ?? string.Empty);
-        insert.Parameters.AddWithValue("$details", profile?.Details ?? string.Empty);
+        insert.Parameters.AddWithValue("$details", WithFoldedCompounds(profile?.Details ?? string.Empty));
         insert.ExecuteNonQuery();
     }
+
+    /// <summary>
+    /// Appends the separator-free spelling of every hyphenated compound in the text, because the
+    /// tokenizer splits on the hyphen and users do not type one. Outlook describes itself as
+    /// managing "to-dos", which the index stored as "to" and "dos"; the word "todo" therefore
+    /// reached nothing that spelled it that way. The folded form is added rather than substituted,
+    /// so "read-only" is still found by "read" and by "only" as well as by "readonly".
+    /// </summary>
+    internal static string WithFoldedCompounds(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+
+        var folded = new List<string>();
+        foreach (Match match in HyphenatedCompoundRegex().Matches(text))
+        {
+            var joined = match.Value.Replace("-", string.Empty);
+            if (!folded.Contains(joined, StringComparer.OrdinalIgnoreCase))
+                folded.Add(joined);
+        }
+
+        return folded.Count == 0 ? text : text + " " + string.Join(" ", folded);
+    }
+
+    [GeneratedRegex(@"[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)+")]
+    private static partial Regex HyphenatedCompoundRegex();
 
     private static int GetNextEntityOrdinal(SqliteConnection connection)
     {
