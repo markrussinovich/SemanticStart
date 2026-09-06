@@ -351,7 +351,48 @@ public partial class SettingsWindow : Window
     private static LocalLlmMode ParseLocalLlmMode(string? value) =>
         Enum.TryParse<LocalLlmMode>(value, ignoreCase: true, out var mode) ? mode : LocalLlmMode.Auto;
 
-    private async void RebuildButton_Click(object sender, RoutedEventArgs e) => await RebuildIndexAsync(force: true);
+    private async void RebuildButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (await WouldSilentlyDowngradeAsync())
+            return;
+
+        await RebuildIndexAsync(force: true);
+    }
+
+    /// <summary>
+    /// Asks before a rebuild that would replace model-written descriptions with heuristic ones.
+    /// Returns true if the user backed out. Failures here must never block the rebuild: this is a
+    /// courtesy prompt, not a gate.
+    /// </summary>
+    private async Task<bool> WouldSilentlyDowngradeAsync()
+    {
+        try
+        {
+            // The prompt has to reflect the mode currently selected in the dialog, not the one
+            // last saved, or changing the mode and pressing Rebuild would warn about the wrong thing.
+            SaveFromControls();
+
+            var counts = await _searchService.GetGeneratorBreakdownAsync(CancellationToken.None);
+            var atRisk = RebuildDowngradeCheck.CountProfilesAtRisk(_settings.LocalLlmMode, counts);
+            if (atRisk == 0)
+                return false;
+
+            var answer = System.Windows.MessageBox.Show(
+                this,
+                RebuildDowngradeCheck.BuildWarning(atRisk, counts.Values.Sum()),
+                "Rebuild will replace model-written descriptions",
+                System.Windows.MessageBoxButton.YesNo,
+                System.Windows.MessageBoxImage.Warning,
+                System.Windows.MessageBoxResult.No);
+
+            return answer != System.Windows.MessageBoxResult.Yes;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to check whether rebuild would downgrade descriptions");
+            return false;
+        }
+    }
 
     private async void RefreshModelsButton_Click(object sender, RoutedEventArgs e) => await RefreshLocalLlmCatalogAsync();
 
