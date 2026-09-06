@@ -254,7 +254,7 @@ public static class RelevanceCorpus
         {
             Query = "check access",
             AcceptableResults = ["AccessChk"],
-            Rationale = "Reported. Deliberately does not accept AccessEnum, which already ranks first and would mask the gap. AccessChk reports effective permissions and is the exact answer, but it is not in the index at all: it is a console tool shipped inside an installed suite, and only GUI apps reach the AppsFolder while the system-tool collector scans System32 alone. This is a collection gap, not a ranking one.",
+            Rationale = "Reported. Deliberately does not accept AccessEnum, which already ranks first and would mask the gap. AccessChk reports effective permissions and is the exact answer. It was originally unreachable: a console tool shipped inside an installed suite, invisible to the AppsFolder and outside the system-tool collector's System32 scan. Alias collection closed that gap and it now ranks fourth, so what remains is genuinely a ranking problem - AccessEnum and AccessChk have near-identical documentation, and nothing in either distinguishes enumerating shares from reporting effective permissions.",
         },
         new()
         {
