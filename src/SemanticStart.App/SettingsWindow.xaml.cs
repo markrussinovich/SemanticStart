@@ -29,6 +29,7 @@ public partial class SettingsWindow : Window
         LoadControls();
         _ = RefreshLocalLlmCatalogAsync();
         _ = RefreshGeneratorStatusAsync();
+        _ = RefreshIndexStatsAsync();
     }
 
     /// <summary>
@@ -74,6 +75,7 @@ public partial class SettingsWindow : Window
             ProgressBar.Value = 1;
             ProgressText.Text = $"Rebuild complete. {_searchService.Count} entities loaded.";
             await RefreshGeneratorStatusAsync();
+            await RefreshIndexStatsAsync();
         }
         catch (OperationCanceledException)
         {
@@ -207,6 +209,36 @@ public partial class SettingsWindow : Window
         finally
         {
             UpdateLocalLlmEnabledState();
+        }
+    }
+
+    private async Task RefreshIndexStatsAsync()
+    {
+        try
+        {
+            var stats = await _searchService.GetIndexStatsAsync(CancellationToken.None);
+            if (stats.Total == 0)
+            {
+                IndexStatsText.Text = "Index is empty. Rebuild to populate it.";
+                return;
+            }
+
+            var parts = new List<string>
+            {
+                $"{stats.Apps} apps",
+                $"{stats.SystemTools} system utilities",
+                $"{stats.WindowsSettings} Windows settings",
+            };
+
+            if (stats.Other > 0)
+                parts.Add($"{stats.Other} other");
+
+            IndexStatsText.Text = $"{stats.Total} entries — {string.Join(", ", parts)} — {stats.SizeDisplay} on disk";
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to read index stats");
+            IndexStatsText.Text = "Index statistics unavailable.";
         }
     }
 

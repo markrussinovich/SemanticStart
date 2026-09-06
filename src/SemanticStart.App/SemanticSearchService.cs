@@ -1,3 +1,5 @@
+using System.IO;
+using SemanticStart.Core;
 using SemanticStart.Core.Abstractions;
 using SemanticStart.Core.Collectors;
 using SemanticStart.Core.Embeddings;
@@ -10,6 +12,26 @@ using SemanticStart.Core.Storage;
 using SemanticStart.Core.Synthesis;
 
 namespace SemanticStart.App;
+
+/// <summary>
+/// What the index currently contains, grouped the way a user thinks about it rather than by the
+/// internal entity kinds: installed programs, the built-in tools and consoles, and the Windows
+/// settings surface.
+/// </summary>
+public sealed record IndexStats(
+    int Total,
+    int Apps,
+    int SystemTools,
+    int WindowsSettings,
+    int Other,
+    long SizeBytes)
+{
+    public string SizeDisplay => SizeBytes >= 1024L * 1024 * 1024
+        ? $"{SizeBytes / (1024.0 * 1024 * 1024):F1} GB"
+        : SizeBytes >= 1024 * 1024
+            ? $"{SizeBytes / (1024.0 * 1024):F0} MB"
+            : $"{SizeBytes / 1024.0:F0} KB";
+}
 
 public sealed class SemanticSearchService : IDisposable
 {
@@ -24,6 +46,46 @@ public sealed class SemanticSearchService : IDisposable
     public SemanticSearchService(AppSettings settings) => _settings = settings;
 
     public int Count => _engine?.Count ?? 0;
+
+    public async Task<IndexStats> GetIndexStatsAsync(CancellationToken cancellationToken)
+    {
+        await InitializeAsync(cancellationToken);
+        var all = await _store.GetAllAsync(cancellationToken);
+
+        var apps = all.Count(e => e.Entity.Kind is EntityKind.Application or EntityKind.PackagedApp);
+        var systemTools = all.Count(e => e.Entity.Kind is EntityKind.SystemTool or EntityKind.ManagementConsole);
+        var windowsSettings = all.Count(e => e.Entity.Kind is EntityKind.SettingsPage or EntityKind.ControlPanelApplet or EntityKind.OptionalFeature);
+
+        return new IndexStats(
+            Total: all.Count,
+            Apps: apps,
+            SystemTools: systemTools,
+            WindowsSettings: windowsSettings,
+            Other: all.Count - apps - systemTools - windowsSettings,
+            SizeBytes: IndexSizeBytes());
+    }
+
+    /// <summary>
+    /// Size of everything the index actually occupies on disk. The vectors live outside the
+    /// database in a side file, and SQLite's write-ahead log can be a large share of the total
+    /// between checkpoints, so reporting index.sqlite alone would understate it.
+    /// </summary>
+    private static long IndexSizeBytes()
+    {
+        long total = 0;
+
+        foreach (var path in new[] { AppPaths.IndexDatabase, AppPaths.VectorFile })
+        {
+            foreach (var candidate in new[] { path, path + "-wal", path + "-shm" })
+            {
+                var info = new FileInfo(candidate);
+                if (info.Exists)
+                    total += info.Length;
+            }
+        }
+
+        return total;
+    }
 
     public async Task<IReadOnlyDictionary<string, int>> GetGeneratorBreakdownAsync(CancellationToken cancellationToken)
     {
