@@ -11,9 +11,10 @@ inference runs locally; no query ever leaves the machine.
 
 ## Status
 
-Working end to end. On a stock Windows 11 machine it indexes **467 entities in ~10 s** and answers
-queries with a **median latency of 2.2 ms (p95 3.5 ms)**, scoring **26/27** on the built-in
-relevance corpus.
+Working end to end. On this Windows 11 machine it indexes **553 entities** and answers
+queries with a **median latency of 2.3 ms (p95 2.9 ms)**, scoring **47/52** on the built-in
+relevance corpus. A full rebuild with online enrichment and local LLM synthesis takes ~9 minutes;
+querying never touches the network.
 
 ## How it works
 
@@ -23,10 +24,12 @@ Collectors → Enrichment → LLM synthesis → Embeddings → SQLite + FTS5 + v
                               Win+Alt+Space ──► Hybrid retrieval (vector ∥ BM25 → RRF) ──► Overlay
 ```
 
-**Indexing (offline).** Seven collectors enumerate AppsFolder/MSIX apps, Start shortcuts, uninstall
+**Indexing (offline).** Eight collectors enumerate AppsFolder/MSIX apps, Start shortcuts, uninstall
 registry entries, `ms-settings:` pages, Control Panel applets and MMC snap-ins, Windows optional
-features, and allow-listed System32 tools. Each entity is enriched from local documentation (PE
-version resources, MSIX manifests, `.lnk` comments, `--help` output) and, optionally, online
+features, System32 tools, and MSIX command aliases registered under `App Paths` — the last of these
+reaches console tools that ship inside installed suites and that Windows deliberately hides from
+Start. Each entity is enriched from local documentation (PE version resources, MSIX manifests,
+`.lnk` comments, `--help` output) and, optionally, online
 sources. A local generative model then writes a one-line description, a list of tasks the user
 might want, and synonyms — this is what closes the gap between how people phrase intent and how
 vendors name products. The result is embedded with `all-MiniLM-L6-v2` via ONNX Runtime.
