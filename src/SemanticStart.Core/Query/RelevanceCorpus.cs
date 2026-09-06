@@ -258,6 +258,27 @@ public static class RelevanceCorpus
         },
         new()
         {
+            Query = "vsco",
+            AcceptableResults = ["Visual Studio Code"],
+            WithinTopN = 1,
+            Rationale = "Reported: 'vsc' found Visual Studio Code but 'vsco' and 'vscod' made it vanish, so the target disappeared mid-word and only returned at 'vscode'. The pure-initials test stopped matching after the third keystroke and the subsequence fallback scores below the surfacing bar, so it could never bring anything back on its own. Every prefix of a name the user is typing has to keep working.",
+        },
+        new()
+        {
+            Query = "msinfo32",
+            AcceptableResults = ["System Information"],
+            WithinTopN = 1,
+            Rationale = "People address a program by the name it has on disk. This returned WOW64 before the launch target was matched literally, because nothing in the display name or documentation contains the string 'msinfo32'.",
+        },
+        new()
+        {
+            Query = "secpol",
+            AcceptableResults = ["Local Security Policy"],
+            WithinTopN = 1,
+            Rationale = "Same defect as msinfo32 for an MMC snap-in rather than an executable, which is why the check covers .msc and .cpl targets and not just .exe.",
+        },
+        new()
+        {
             Query = "write code",
             AcceptableResults = ["Visual Studio Code"],
             ForbiddenResults = ["Microsoft Visual Studio Code (User)"],

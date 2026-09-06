@@ -208,7 +208,21 @@ public sealed class HybridSearchEngine : ISearchEngine
         var partialNameCredibility = PartialNameCredibility(snapshot, query);
         for (var i = 0; i < snapshot.Entities.Length; i++)
         {
-            var (strength, reason) = NameMatcher.Score(query, snapshot.Entities[i].Entity.DisplayName, _options);
+            var entity = snapshot.Entities[i].Entity;
+            var (strength, reason) = NameMatcher.Score(query, entity.DisplayName, _options);
+
+            // People also address a program by the name of the thing that runs it. "msinfo32" and
+            // "devenv" are not in any display name, so before this the first returned WOW64 and the
+            // second returned nothing at all. The command name is matched with the same rules and
+            // the better of the two readings is kept, so typing either what a program is called or
+            // what it is named on disk works.
+            if (ImageName(entity) is { } imageName)
+            {
+                var (imageStrength, imageReason) = NameMatcher.Score(query, imageName, _options);
+                if (imageStrength > strength)
+                    (strength, reason) = (imageStrength, imageReason);
+            }
+
             if (strength <= 0 || reason is null)
                 continue;
 
@@ -345,6 +359,46 @@ public sealed class HybridSearchEngine : ISearchEngine
 
         return vectorScore >= _options.MinHybridSurfaceVectorScore && relativeVector;
     }
+
+    /// <summary>
+    /// The bare command name an entity is launched by - "msinfo32" for System Information,
+    /// "secpol" for Local Security Policy - or null when there is nothing a user would type.
+    ///
+    /// Only real program files qualify. URI launches are excluded because nobody types
+    /// "ms-settings:signinoptions", and packaged apps launch by AUMID, which merely looks like a
+    /// filename: treating "Microsoft.VisualStudioCode" as a path splits it at a non-existent
+    /// extension and yields "Microsoft.VisualStudio", a string that belongs to a different product.
+    /// Names already equal to the display name are dropped so the arm does not score them twice.
+    /// </summary>
+    private static string? ImageName(Entity entity)
+    {
+        if (entity.LaunchKind == LaunchKind.Uri || string.IsNullOrWhiteSpace(entity.LaunchTarget))
+            return null;
+
+        var target = entity.LaunchTarget;
+        var extension = Path.GetExtension(target);
+        if (!ExecutableExtensions.Contains(extension))
+            return null;
+
+        string stem;
+        try
+        {
+            stem = Path.GetFileNameWithoutExtension(target);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(stem)
+            || stem.Equals(entity.DisplayName, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return stem;
+    }
+
+    private static readonly HashSet<string> ExecutableExtensions =
+        new(StringComparer.OrdinalIgnoreCase) { ".exe", ".msc", ".cpl", ".bat", ".cmd", ".com", ".ps1", ".msi" };
 
     /// <summary>
     /// Biases results toward what this user launches, blending total frequency with recency.

@@ -44,6 +44,15 @@ public static class NameMatcher
             var acronym = string.Concat(words.Select(w => w[0]));
             if (string.Equals(acronym, q, StringComparison.Ordinal))
                 return (options.AcronymBoost, "acronym");
+
+            // Typing does not stop at the initials. Having typed "vsc" for Visual Studio Code the
+            // user continues into the last word - "vsco", "vscod" - and each of those keystrokes
+            // used to make the target disappear, because the pure-initials test no longer matched
+            // and the subsequence fallback below scores 0.24 against a 0.6 surfacing bar, so it can
+            // never surface anything on its own. Treating initials-plus-continuation as the acronym
+            // it is keeps the entity through the whole word rather than only at one prefix length.
+            if (IsInitialsPrefix(q, words))
+                return (options.AcronymBoost, "acronym prefix");
         }
 
         // Subsequence matching lets "vsc" reach "Visual Studio Code" and "devmgr" reach
@@ -75,6 +84,45 @@ public static class NameMatcher
         }
 
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// True when the query can be split into consecutive non-empty chunks, each a prefix of a
+    /// later word of the name, with the final chunk allowed to run into the middle of its word.
+    /// "vsco" splits as v|s|co across "visual studio code".
+    ///
+    /// Words may be skipped, because vendors prepend noise a user does not type: "Microsoft Visual
+    /// Studio Code" must still answer to "vsc". Requiring every chunk to be a genuine word prefix
+    /// is what keeps that from becoming a plain subsequence match - "vsco" does not reach "x86
+    /// Native Tools Command Prompt for VS 2022", since nothing after the "vs" word begins with c.
+    /// </summary>
+    private static bool IsInitialsPrefix(string query, string[] words)
+    {
+        return Match(0, 0);
+
+        bool Match(int queryIndex, int wordIndex)
+        {
+            if (queryIndex == query.Length)
+                return true;
+
+            for (var w = wordIndex; w < words.Length; w++)
+            {
+                var word = words[w];
+                var maxChunk = Math.Min(word.Length, query.Length - queryIndex);
+
+                // Longest chunk first: the common case consumes as much of the word as was typed.
+                for (var length = maxChunk; length >= 1; length--)
+                {
+                    if (string.CompareOrdinal(query, queryIndex, word, 0, length) != 0)
+                        continue;
+
+                    if (Match(queryIndex + length, w + 1))
+                        return true;
+                }
+            }
+
+            return false;
+        }
     }
 
     private static bool IsSubsequence(string needle, string haystack)
