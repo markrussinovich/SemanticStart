@@ -30,6 +30,7 @@ internal static class Program
                 "eval" => await EvalAsync(),
                 "stats" => await StatsAsync(),
                 "enrich" => await EnrichAsync(args),
+                "diagnose" => await DiagnoseAsync(args),
                 _ => Help(),
             };
         }
@@ -50,8 +51,122 @@ internal static class Program
               eval                         Run the relevance harness
               stats                        Show index statistics
               enrich <name> [--online]     Show what each enricher produces for one entity
+              diagnose <query> --name <n>  Show why an entity did or did not surface for a query
             """);
         return 0;
+    }
+
+    /// <summary>
+    /// Explains one entity's fate for one query. Search reports what surfaced; the harder question
+    /// is always why something did not, and the answer is either "no arm retrieved it" or "an arm
+    /// retrieved it and a surfacing floor rejected it". Those need opposite fixes - better
+    /// documentation versus better ranking - and they are indistinguishable from the outside.
+    ///
+    /// The technique is to run the same query twice against the same snapshot, once with the
+    /// floors at their shipped values and once with every floor disabled, and diff. Whatever the
+    /// permissive pass finds and the default pass does not was pruned, and its arm scores say
+    /// which floor did it.
+    /// </summary>
+    private static async Task<int> DiagnoseAsync(string[] args)
+    {
+        var name = string.Empty;
+        var terms = new List<string>();
+
+        for (var i = 1; i < args.Length; i++)
+        {
+            if (args[i] is "--name" && i + 1 < args.Length)
+            {
+                name = args[++i];
+                continue;
+            }
+
+            terms.Add(args[i]);
+        }
+
+        var query = string.Join(' ', terms);
+        if (string.IsNullOrWhiteSpace(query) || string.IsNullOrWhiteSpace(name))
+        {
+            Console.Error.WriteLine("usage: diagnose <query> --name <entity display name>");
+            return 1;
+        }
+
+        var permissive = RankingOptions.Default with
+        {
+            MinVectorScore = 0,
+            MinVectorOnlySurfaceScore = 0,
+            MinHybridSurfaceVectorScore = 0,
+            MinHybridVectorLeaderRatio = 0,
+            MinVectorOnlyLeaderRatio = 0,
+            MinLexicalContributionRatio = 0,
+            MinLexicalOnlyLeaderRatio = 0,
+            MinRelativeScoreWithoutIndependentEvidence = 0,
+            MinCorroboratedEvidenceProduct = 0,
+            StrongLexicalScore = 0,
+        };
+
+        var embeddings = await CreateEmbeddingModelAsync();
+        using var store = new SqliteIndexStore();
+        using (embeddings)
+        {
+            await store.InitializeAsync(embeddings.ModelId, embeddings.Dimensions);
+
+            var strict = new HybridSearchEngine(store, embeddings);
+            var loose = new HybridSearchEngine(store, embeddings, permissive);
+            await strict.LoadAsync();
+            await loose.LoadAsync();
+
+            var strictHits = await strict.SearchAsync(query, 200);
+            var looseHits = await loose.SearchAsync(query, 200);
+
+            Console.WriteLine($"\"{query}\"  |  {strictHits.Count} surfaced, {looseHits.Count} retrieved");
+            Console.WriteLine();
+
+            Report("shipped floors", strictHits, name);
+            Report("floors disabled", looseHits, name);
+
+            var topVector = looseHits.Where(h => h.VectorScore.HasValue).Select(h => h.VectorScore!.Value).DefaultIfEmpty(0).Max();
+            var topLexical = looseHits.Where(h => h.LexicalScore.HasValue).Select(h => h.LexicalScore!.Value).DefaultIfEmpty(0).Max();
+            Console.WriteLine($"leaders: vector {topVector:F3}, lexical {topLexical:F3}");
+
+            var subject = looseHits.FirstOrDefault(h => h.Entity.DisplayName.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (subject is not null)
+            {
+                Console.WriteLine(
+                    $"  vector {Format(subject.VectorScore)} = {Ratio(subject.VectorScore, topVector)} of leader" +
+                    $"   lexical {Format(subject.LexicalScore)} = {Ratio(subject.LexicalScore, topLexical)} of leader");
+            }
+
+            return 0;
+        }
+
+        static void Report(string label, IReadOnlyList<SearchHit> hits, string name)
+        {
+            var index = -1;
+            for (var i = 0; i < hits.Count; i++)
+            {
+                if (hits[i].Entity.DisplayName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                {
+                    index = i;
+                    break;
+                }
+            }
+
+            if (index < 0)
+            {
+                Console.WriteLine($"{label,-16}: absent");
+                return;
+            }
+
+            var hit = hits[index];
+            Console.WriteLine(
+                $"{label,-16}: rank {index + 1}  score {hit.Score:F4}  " +
+                $"vector {Format(hit.VectorScore)}  lexical {Format(hit.LexicalScore)}  via {hit.MatchReason}");
+        }
+
+        static string Format(double? value) => value.HasValue ? value.Value.ToString("F3") : "-";
+
+        static string Ratio(double? value, double leader)
+            => value.HasValue && leader > 0 ? (value.Value / leader).ToString("P0") : "-";
     }
 
     /// <summary>
