@@ -2,6 +2,7 @@
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using SemanticStart.Core.Abstractions;
+using SemanticStart.Core.Collectors;
 using SemanticStart.Core.Model;
 
 namespace SemanticStart.Core.Enrichment;
@@ -165,6 +166,9 @@ public sealed class MsixManifestEnricher : IEnricher
         return bang >= 0 && bang < aumid.Length - 1 ? aumid[(bang + 1)..] : null;
     }
 
+    private static async Task<string?> ResolveInstallLocationAsync(string packageFamilyName, CancellationToken cancellationToken) =>
+        await PackageCatalog.ResolveInstallLocationAsync(packageFamilyName, cancellationToken).ConfigureAwait(false);
+
     private static string? GetPackageFamilyName(Entity entity)
     {
         if (entity.RawMetadata.TryGetValue("packageFamilyName", out var pf) && !string.IsNullOrWhiteSpace(pf)) return pf.Trim();
@@ -172,90 +176,4 @@ public sealed class MsixManifestEnricher : IEnricher
         return entity.LaunchTarget.Contains('!') ? entity.LaunchTarget.Split('!', 2)[0] : null;
     }
 
-    /// <summary>
-    /// Maps package family name to install location for every package registered to the user.
-    ///
-    /// This is resolved once for the whole index rather than per entity. The previous code ran a
-    /// PowerShell process per packaged app, which on a normal machine means well over a hundred
-    /// process launches, and it asked for a parameter that does not exist: Get-AppxPackage has no
-    /// -PackageFamilyName. Every call therefore failed with a parameter binding error, so no MSIX
-    /// app in the index ever received a manifest document.
-    /// </summary>
-    private static Task<IReadOnlyDictionary<string, string>>? _packageMap;
-    private static readonly SemaphoreSlim PackageMapLock = new(1, 1);
-
-    private static async Task<IReadOnlyDictionary<string, string>> GetPackageMapAsync(CancellationToken cancellationToken)
-    {
-        if (_packageMap is not null)
-            return await _packageMap.ConfigureAwait(false);
-
-        await PackageMapLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            _packageMap ??= LoadPackageMapAsync(cancellationToken);
-        }
-        finally
-        {
-            PackageMapLock.Release();
-        }
-
-        return await _packageMap.ConfigureAwait(false);
-    }
-
-    private static async Task<IReadOnlyDictionary<string, string>> LoadPackageMapAsync(CancellationToken cancellationToken)
-    {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var ps = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
-        if (!File.Exists(ps))
-            return map;
-
-        const string Script = "Get-AppxPackage | ForEach-Object { $_.PackageFamilyName + '|' + $_.InstallLocation }";
-        var output = await ProcessRunner
-            .RunAsync(ps, ["-NoProfile", "-NonInteractive", "-Command", Script], TimeSpan.FromSeconds(60), cancellationToken)
-            .ConfigureAwait(false);
-
-        foreach (var line in output.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-        {
-            var parts = line.Split('|', 2);
-            if (parts.Length != 2)
-                continue;
-
-            var family = parts[0].Trim();
-            var location = parts[1].Trim();
-            if (family.Length > 0 && location.Length > 0)
-                map[family] = location;
-        }
-
-        return map;
-    }
-
-    private static async Task<string?> ResolveInstallLocationAsync(string packageFamilyName, CancellationToken cancellationToken)
-    {
-        var map = await GetPackageMapAsync(cancellationToken).ConfigureAwait(false);
-        if (map.TryGetValue(packageFamilyName, out var location) && Directory.Exists(location))
-            return location;
-
-        try
-        {
-            // Fallback for when PowerShell is unavailable. WindowsApps directories are named
-            // Name_Version_Arch__PublisherId, so a package family name (Name_PublisherId) is not a
-            // prefix of them; the two halves have to be matched separately.
-            var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WindowsApps");
-            if (!Directory.Exists(root))
-                return null;
-
-            var split = packageFamilyName.LastIndexOf('_');
-            if (split <= 0)
-                return null;
-
-            var name = packageFamilyName[..split];
-            var publisherId = packageFamilyName[(split + 1)..];
-
-            return Directory
-                .EnumerateDirectories(root, name + "_*__" + publisherId, SearchOption.TopDirectoryOnly)
-                .FirstOrDefault(d => File.Exists(Path.Combine(d, "AppxManifest.xml")));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException) { }
-        return null;
-    }
 }

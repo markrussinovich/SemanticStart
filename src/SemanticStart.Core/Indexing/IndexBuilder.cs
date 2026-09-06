@@ -121,9 +121,11 @@ public sealed class IndexBuilder
 
             try
             {
-                await foreach (var entity in collector.CollectAsync(cancellationToken).ConfigureAwait(false))
+                await foreach (var collected in collector.CollectAsync(cancellationToken).ConfigureAwait(false))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+
+                    var entity = await WithResolvedExecutableAsync(collected, cancellationToken).ConfigureAwait(false);
 
                     if (discovered.ContainsKey(entity.Id))
                         continue;
@@ -175,6 +177,50 @@ public sealed class IndexBuilder
         }
 
         return discovered;
+    }
+
+    /// <summary>
+    /// Fills in the executable behind an AppUserModelId, which the AppsFolder does not supply.
+    ///
+    /// Without this an AppsFolder entry is nothing but an opaque identifier, with three
+    /// consequences: the dedupe key on the resolved binary never fires, so the same tool appears
+    /// once per collector that found it; the local file enrichers have no file to read; and the
+    /// details panel has no path to show, because an AppUserModelId is not something to put in
+    /// front of a user. Resolution is cached per package, so this costs one manifest read per
+    /// installed package rather than one per application.
+    /// </summary>
+    private static async Task<Entity> WithResolvedExecutableAsync(Entity entity, CancellationToken cancellationToken)
+    {
+        if (entity.LaunchKind != LaunchKind.AppsFolder || entity.RawMetadata.ContainsKey("targetPath"))
+            return entity;
+
+        var identifier = entity.RawMetadata.GetValueOrDefault("appUserModelId") ?? entity.LaunchTarget;
+
+        string? executable;
+        try
+        {
+            executable = await PackageCatalog.ResolveExecutableAsync(identifier, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // An unreadable package must not cost the entity its place in the index.
+            Debug.WriteLine($"Could not resolve executable for '{identifier}': {ex}");
+            return entity;
+        }
+
+        if (executable is null)
+            return entity;
+
+        var metadata = new Dictionary<string, string>(entity.RawMetadata, StringComparer.Ordinal)
+        {
+            ["targetPath"] = executable,
+        };
+
+        return CollectorEntity.WithContentHash(entity with { RawMetadata = metadata });
     }
 
     /// <summary>

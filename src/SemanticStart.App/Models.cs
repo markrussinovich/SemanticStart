@@ -63,10 +63,14 @@ public sealed class SearchResultItem : ObservableObject
     public bool HasTasks => Hit.Tasks.Count > 0;
 
     /// <summary>
-    /// A launch target is only worth showing when it tells the user something. An AppUserModelId is
-    /// an opaque package identifier, so it is suppressed in favour of showing nothing.
+    /// Where the thing lives, for the details panel. An AppUserModelId is an opaque package
+    /// identifier and says nothing to a user, so packaged apps fall back to the executable
+    /// resolved from their manifest at index time; only when even that is unknown is the line
+    /// dropped entirely.
     /// </summary>
-    public string LaunchTarget => FormatLaunchTarget(Hit.Entity.LaunchTarget);
+    public string LaunchTarget => FormatLaunchTarget(Hit.Entity.LaunchTarget) is { Length: > 0 } shown
+        ? shown
+        : Hit.Entity.RawMetadata.GetValueOrDefault("targetPath") ?? string.Empty;
 
     public bool HasLaunchTarget => LaunchTarget.Length > 0;
 
