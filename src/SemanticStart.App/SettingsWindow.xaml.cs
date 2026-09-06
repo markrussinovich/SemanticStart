@@ -195,51 +195,77 @@ public partial class SettingsWindow : Window
     }
 
     /// <summary>
-    /// Lists what the index holds, one category per line with the count in bold.
-    ///
-    /// Built as inlines rather than a formatted string because the counts are the part worth
-    /// scanning for, and a single run-on line hid them: the whole point of this block is to answer
-    /// "how much of my machine did it actually find" at a glance.
+    /// What the stats block ended up showing, as (line count, bolded value count). Exposed so a
+    /// test can confirm the counts really are on separate lines and really are bold, which is the
+    /// whole point of building this as inlines instead of a formatted string.
     /// </summary>
+    internal (int Lines, int BoldValues) IndexStatsShape
+    {
+        get
+        {
+            var inlines = IndexStatsText.Inlines.ToList();
+            if (inlines.Count == 0)
+                return (IndexStatsText.Text.Length > 0 ? 1 : 0, 0);
+
+            var breaks = inlines.Count(i => i is LineBreak);
+            var bold = inlines.Count(i => i is Run run && run.FontWeight == FontWeights.SemiBold);
+            return (breaks + 1, bold);
+        }
+    }
+
     private async Task RefreshIndexStatsAsync()
     {
         try
         {
             var stats = await _searchService.GetIndexStatsAsync(CancellationToken.None);
-            IndexStatsText.Inlines.Clear();
-
-            if (stats.Total == 0)
-            {
-                IndexStatsText.Text = "Index is empty. Rebuild to populate it.";
-                return;
-            }
-
-            var rows = new List<(string Label, string Value)>
-            {
-                ("Applications", stats.Apps.ToString("N0")),
-                ("System utilities", stats.SystemTools.ToString("N0")),
-                ("Windows settings", stats.WindowsSettings.ToString("N0")),
-            };
-
-            if (stats.Other > 0)
-                rows.Add(("Other", stats.Other.ToString("N0")));
-
-            rows.Add(("Total entries", stats.Total.ToString("N0")));
-            rows.Add(("Size on disk", stats.SizeDisplay));
-
-            for (var i = 0; i < rows.Count; i++)
-            {
-                if (i > 0)
-                    IndexStatsText.Inlines.Add(new LineBreak());
-
-                IndexStatsText.Inlines.Add(new Run($"{rows[i].Label}: "));
-                IndexStatsText.Inlines.Add(new Run(rows[i].Value) { FontWeight = FontWeights.SemiBold });
-            }
+            RenderIndexStats(stats);
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Failed to read index stats");
             IndexStatsText.Text = "Index statistics unavailable.";
+        }
+    }
+
+    /// <summary>
+    /// Lists what the index holds, one category per line with the count in bold.
+    ///
+    /// Built as inlines rather than a formatted string because the counts are the part worth
+    /// scanning for, and a single run-on line hid them: the whole point of this block is to answer
+    /// "how much of my machine did it actually find" at a glance.
+    ///
+    /// Separated from the read above so it can be exercised with known numbers.
+    /// </summary>
+    internal void RenderIndexStats(IndexStats stats)
+    {
+        IndexStatsText.Inlines.Clear();
+
+        if (stats.Total == 0)
+        {
+            IndexStatsText.Text = "Index is empty. Rebuild to populate it.";
+            return;
+        }
+
+        var rows = new List<(string Label, string Value)>
+        {
+            ("Applications", stats.Apps.ToString("N0")),
+            ("System utilities", stats.SystemTools.ToString("N0")),
+            ("Windows settings", stats.WindowsSettings.ToString("N0")),
+        };
+
+        if (stats.Other > 0)
+            rows.Add(("Other", stats.Other.ToString("N0")));
+
+        rows.Add(("Total entries", stats.Total.ToString("N0")));
+        rows.Add(("Size on disk", stats.SizeDisplay));
+
+        for (var i = 0; i < rows.Count; i++)
+        {
+            if (i > 0)
+                IndexStatsText.Inlines.Add(new LineBreak());
+
+            IndexStatsText.Inlines.Add(new Run($"{rows[i].Label}: "));
+            IndexStatsText.Inlines.Add(new Run(rows[i].Value) { FontWeight = FontWeights.SemiBold });
         }
     }
 

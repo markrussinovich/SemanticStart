@@ -20,10 +20,11 @@ namespace SemanticStart.Tests;
 public class SettingsWindowSmokeTests
 {
     [Fact]
-    public void SettingsWindowRendersWithTheSavedHotKeyVisible()
+    public void SettingsWindowRendersWithTheSavedHotKeyAndReadableIndexStats()
     {
         Exception? failure = null;
         string? hotKeyText = null;
+        (int Lines, int BoldValues) statsShape = default;
 
         var thread = new Thread(() =>
         {
@@ -55,6 +56,14 @@ public class SettingsWindowSmokeTests
 
                 hotKeyText = window.HotKeyDisplayText;
 
+                // Known numbers rather than the machine's real index: this asserts the block's
+                // shape, and a test that depends on how many apps happen to be installed asserts
+                // nothing repeatable.
+                window.RenderIndexStats(new IndexStats(
+                    Total: 553, Apps: 300, SystemTools: 150, WindowsSettings: 100, Other: 3,
+                    SizeBytes: 12_345_678));
+                statsShape = window.IndexStatsShape;
+
                 window.Close();
             }
             catch (Exception ex)
@@ -73,5 +82,9 @@ public class SettingsWindowSmokeTests
             string.IsNullOrWhiteSpace(hotKeyText),
             "The hotkey field was blank after rendering, so the active chord is invisible to the user.");
         Assert.Equal(new AppSettings().HotKey, hotKeyText);
+
+        // Six categories, six lines, and a bold value on every one of them. The counts are the
+        // reason to read this block, so a run-on line or an unbolded number is a regression.
+        Assert.Equal((6, 6), statsShape);
     }
 }
