@@ -231,6 +231,33 @@ public static class RelevanceCorpus
         },
         new()
         {
+            Query = "edit",
+            AcceptableResults = ["Notepad"],
+            WithinTopN = 5,
+            Rationale = "Reported as missing Notepad, Paint and Clipchamp. A bare verb returned only entities named '<something> Editor', all of whose summaries merely restate their own name ('Open Registry Editor.'). Those placeholder summaries occupy the highest-weighted intent fields while carrying no information, and being three words long BM25 inflates them enormously - which both outranks tools that genuinely edit things and raises the pruning floor so far that Notepad, Paint and Clipchamp are dropped entirely. Asserting Notepad alone because the harness can only require one of a set; it is the most canonical of the three.",
+        },
+        new()
+        {
+            Query = "edit doc",
+            AcceptableResults = ["Visual Studio Code"],
+            WithinTopN = 5,
+            Rationale = "Reported as missing Visual Studio Code. Deliberately does not accept Notepad or Word, which already rank and would let the case pass while the reported gap remained. VS Code ranks first for 'edit code' and 'code editor', so its profile is sound; the shortfall is that nothing in its indexed text relates it to documents.",
+        },
+        new()
+        {
+            Query = "check access",
+            AcceptableResults = ["AccessChk"],
+            Rationale = "Reported. Deliberately does not accept AccessEnum, which already ranks first and would mask the gap. AccessChk reports effective permissions and is the exact answer, but it is not in the index at all: it is a console tool shipped inside an installed suite, and only GUI apps reach the AppsFolder while the system-tool collector scans System32 alone. This is a collection gap, not a ranking one.",
+        },
+        new()
+        {
+            Query = "write code",
+            AcceptableResults = ["Visual Studio Code"],
+            ForbiddenResults = ["Microsoft Visual Studio Code (User)"],
+            Rationale = "Found while diagnosing the reports above. One installed copy of VS Code is indexed twice: the AppsFolder entry carries a real description, while the uninstall-registry entry has only the placeholder 'Open Microsoft Visual Studio Code (User).' - and the placeholder one ranks higher, because a short summary of pure name tokens sits closer to a short query than real prose does. Deduplication compares display names only, so it never noticed that both resolve to the same Code.exe.",
+        },
+        new()
+        {
             Query = "ask ai",
             AcceptableResults = ["Copilot", "GitHub Copilot", "Foundry Local CLI", "Claude"],
             Rationale = "Copilot had no description beyond 'Open Copilot.'",

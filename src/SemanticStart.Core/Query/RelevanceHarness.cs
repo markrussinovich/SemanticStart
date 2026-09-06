@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using SemanticStart.Core.Abstractions;
 
 namespace SemanticStart.Core.Query;
@@ -143,15 +144,52 @@ public sealed class RelevanceHarness(ISearchEngine engine)
     }
 
     /// <summary>
-    /// Lenient comparison. Display names vary across machines and Windows versions ("Power &amp;
-    /// battery" versus "Power Options"), so containment either way counts as a match.
+    /// Lenient comparison, but only across whole words. Display names vary across machines and
+    /// Windows versions, and an entry may legitimately be listed under a shorter name than the one
+    /// the machine reports ("Clipchamp" for "Microsoft Clipchamp"), so a name whose words are all
+    /// present in the other still counts as a match.
+    ///
+    /// Raw substring containment was wrong and was silently passing cases. Normalization removes
+    /// spaces, so any short generic name matched anything built on it: a case asserting that
+    /// AccessChk is found was reported as passing at rank 1 by the unrelated database app
+    /// "Access", and the tool it was written to demand is not even in the index. A test that
+    /// cannot fail is worse than no test, because it is counted as evidence.
     /// </summary>
     private static bool IsMatch(string actual, string expected)
     {
-        var a = NameMatcher.Normalize(actual);
-        var e = NameMatcher.Normalize(expected);
+        var a = Words(actual);
+        var e = Words(expected);
 
-        return a.Contains(e, StringComparison.Ordinal) || e.Contains(a, StringComparison.Ordinal);
+        if (a.Count == 0 || e.Count == 0)
+            return false;
+
+        return a.IsSubsetOf(e) || e.IsSubsetOf(a);
+    }
+
+    private static HashSet<string> Words(string value)
+    {
+        var words = new HashSet<string>(StringComparer.Ordinal);
+        var current = new StringBuilder(value.Length);
+
+        foreach (var ch in value)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                current.Append(char.ToLowerInvariant(ch));
+                continue;
+            }
+
+            if (current.Length > 0)
+            {
+                words.Add(current.ToString());
+                current.Clear();
+            }
+        }
+
+        if (current.Length > 0)
+            words.Add(current.ToString());
+
+        return words;
     }
 
     /// <summary>
