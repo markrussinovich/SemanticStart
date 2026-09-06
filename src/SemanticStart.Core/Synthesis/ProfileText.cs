@@ -26,6 +26,33 @@ internal static class ProfileText
     /// The text is capped rather than taken whole. Documentation pages trail off into navigation,
     /// legal notices, and unrelated links, and BM25 length normalisation means a long field of
     /// mostly-irrelevant text both dilutes real matches and invites incidental ones.
+    ///
+    /// Indexing the whole document instead of a capped extract was built and measured, and it is
+    /// this field that makes it redundant. Documents were chunked into ~420-character passages,
+    /// every passage embedded, and retrieval scored max-over-passages with a separate BM25 arm
+    /// over passage text - the standard retrieval-augmented layout. Results, all on the 48-case
+    /// corpus against a baseline of 45:
+    ///
+    ///   passages indexed as harvested .......... 43  (regressed)
+    ///   passage vectors only, no BM25 arm ...... 43  (regressed)
+    ///   prose-filtered, undiscounted ........... 44
+    ///   prose-filtered, discounted 0.85 ........ 45  (identical failures to baseline)
+    ///   + BM25 arm over passages, any weight ... 44
+    ///
+    /// Two things went wrong. Taking the best of a dozen passages is a multiple-comparisons
+    /// problem: more documentation means more chances at one spuriously close vector, so
+    /// "change my password" ranked 1Password first - an article about passwords is topically
+    /// adjacent to the query, while the setting that performs the action is not. And most
+    /// harvested text is not prose at all but CLI "/?" output and columns of ms-settings: URIs,
+    /// which are long, token-dense, and match common words by accident.
+    ///
+    /// Discounting passages against the profile vector fixed the regression but produced no gain:
+    /// top-3 results were byte-identical to the baseline across the corpus and ten unseen queries.
+    /// The reason is visible in the data - an entity's extra passages are usually the continuation
+    /// of the very article whose opening is already in this field, and an article's lead is the
+    /// part that names capabilities. Chunking buys the tail of a document, which is history,
+    /// provenance, and links. The ceiling here is source coverage, not extraction: "change what
+    /// happens when I close the lid" still fails because no document on the machine says "lid".
     /// </summary>
     public static string? Details(IReadOnlyList<Model.EnrichmentDocument> documents, int maxCharacters = 600)
     {
