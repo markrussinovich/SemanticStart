@@ -24,6 +24,14 @@ public sealed record RelevanceCase
     /// </summary>
     public string[] ForbiddenResults { get; init; } = [];
 
+    /// <summary>
+    /// Display names that must appear somewhere in the results, at any rank. Separate from
+    /// <see cref="AcceptableResults"/>, which asks only that *one* of several good answers reached
+    /// the top: this asks that a specific answer was not lost, which is a recall question rather
+    /// than an ordering one.
+    /// </summary>
+    public string[] RequiredResults { get; init; } = [];
+
     /// <summary>When true, the correct result is an empty list with a clean no-match contract.</summary>
     public bool ExpectNoResults { get; init; }
 
@@ -64,6 +72,29 @@ public static class RelevanceCorpus
             AcceptableResults = ["Microsoft To Do", "To Do", "Sticky Notes", "Tasks"],
             WithinTopN = 1,
             Rationale = "Regression: 'list' is a word most of the index can claim and 'todo' is a word almost none can, so a command that lists running processes must not answer half the query and win on it.",
+        },
+        new()
+        {
+            Query = "file edit",
+            AcceptableResults = ["Notepad", "Visual Studio Code", "WordPad", "Word", "Files", "File Explorer"],
+            WithinTopN = 1,
+            Rationale = "Reported as ranking Registry Editor first. A registry editor is still an editor and may appear, but a single launch of it earlier that day must not outweigh a text editor the semantic arm prefers by a wide margin on a query about files.",
+        },
+        new()
+        {
+            Query = "process memory usage",
+            AcceptableResults = ["Resource Monitor", "Task Manager", "Performance Monitor", "VMMap", "RAMMap", "Sysinternals Process Explorer", "Process Explorer"],
+            RequiredResults = ["Resource Monitor"],
+            WithinTopN = 5,
+            Rationale = "Reported as missing Resource Monitor, which reports per-process memory and is what Windows itself ships for this. The Sysinternals memory analyzers are accepted for the top slot because they answer it too, but Resource Monitor is required outright: it already ranks for its own name, so accepting VMMap alone would let the case pass while the reported gap remained. KNOWN GAP: nothing indexed about Resource Monitor uses the words 'process' or 'usage'. Its Wikipedia lead calls it a utility that displays hardware resource information; only the article's Features section names processes and CPU usage. Harvesting that text does reach it - and cost 'file edit' and 'uninstall a program' plus 0.05 MRR, because a longer details column widens the FTS candidate pool even at zero weight, admitting topical neighbours rather than answers. Closing this needs a source that says what a tool does without a page of what it is adjacent to.",
+        },
+        new()
+        {
+            Query = "todo",
+            AcceptableResults = ["Microsoft To Do", "To Do"],
+            RequiredResults = ["Outlook (classic)"],
+            WithinTopN = 1,
+            Rationale = "Reported. Users type the compound with no separator, so an entity whose own text says 'to-dos' must still be reachable from 'todo'; the app named for it still leads.",
         },
         new()
         {

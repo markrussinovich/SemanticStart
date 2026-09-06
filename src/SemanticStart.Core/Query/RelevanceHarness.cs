@@ -100,6 +100,9 @@ public sealed record RelevanceReport
                 if (f.Case.ForbiddenResults.Length > 0)
                     lines.Add($"    forbidden: {string.Join(" | ", f.Case.ForbiddenResults)}");
 
+                if (f.Case.RequiredResults.Length > 0)
+                    lines.Add($"    must also return: {string.Join(" | ", f.Case.RequiredResults)}");
+
                 if (f.Case.MaxResults is { } max)
                     lines.Add($"    max results: {max}");
 
@@ -158,11 +161,12 @@ public sealed class RelevanceHarness(ISearchEngine engine)
             var noResultsPassed = !testCase.ExpectNoResults || names.Length == 0;
             var maxResultsPassed = !testCase.MaxResults.HasValue || names.Length <= testCase.MaxResults.Value;
             var forbiddenPassed = !names.Any(n => testCase.ForbiddenResults.Any(f => IsForbiddenMatch(n, f)));
+            var requiredPassed = testCase.RequiredResults.All(r => names.Any(n => IsMatch(n, r)));
 
             outcomes.Add(new RelevanceOutcome
             {
                 Case = testCase,
-                Passed = recallPassed && noResultsPassed && maxResultsPassed && forbiddenPassed,
+                Passed = recallPassed && noResultsPassed && maxResultsPassed && forbiddenPassed && requiredPassed,
                 ActualTop = [.. names.Take(5)],
                 MatchedRank = matchedRank,
                 ElapsedMs = sw.Elapsed.TotalMilliseconds,
