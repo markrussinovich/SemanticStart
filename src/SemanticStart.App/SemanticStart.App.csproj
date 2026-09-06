@@ -16,6 +16,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The smoke test reads what the settings window is showing, without widening its public surface. -->
+    <InternalsVisibleTo Include="SemanticStart.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\SemanticStart.Core\SemanticStart.Core.csproj" />
   </ItemGroup>
 

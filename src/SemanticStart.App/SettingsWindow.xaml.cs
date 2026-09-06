@@ -101,7 +101,7 @@ public partial class SettingsWindow : Window
 
     private void LoadControls()
     {
-        HotKeyBox.Text = _settings.HotKey;
+        HotKeyBox.HotKey = _settings.HotKey;
         TakeStartBox.IsChecked = _settings.TakeOverStartKey;
         OnlineBox.IsChecked = _settings.AllowOnlineEnrichment;
         LoginBox.IsChecked = _settings.LaunchAtLogin;
@@ -114,15 +114,18 @@ public partial class SettingsWindow : Window
         UpdateHotKeyStatus();
     }
 
+    /// <summary>The chord currently shown in the hotkey field. Exposed so a test can read what the user sees.</summary>
+    internal string HotKeyDisplayText => HotKeyBox.HotKey;
+
     /// <summary>
-    /// Shows the hotkey that is genuinely in force. These can differ for two reasons now: the text
-    /// may not be a valid chord at all, or it may be valid but already owned by another app, in
-    /// which case registration falls back to a free one. Both need saying, because in each case
-    /// pressing what was typed does nothing.
+    /// Shows the hotkey that is genuinely in force. These can differ for two reasons now: the
+    /// captured chord may not be usable at all, or it may be valid but already owned by another
+    /// app, in which case registration falls back to a free one. Both need saying, because in each
+    /// case pressing what was captured does nothing.
     /// </summary>
     private void UpdateHotKeyStatus()
     {
-        if (!HotKeySpec.TryParse(HotKeyBox.Text, out _, out var error))
+        if (!HotKeySpec.TryParse(HotKeyBox.HotKey, out _, out var error))
         {
             HotKeyStatus.Text = error;
             return;
@@ -140,23 +143,29 @@ public partial class SettingsWindow : Window
     }
 
     /// <summary>
-    /// Validates as the user types, so a rejected chord is reported at the keystroke rather than
-    /// discovered later when the shortcut does not work.
+    /// Applies a captured chord immediately. The recorder only raises this once a press has become
+    /// a usable chord, so there is no partially-typed state to guard against.
     /// </summary>
-    private void HotKeyBox_TextChanged(object sender, RoutedEventArgs e)
+    private void HotKeyBox_HotKeyChanged(object? sender, EventArgs e)
     {
         if (!IsLoaded)
             return;
 
-        UpdateHotKeyStatus();
+        SaveFromControls();
     }
+
+    /// <summary>
+    /// Reports a press that cannot be a hotkey, at the keystroke rather than later when the
+    /// shortcut silently does not work.
+    /// </summary>
+    private void HotKeyBox_HotKeyRejected(object? sender, string reason) => HotKeyStatus.Text = reason;
 
     private void SaveFromControls()
     {
-        // An unparseable chord keeps the previous one rather than falling back to the default:
-        // silently replacing what the user typed with something else is how the old parser turned
-        // a typo into a different working shortcut with no indication anything had happened.
-        var hotKey = HotKeySpec.TryParse(HotKeyBox.Text, out var spec, out _) && spec is not null
+        // An unusable chord keeps the previous one rather than falling back to the default:
+        // silently replacing what the user asked for with something else is how the old parser
+        // turned a typo into a different working shortcut with no indication anything had happened.
+        var hotKey = HotKeySpec.TryParse(HotKeyBox.HotKey, out var spec, out _) && spec is not null
             ? spec.Normalized
             : _settings.HotKey;
 
@@ -173,7 +182,7 @@ public partial class SettingsWindow : Window
         };
         _settingsService.Save(_settings);
         _activationManager.ApplySettings(_settings);
-        HotKeyBox.Text = _settings.HotKey;
+        HotKeyBox.HotKey = _settings.HotKey;
         UpdateHotKeyStatus();
     }
 

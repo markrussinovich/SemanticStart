@@ -1,6 +1,7 @@
 <Window x:Class="SemanticStart.App.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:SemanticStart.App"
         Title="SemanticStart Settings" Width="620" Height="760" WindowStartupLocation="CenterScreen"
         ResizeMode="CanMinimize" FontFamily="{DynamicResource UiFont}"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Ideal"
@@ -96,20 +97,9 @@
                             <TextBlock Text="Hotkey" />
                             <TextBlock x:Name="HotKeyStatus" Style="{StaticResource Caption}" />
                         </StackPanel>
-                        <ComboBox x:Name="HotKeyBox" Grid.Column="1" Width="190" VerticalAlignment="Center"
-                                  Style="{StaticResource FluentComboBox}"
-                                  IsEditable="True" StaysOpenOnEdit="True"
-                                  TextBoxBase.TextChanged="HotKeyBox_TextChanged" FontSize="14">
-                            <ComboBoxItem Content="Win+Alt+Space" />
-                            <ComboBoxItem Content="Win+Alt+S" />
-                            <ComboBoxItem Content="Win+Alt+X" />
-                            <ComboBoxItem Content="Win+Ctrl+G" />
-                            <ComboBoxItem Content="Win+Shift+S" />
-                            <ComboBoxItem Content="Ctrl+Alt+Space" />
-                            <ComboBoxItem Content="Ctrl+Alt+S" />
-                            <ComboBoxItem Content="Ctrl+Shift+Space" />
-                            <ComboBoxItem Content="Alt+Shift+Space" />
-                        </ComboBox>
+                        <local:HotKeyRecorder x:Name="HotKeyBox" Grid.Column="1" VerticalAlignment="Center"
+                                              HotKeyChanged="HotKeyBox_HotKeyChanged"
+                                              HotKeyRejected="HotKeyBox_HotKeyRejected" />
                     </Grid>
                 </Border>
 
