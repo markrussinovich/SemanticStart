@@ -24,9 +24,9 @@ public sealed record EnrichmentDocument
 }
 
 /// <summary>
-/// The normalized, LLM-authored description of an entity. This is the layer that closes the
-/// vocabulary gap between how a vendor names a product and how a user describes their intent,
-/// and it is what actually gets embedded.
+/// The normalized description of an entity, derived from its own metadata and the documentation
+/// harvested for it. This is the layer that closes the vocabulary gap between how a vendor names a
+/// product and how a user describes their intent, and it is what actually gets embedded.
 /// </summary>
 public sealed record SynthesizedProfile
 {
@@ -51,14 +51,13 @@ public sealed record SynthesizedProfile
     /// Bounded prose from the best document harvested for this entity, describing what it can
     /// actually do. The summary is deliberately one sentence, which is right for display but drops
     /// almost all of the capability vocabulary the enrichers worked to find; this keeps a little of
-    /// it for retrieval. It is evidence rather than generated text, so it is populated the same way
-    /// whether or not a language model is available.
+    /// it for retrieval.
     /// </summary>
     public string? Details { get; init; }
 
     /// <summary>
-    /// Which generator produced this. "llm:{model}" when synthesized, or "fallback" when the
-    /// generative model was unavailable and we degraded to raw documentation.
+    /// Which generator produced this, recorded so an index can be attributed after the fact.
+    /// Currently always "heuristic"; older indexes may carry other values.
     /// </summary>
     public required string Generator { get; init; }
 

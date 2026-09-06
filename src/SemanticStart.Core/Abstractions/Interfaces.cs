@@ -37,8 +37,8 @@ public interface IEnricher
 }
 
 /// <summary>
-/// Turns raw documentation into a normalized profile. Backed by a local generative model when
-/// one is available; implementations must degrade gracefully rather than fail the index build.
+/// Turns raw documentation into a normalized profile. Implementations must degrade gracefully -
+/// an entity with no usable documentation still has to be indexed - rather than fail the build.
 /// </summary>
 public interface IProfileSynthesizer
 {

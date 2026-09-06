@@ -177,8 +177,8 @@ public static class RelevanceCorpus
             Query = "change what happens when I close the lid",
             AcceptableResults = ["Power Options", "Power & battery", "powercfg"],
             Rationale = "KNOWN GAP: no profile text mentions 'lid', so every candidate sits near "
-                        + "the noise floor and ordering is arbitrary. Expected to pass once LLM "
-                        + "synthesis (rather than the heuristic fallback) generates task phrases.",
+                        + "the noise floor and ordering is arbitrary. Needs an enrichment source "
+                        + "that supplies lid-close vocabulary for the power pages.",
         },
         new()
         {

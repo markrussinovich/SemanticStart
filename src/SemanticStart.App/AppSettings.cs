@@ -28,23 +28,13 @@ public sealed record AppSettings
     public bool AllowOnlineEnrichment { get; init; }
     public int ResultLimit { get; init; } = 8;
     public bool LaunchAtLogin { get; init; }
-    public LocalLlmMode LocalLlmMode { get; init; } = LocalLlmMode.Auto;
-    public string LocalLlmEndpointBaseUrl { get; init; } = string.Empty;
-    public string LocalLlmModelName { get; init; } = LocalLlmOptions.DefaultModelName;
 
     /// <summary>
     /// Whether the user has been through first-run setup. The first index build is the expensive,
-    /// hard-to-undo one - it is what decides whether online documentation and local model synthesis
-    /// were used at all - so those choices have to be offered before it starts, not after.
+    /// hard-to-undo one - it is what decides whether online documentation was used at all - so that
+    /// choice has to be offered before it starts, not after.
     /// </summary>
     public bool SetupCompleted { get; init; }
-
-    public LocalLlmOptions ToLocalLlmOptions() => new()
-    {
-        Mode = LocalLlmMode,
-        EndpointBaseUrl = LocalLlmEndpointBaseUrl,
-        ModelName = LocalLlmModelName,
-    };
 }
 
 public sealed class AppSettingsService
@@ -80,10 +70,6 @@ public sealed class AppSettingsService
                 HotKey = hotKey,
                 ResultLimit = Math.Clamp(settings.ResultLimit, 3, 20),
                 LaunchAtLogin = IsLaunchAtLoginEnabled(),
-                LocalLlmEndpointBaseUrl = settings.LocalLlmEndpointBaseUrl?.Trim() ?? string.Empty,
-                LocalLlmModelName = string.IsNullOrWhiteSpace(settings.LocalLlmModelName)
-                    ? LocalLlmOptions.DefaultModelName
-                    : settings.LocalLlmModelName.Trim(),
             };
         }
         catch (Exception ex)

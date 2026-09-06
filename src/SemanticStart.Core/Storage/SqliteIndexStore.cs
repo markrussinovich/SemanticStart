@@ -265,8 +265,8 @@ public sealed partial class SqliteIndexStore : IIndexStore
             //
             // The weights are read from the environment so they can be swept against a fixed index
             // without a rebuild. Retuning them matters whenever the shape of the profiles changes:
-            // weights fitted to one-line heuristic summaries are not the right weights once a
-            // language model has written several sentences and a dozen task phrases per entity.
+            // weights fitted to one-line summaries are not the right weights once enrichment
+            // yields several sentences and a dozen task phrases per entity.
             var w = LexicalWeights;
             cmd.CommandText = $"""
                 SELECT entity_id, -bm25(entities_fts, {w}) AS score

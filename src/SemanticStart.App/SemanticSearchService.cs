@@ -146,10 +146,7 @@ public sealed class SemanticSearchService : IDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            var synthesizer = new CompositeProfileSynthesizer(
-                new LocalLlmProfileSynthesizer(settings.ToLocalLlmOptions()),
-                new HeuristicProfileSynthesizer());
-            var profiler = new EnrichmentPipeline(EnricherRegistry.CreateAll(), synthesizer);
+            var profiler = new EnrichmentPipeline(EnricherRegistry.CreateAll(), new HeuristicProfileSynthesizer());
             var builder = new IndexBuilder(CollectorRegistry.CreateAll(), profiler, _embeddingModel, _store);
             await builder.BuildAsync(new IndexOptions { AllowNetwork = settings.AllowOnlineEnrichment, ForceFullRebuild = force }, progress, cancellationToken);
             _engine.Invalidate();

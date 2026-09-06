@@ -123,112 +123,6 @@
                     </StackPanel>
                 </Border>
 
-                <TextBlock Text="Local LLM synthesis" Style="{StaticResource SectionHeader}" />
-
-                <Border Style="{StaticResource Card}">
-                    <StackPanel>
-                        <TextBlock Text="Generate richer app descriptions with a small local model" />
-                        <TextBlock Style="{StaticResource Caption}"
-                                   Text="Auto probes local Foundry, Ollama, LM Studio, and OpenAI-compatible servers. Pick a ready model, or select a curated small model and download it." />
-                        <TextBlock x:Name="LocalLlmRuntimeStatusText" Style="{StaticResource Caption}" Text="Checking local runtimes..." />
-                        <TextBlock x:Name="LastGeneratorStatusText" Style="{StaticResource Caption}" Text="Last index generator: checking..." />
-                        <TextBlock Style="{StaticResource Caption}"
-                                   Text="Expect roughly 8–15 minutes to synthesize ~470 entities with a 1–2B CPU model; larger models can take much longer. Each entity has a timeout and falls back safely." />
-                        <Grid Margin="0,12,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="130" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Mode" VerticalAlignment="Center" />
-                            <ComboBox x:Name="LocalLlmModeBox" Grid.Row="0" Grid.Column="1" Width="180" HorizontalAlignment="Left"
-                                      Style="{StaticResource FluentComboBox}" SelectedValuePath="Content" FontSize="14"
-                                      SelectionChanged="LocalLlmModeBox_SelectionChanged">
-                                <ComboBoxItem Content="Off" />
-                                <ComboBoxItem Content="Auto" />
-                                <ComboBoxItem Content="Custom" />
-                            </ComboBox>
-
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Endpoint" VerticalAlignment="Center" Margin="0,10,0,0" />
-                            <TextBox x:Name="LocalLlmEndpointBox" Grid.Row="1" Grid.Column="1" Margin="0,10,0,0"
-                                     ToolTip="Example: http://localhost:11434 for Ollama or http://localhost:1234 for LM Studio" />
-
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Model" VerticalAlignment="Center" Margin="0,10,0,0" />
-                            <Grid Grid.Row="2" Grid.Column="1" Margin="0,10,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <!--
-                                    An explicit ItemTemplate rather than DisplayMemberPath: the
-                                    re-templated ComboBox renders its closed selection box through
-                                    SelectionBoxItemTemplate, which ComboBox populates from
-                                    ItemTemplate but not from DisplayMemberPath, so the latter left
-                                    the closed box showing the item's raw ToString().
-                                -->
-                                <ComboBox x:Name="LocalLlmModelBox" Grid.Column="0" MinWidth="300"
-                                          Style="{StaticResource FluentComboBox}" FontSize="14"
-                                          SelectionChanged="LocalLlmModelBox_SelectionChanged">
-                                    <ComboBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding PickerLabel}" TextTrimming="CharacterEllipsis" />
-                                        </DataTemplate>
-                                    </ComboBox.ItemTemplate>
-                                </ComboBox>
-                                <Button x:Name="RefreshModelsButton" Grid.Column="1" Content="Refresh" Style="{StaticResource FluentButton}"
-                                        Margin="8,0,0,0" VerticalAlignment="Center" Click="RefreshModelsButton_Click" />
-                            </Grid>
-
-                            <CheckBox x:Name="CustomModelBox" Grid.Row="3" Grid.Column="1" Margin="0,10,0,0"
-                                      Content="Advanced: use a custom model identifier"
-                                      Checked="CustomModelBox_Changed" Unchecked="CustomModelBox_Changed" />
-
-                            <TextBox x:Name="LocalLlmCustomModelBox" Grid.Row="4" Grid.Column="1" Margin="0,10,0,0"
-                                     Visibility="Collapsed"
-                                     ToolTip="Example: qwen2.5:1.5b, llama3.2:1b, phi-3.5-mini" />
-
-                            <Grid Grid.Row="5" Grid.Column="1" Margin="0,12,0,0">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <!--
-                                    WrapPanel, not StackPanel: the three buttons are wider than the
-                                    field column, so a horizontal stack clipped the last one.
-                                -->
-                                <WrapPanel Grid.Row="0" Orientation="Horizontal">
-                                    <Button x:Name="TestLocalLlmButton" Content="Test connection" Style="{StaticResource FluentButton}"
-                                            Margin="0,0,8,8" VerticalAlignment="Center" Click="TestLocalLlmButton_Click" />
-                                    <Button x:Name="DownloadModelButton" Content="Download model" Style="{StaticResource FluentButton}"
-                                            Margin="0,0,8,8" VerticalAlignment="Center" Click="DownloadModelButton_Click" />
-                                    <Button x:Name="InstallFoundryButton" Content="Install Foundry Local" Style="{StaticResource AccentButton}"
-                                            Margin="0,0,0,8" VerticalAlignment="Center" Click="InstallFoundryButton_Click" />
-                                </WrapPanel>
-                                <!--
-                                    Status sits on its own row. Sharing a row with the buttons let a
-                                    long message wrap in a narrow column and stretch the row, which
-                                    dragged the buttons to over a thousand pixels tall and pushed
-                                    their labels out of view.
-                                -->
-                                <TextBlock x:Name="LocalLlmStatusText" Grid.Row="1" Style="{StaticResource Caption}"
-                                           Margin="0,8,0,0" TextWrapping="Wrap" MaxHeight="60" />
-                            </Grid>
-
-                            <ProgressBar x:Name="LocalLlmProgressBar" Grid.Row="6" Grid.Column="1" Height="4" Minimum="0" Maximum="1"
-                                         Margin="0,10,0,0" Background="{DynamicResource ItemHoverBrush}"
-                                         Foreground="{DynamicResource AccentBrush}" BorderThickness="0" Visibility="Collapsed" />
-                        </Grid>
-                    </StackPanel>
-                </Border>
 
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
@@ -251,7 +145,8 @@
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
                         <TextBlock Text="Index" />
-                        <TextBlock x:Name="IndexStatsText" Style="{StaticResource Caption}" Text="Reading index..." />
+                        <TextBlock x:Name="IndexStatsText" Style="{StaticResource Caption}" Text="Reading index..."
+                                   LineHeight="18" LineStackingStrategy="BlockLineHeight" />
                         <TextBlock x:Name="ProgressText" Style="{StaticResource Caption}" Text="Ready" />
                         <ProgressBar x:Name="ProgressBar" Height="4" Minimum="0" Maximum="1" Margin="0,10,0,10"
                                      Background="{DynamicResource ItemHoverBrush}" Foreground="{DynamicResource AccentBrush}"

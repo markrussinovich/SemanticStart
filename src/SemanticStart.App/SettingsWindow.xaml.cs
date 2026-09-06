@@ -1,7 +1,6 @@
-using System.Diagnostics;
 using System.Windows;
+using System.Windows.Documents;
 using SemanticStart.Core.Indexing;
-using SemanticStart.Core.Synthesis;
 
 namespace SemanticStart.App;
 
@@ -11,9 +10,6 @@ public partial class SettingsWindow : Window
     private readonly SemanticSearchService _searchService;
     private readonly ActivationManager _activationManager;
     private CancellationTokenSource? _rebuildCts;
-    private CancellationTokenSource? _catalogCts;
-    private IReadOnlyList<LocalLlmCatalogItem> _modelCatalog = [];
-    private bool _hasDetectedRuntime;
     private AppSettings _settings;
 
     public SettingsWindow(AppSettingsService settingsService, SemanticSearchService searchService, ActivationManager activationManager)
@@ -27,8 +23,6 @@ public partial class SettingsWindow : Window
         _settings = settingsService.Load();
         VersionText.Text = $"SemanticStart {ProductVersion}";
         LoadControls();
-        _ = RefreshLocalLlmCatalogAsync();
-        _ = RefreshGeneratorStatusAsync();
         _ = RefreshIndexStatsAsync();
     }
 
@@ -74,7 +68,6 @@ public partial class SettingsWindow : Window
             await _searchService.RebuildIndexAsync(_settings, force, progress, _rebuildCts.Token);
             ProgressBar.Value = 1;
             ProgressText.Text = $"Rebuild complete. {_searchService.Count} entities loaded.";
-            await RefreshGeneratorStatusAsync();
             await RefreshIndexStatsAsync();
         }
         catch (OperationCanceledException)
@@ -95,7 +88,6 @@ public partial class SettingsWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _rebuildCts?.Cancel();
-        _catalogCts?.Cancel();
 
         // Closing while the recorder still has focus would otherwise leave the hotkey suspended,
         // so the shortcut would stop working until the app was restarted. Re-applying is harmless
@@ -112,11 +104,6 @@ public partial class SettingsWindow : Window
         OnlineBox.IsChecked = _settings.AllowOnlineEnrichment;
         LoginBox.IsChecked = _settings.LaunchAtLogin;
         LimitSlider.Value = _settings.ResultLimit;
-        LocalLlmModeBox.SelectedValue = _settings.LocalLlmMode.ToString();
-        LocalLlmEndpointBox.Text = _settings.LocalLlmEndpointBaseUrl;
-        LocalLlmCustomModelBox.Text = _settings.LocalLlmModelName;
-        LocalLlmStatusText.Text = "Not tested.";
-        UpdateLocalLlmEnabledState();
         UpdateHotKeyStatus();
     }
 
@@ -200,9 +187,6 @@ public partial class SettingsWindow : Window
             AllowOnlineEnrichment = OnlineBox.IsChecked == true,
             LaunchAtLogin = LoginBox.IsChecked == true,
             ResultLimit = (int)Math.Round(LimitSlider.Value),
-            LocalLlmMode = ParseLocalLlmMode(LocalLlmModeBox.SelectedValue?.ToString()),
-            LocalLlmEndpointBaseUrl = LocalLlmEndpointBox.Text.Trim(),
-            LocalLlmModelName = SelectedModelName(),
         };
         _settingsService.Save(_settings);
         _activationManager.ApplySettings(_settings);
@@ -210,90 +194,47 @@ public partial class SettingsWindow : Window
         UpdateHotKeyStatus();
     }
 
-    private string SelectedModelName()
-    {
-        if (CustomModelBox.IsChecked == true)
-            return string.IsNullOrWhiteSpace(LocalLlmCustomModelBox.Text)
-                ? LocalLlmOptions.DefaultModelName
-                : LocalLlmCustomModelBox.Text.Trim();
-
-        return LocalLlmModelBox.SelectedItem is LocalLlmCatalogItem item
-            ? item.ModelName
-            : LocalLlmOptions.DefaultModelName;
-    }
-
-    private async Task RefreshLocalLlmCatalogAsync()
-    {
-        _catalogCts?.Cancel();
-        _catalogCts = new CancellationTokenSource();
-        RefreshModelsButton.IsEnabled = false;
-        DownloadModelButton.IsEnabled = false;
-        InstallFoundryButton.IsEnabled = false;
-        LocalLlmProgressBar.Visibility = Visibility.Collapsed;
-        LocalLlmRuntimeStatusText.Text = "Checking local runtimes...";
-
-        try
-        {
-            var catalog = await LocalLlmProfileSynthesizer.DiscoverCatalogAsync(cancellationToken: _catalogCts.Token);
-            _modelCatalog = catalog.Models;
-            _hasDetectedRuntime = catalog.DetectedRuntime is not null;
-            LocalLlmModelBox.ItemsSource = _modelCatalog;
-            LocalLlmRuntimeStatusText.Text = catalog.StatusMessage;
-
-            var configured = _modelCatalog.FirstOrDefault(m => m.ModelName.Equals(_settings.LocalLlmModelName, StringComparison.OrdinalIgnoreCase));
-            if (configured is null
-                && !string.IsNullOrWhiteSpace(_settings.LocalLlmModelName)
-                && !_settings.LocalLlmModelName.Equals(LocalLlmOptions.DefaultModelName, StringComparison.OrdinalIgnoreCase))
-            {
-                CustomModelBox.IsChecked = true;
-            }
-            else
-            {
-                var selected = configured
-                    ?? _modelCatalog.FirstOrDefault(m => m.IsReady)
-                    ?? _modelCatalog.FirstOrDefault(m => m.ModelName.Equals(LocalLlmOptions.DefaultModelName, StringComparison.OrdinalIgnoreCase))
-                    ?? _modelCatalog.FirstOrDefault();
-                LocalLlmModelBox.SelectedItem = selected;
-            }
-            UpdateLocalLlmEnabledState();
-        }
-        catch (OperationCanceledException)
-        {
-            LocalLlmRuntimeStatusText.Text = "Model refresh canceled.";
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Local LLM catalog refresh failed");
-            LocalLlmRuntimeStatusText.Text = "Could not refresh model catalog; see log for details.";
-        }
-        finally
-        {
-            UpdateLocalLlmEnabledState();
-        }
-    }
-
+    /// <summary>
+    /// Lists what the index holds, one category per line with the count in bold.
+    ///
+    /// Built as inlines rather than a formatted string because the counts are the part worth
+    /// scanning for, and a single run-on line hid them: the whole point of this block is to answer
+    /// "how much of my machine did it actually find" at a glance.
+    /// </summary>
     private async Task RefreshIndexStatsAsync()
     {
         try
         {
             var stats = await _searchService.GetIndexStatsAsync(CancellationToken.None);
+            IndexStatsText.Inlines.Clear();
+
             if (stats.Total == 0)
             {
                 IndexStatsText.Text = "Index is empty. Rebuild to populate it.";
                 return;
             }
 
-            var parts = new List<string>
+            var rows = new List<(string Label, string Value)>
             {
-                $"{stats.Apps} apps",
-                $"{stats.SystemTools} system utilities",
-                $"{stats.WindowsSettings} Windows settings",
+                ("Applications", stats.Apps.ToString("N0")),
+                ("System utilities", stats.SystemTools.ToString("N0")),
+                ("Windows settings", stats.WindowsSettings.ToString("N0")),
             };
 
             if (stats.Other > 0)
-                parts.Add($"{stats.Other} other");
+                rows.Add(("Other", stats.Other.ToString("N0")));
 
-            IndexStatsText.Text = $"{stats.Total} entries — {string.Join(", ", parts)} — {stats.SizeDisplay} on disk";
+            rows.Add(("Total entries", stats.Total.ToString("N0")));
+            rows.Add(("Size on disk", stats.SizeDisplay));
+
+            for (var i = 0; i < rows.Count; i++)
+            {
+                if (i > 0)
+                    IndexStatsText.Inlines.Add(new LineBreak());
+
+                IndexStatsText.Inlines.Add(new Run($"{rows[i].Label}: "));
+                IndexStatsText.Inlines.Add(new Run(rows[i].Value) { FontWeight = FontWeights.SemiBold });
+            }
         }
         catch (Exception ex)
         {
@@ -302,246 +243,7 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private async Task RefreshGeneratorStatusAsync()
-    {
-        try
-        {
-            var counts = await _searchService.GetGeneratorBreakdownAsync(CancellationToken.None);
-            if (counts.Count == 0)
-            {
-                LastGeneratorStatusText.Text = "Last index generator: no profiles yet.";
-                return;
-            }
-
-            var summary = string.Join(", ", counts.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key} {kv.Value}"));
-            LastGeneratorStatusText.Text = $"Last index generator: {summary}.";
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Failed to read generator breakdown");
-            LastGeneratorStatusText.Text = "Last index generator: unavailable.";
-        }
-    }
-
-    /// <summary>
-    /// Enables each local-LLM control only once the thing it depends on is actually present, so
-    /// the dialog never offers a choice that cannot work yet. The chain is: synthesis must be
-    /// turned on, then a runtime must be detected, then a model must be selected. Without this a
-    /// user could pick a model and press Test with nothing installed to serve it.
-    /// </summary>
-    private void UpdateLocalLlmEnabledState()
-    {
-        var mode = ParseLocalLlmMode(LocalLlmModeBox.SelectedValue?.ToString());
-        var enabled = mode != LocalLlmMode.Off;
-        var custom = CustomModelBox.IsChecked == true;
-        var item = LocalLlmModelBox.SelectedItem as LocalLlmCatalogItem;
-
-        // A custom endpoint is only meaningful in Custom mode; Auto discovers it.
-        LocalLlmEndpointBox.IsEnabled = enabled && mode == LocalLlmMode.Custom;
-
-        // Models cannot be listed or chosen until a runtime exists to host them.
-        LocalLlmModelBox.IsEnabled = enabled && _hasDetectedRuntime && !custom;
-        RefreshModelsButton.IsEnabled = enabled && !custom;
-        CustomModelBox.IsEnabled = enabled;
-        LocalLlmCustomModelBox.IsEnabled = enabled && custom;
-        LocalLlmCustomModelBox.Visibility = custom ? Visibility.Visible : Visibility.Collapsed;
-
-        InstallFoundryButton.IsEnabled = enabled && !_hasDetectedRuntime;
-        DownloadModelButton.IsEnabled = enabled && _hasDetectedRuntime && !custom && item is { IsReady: false, CanDownload: true };
-        TestLocalLlmButton.IsEnabled = enabled && (_hasDetectedRuntime || mode == LocalLlmMode.Custom);
-
-        UpdateSelectedModelDetails();
-    }
-
-    private void UpdateSelectedModelDetails()
-    {
-        if (!_hasDetectedRuntime)
-        {
-            LocalLlmStatusText.Text = ParseLocalLlmMode(LocalLlmModeBox.SelectedValue?.ToString()) == LocalLlmMode.Off
-                ? "Local LLM synthesis is off; descriptions come from built-in heuristics."
-                : "No runtime detected yet. Install Foundry Local, then choose Refresh to list models.";
-            return;
-        }
-
-        if (CustomModelBox.IsChecked == true)
-        {
-            LocalLlmStatusText.Text = "Using a custom model identifier.";
-            return;
-        }
-
-        if (LocalLlmModelBox.SelectedItem is not LocalLlmCatalogItem item)
-        {
-            LocalLlmStatusText.Text = "Select a model.";
-            return;
-        }
-
-        if (!string.IsNullOrWhiteSpace(item.EndpointBaseUrl))
-            LocalLlmEndpointBox.Text = item.EndpointBaseUrl;
-
-        LocalLlmStatusText.Text = $"{item.DisplayName}: {(item.IsReady ? "ready" : "download required")}. {item.BestFor}";
-    }
-
-    private static LocalLlmMode ParseLocalLlmMode(string? value) =>
-        Enum.TryParse<LocalLlmMode>(value, ignoreCase: true, out var mode) ? mode : LocalLlmMode.Auto;
-
-    private async void RebuildButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (await WouldSilentlyDowngradeAsync())
-            return;
-
-        await RebuildIndexAsync(force: true);
-    }
-
-    /// <summary>
-    /// Asks before a rebuild that would replace model-written descriptions with heuristic ones.
-    /// Returns true if the user backed out. Failures here must never block the rebuild: this is a
-    /// courtesy prompt, not a gate.
-    /// </summary>
-    private async Task<bool> WouldSilentlyDowngradeAsync()
-    {
-        try
-        {
-            // The prompt has to reflect the mode currently selected in the dialog, not the one
-            // last saved, or changing the mode and pressing Rebuild would warn about the wrong thing.
-            SaveFromControls();
-
-            var counts = await _searchService.GetGeneratorBreakdownAsync(CancellationToken.None);
-            var atRisk = RebuildDowngradeCheck.CountProfilesAtRisk(_settings.LocalLlmMode, counts);
-            if (atRisk == 0)
-                return false;
-
-            var answer = System.Windows.MessageBox.Show(
-                this,
-                RebuildDowngradeCheck.BuildWarning(atRisk, counts.Values.Sum()),
-                "Rebuild will replace model-written descriptions",
-                System.Windows.MessageBoxButton.YesNo,
-                System.Windows.MessageBoxImage.Warning,
-                System.Windows.MessageBoxResult.No);
-
-            return answer != System.Windows.MessageBoxResult.Yes;
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Failed to check whether rebuild would downgrade descriptions");
-            return false;
-        }
-    }
-
-    private async void RefreshModelsButton_Click(object sender, RoutedEventArgs e) => await RefreshLocalLlmCatalogAsync();
-
-    private void LocalLlmModelBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) => UpdateLocalLlmEnabledState();
-
-    private void LocalLlmModeBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
-    {
-        if (!IsInitialized)
-            return;
-
-        UpdateLocalLlmEnabledState();
-    }
-
-    private void CustomModelBox_Changed(object sender, RoutedEventArgs e)
-    {
-        if (!IsInitialized)
-            return;
-
-        UpdateLocalLlmEnabledState();
-    }
-
-    private async void TestLocalLlmButton_Click(object sender, RoutedEventArgs e)
-    {
-        SaveFromControls();
-        TestLocalLlmButton.IsEnabled = false;
-        LocalLlmStatusText.Text = "Testing...";
-
-        try
-        {
-            var result = await LocalLlmProfileSynthesizer.TestConnectionAsync(_settings.ToLocalLlmOptions());
-            LocalLlmStatusText.Text = result.Success
-                ? $"Success: {result.ModelName} generated a response at {result.EndpointBaseUrl}"
-                : $"Failed: {result.Message}";
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Local LLM connection test failed");
-            LocalLlmStatusText.Text = "Failed: see log for details.";
-        }
-        finally
-        {
-            UpdateLocalLlmEnabledState();
-        }
-    }
-
-    private async void DownloadModelButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (LocalLlmModelBox.SelectedItem is not LocalLlmCatalogItem item)
-            return;
-
-        DownloadModelButton.IsEnabled = false;
-        LocalLlmProgressBar.Visibility = Visibility.Visible;
-        LocalLlmProgressBar.IsIndeterminate = item.Runtime == LocalLlmRuntime.FoundryLocal;
-        LocalLlmProgressBar.Value = 0;
-        LocalLlmStatusText.Text = $"Downloading {item.DisplayName}...";
-
-        try
-        {
-            var progress = new Progress<double>(p =>
-            {
-                LocalLlmProgressBar.IsIndeterminate = false;
-                LocalLlmProgressBar.Value = Math.Clamp(p, 0, 1);
-            });
-            var result = await LocalLlmProfileSynthesizer.DownloadModelAsync(item, progress);
-            LocalLlmStatusText.Text = result.Success ? result.Message : $"Failed: {result.Message}";
-            await RefreshLocalLlmCatalogAsync();
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Local LLM model download failed");
-            LocalLlmStatusText.Text = "Download failed; see log for details.";
-        }
-        finally
-        {
-            LocalLlmProgressBar.IsIndeterminate = false;
-            UpdateLocalLlmEnabledState();
-        }
-    }
-
-    private async void InstallFoundryButton_Click(object sender, RoutedEventArgs e)
-    {
-        InstallFoundryButton.IsEnabled = false;
-        LocalLlmStatusText.Text = "Installing Foundry Local with winget...";
-
-        try
-        {
-            var exitCode = await RunProcessAsync(
-                "winget",
-                ["install", "-e", "--id", "Microsoft.FoundryLocal", "--accept-package-agreements", "--accept-source-agreements"]);
-            LocalLlmStatusText.Text = exitCode == 0
-                ? "Foundry Local install completed. Refreshing model catalog..."
-                : $"Foundry Local installer exited with code {exitCode}.";
-            await RefreshLocalLlmCatalogAsync();
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Foundry Local installation failed");
-            LocalLlmStatusText.Text = "Install failed. Install manually with: winget install Microsoft.FoundryLocal";
-        }
-        finally
-        {
-            UpdateLocalLlmEnabledState();
-        }
-    }
-
-    internal static async Task<int> RunProcessAsync(string fileName, IReadOnlyList<string> args)
-    {
-        using var process = new Process();
-        process.StartInfo = new ProcessStartInfo { FileName = fileName, UseShellExecute = false, CreateNoWindow = true };
-        foreach (var arg in args)
-            process.StartInfo.ArgumentList.Add(arg);
-
-        process.Start();
-        await process.WaitForExitAsync();
-        return process.ExitCode;
-    }
+    private async void RebuildButton_Click(object sender, RoutedEventArgs e) => await RebuildIndexAsync(force: true);
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {

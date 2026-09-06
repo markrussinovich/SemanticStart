@@ -68,39 +68,6 @@
                                Text="Most installed programs describe themselves with nothing but their own name, so without this many tools can only be found if you already know what they are called. Only app and feature names are sent, only while indexing. What you type when searching is never sent anywhere." />
                 </StackPanel>
             </Border>
-
-            <Border Style="{StaticResource Card}">
-                <StackPanel>
-                    <TextBlock Text="Describe apps with a local AI model" FontWeight="SemiBold" />
-                    <TextBlock Style="{StaticResource Caption}"
-                               Text="Documentation found online is written for readers, not searchers, and is sometimes about the wrong thing entirely. A small model running on this PC turns it into a plain description and the phrases you would actually type. It runs only while indexing, and nothing leaves your machine." />
-
-                    <RadioButton x:Name="LlmAutoRadio" Content="Use a local model (recommended)" Margin="0,10,0,0"
-                                 Checked="LlmMode_Changed" />
-                    <RadioButton x:Name="LlmOffRadio" Content="Don't use a model" Checked="LlmMode_Changed" />
-
-                    <Grid Margin="0,8,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <ComboBox x:Name="ModelCombo" Grid.Column="0" VerticalAlignment="Center">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding DisplayName}" />
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <Button x:Name="ModelActionButton" Grid.Column="1" Content="Download" Margin="8,0,0,0"
-                                Style="{StaticResource FluentButton}" VerticalAlignment="Center"
-                                Click="ModelActionButton_Click" />
-                    </Grid>
-                    <ProgressBar x:Name="ModelProgress" Height="4" Minimum="0" Maximum="1" Margin="0,8,0,0"
-                                 Background="{DynamicResource ItemHoverBrush}" Foreground="{DynamicResource AccentBrush}"
-                                 BorderThickness="0" Visibility="Collapsed" />
-                    <TextBlock x:Name="LlmStatusText" Style="{StaticResource Caption}" Margin="0,8,0,0" MaxHeight="60" />
-                </StackPanel>
-            </Border>
         </StackPanel>
 
         <Grid Grid.Row="2" Margin="0,10,0,0">

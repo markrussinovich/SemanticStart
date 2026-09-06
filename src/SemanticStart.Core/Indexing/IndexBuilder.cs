@@ -9,7 +9,7 @@ namespace SemanticStart.Core.Indexing;
 /// <summary>
 /// Drives a full index build: discover, diff, enrich, synthesize, embed, persist.
 ///
-/// The expensive stages (documentation gathering and LLM synthesis) are gated behind a content
+/// The expensive stages (documentation gathering and profile synthesis) are gated behind a content
 /// hash comparison, so a rebuild on an unchanged machine costs almost nothing. This is what makes
 /// it acceptable to reindex on a schedule rather than only on explicit user request.
 /// </summary>

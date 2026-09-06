@@ -1,8 +1,3 @@
-﻿using System.Diagnostics;
-using System.Net.Http.Json;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using SemanticStart.Core.Abstractions;
 using SemanticStart.Core.Enrichment;
@@ -12,7 +7,7 @@ namespace SemanticStart.Core.Synthesis;
 
 public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
 {
-    public string Generator => "fallback";
+    public string Generator => "heuristic";
     public bool IsAvailable => true;
 
     public Task<SynthesizedProfile> SynthesizeAsync(Entity entity, IReadOnlyList<EnrichmentDocument> documents, CancellationToken cancellationToken = default)
@@ -294,7 +289,7 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
            && !line.Contains("Theme Auto Light Dark", StringComparison.OrdinalIgnoreCase)
            && !line.StartsWith("Table of contents", StringComparison.OrdinalIgnoreCase)
            && !line.StartsWith("Index ", StringComparison.OrdinalIgnoreCase)
-           && !line.Contains('»')
+           && !line.Contains('�')
            && !Regex.IsMatch(line, @"^\d+(?:\.\d+)*\s+\w")
            && !line.Contains(@"{\rtf", StringComparison.OrdinalIgnoreCase)
            && !line.Contains("://", StringComparison.OrdinalIgnoreCase)
@@ -418,42 +413,4 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
     private static string RemoveVendorPrefix(string name) => Regex.Replace(name, @"^(Microsoft|Windows|Microsoft Windows)\s+", "", RegexOptions.IgnoreCase).Trim();
     private static IEnumerable<string> SplitTokens(string value) => Regex.Split(value, @"[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])").Where(t => t.Length > 1).Select(t => t.ToLowerInvariant());
     private static string CleanSentence(string value) => Regex.Replace(value.Trim(), @"\s+", " ");
-}
-
-public sealed class CompositeProfileSynthesizer : IProfileSynthesizer
-{
-    private readonly IProfileSynthesizer _llm;
-    private readonly HeuristicProfileSynthesizer _fallback;
-    public string Generator => _llm.IsAvailable ? _llm.Generator : _fallback.Generator;
-    public bool IsAvailable => true;
-    public CompositeProfileSynthesizer(IProfileSynthesizer? llm = null, HeuristicProfileSynthesizer? fallback = null)
-    {
-        _llm = llm ?? new LocalLlmProfileSynthesizer();
-        _fallback = fallback ?? new HeuristicProfileSynthesizer();
-    }
-
-    public async Task<SynthesizedProfile> SynthesizeAsync(Entity entity, IReadOnlyList<EnrichmentDocument> documents, CancellationToken cancellationToken = default)
-    {
-        var heuristic = await _fallback.SynthesizeAsync(entity, documents, cancellationToken).ConfigureAwait(false);
-        if (!_llm.IsAvailable) return heuristic;
-        try
-        {
-            // The synthesizer owns its own per-request timeout. A cap here covered queue wait as
-            // well as the request itself, so once calls were serialised behind a single local model
-            // every entity's budget expired before its turn and the whole index silently fell back.
-            var profile = await _llm.SynthesizeAsync(entity, documents, cancellationToken).ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(profile.Summary) || profile.Tasks.Count == 0) return heuristic;
-
-            // Synonyms are merged, tasks are not. Concatenating both task lists was tried and was
-            // measurably worse (38/41 against 39/41): the embedded document is a fixed budget, and
-            // padding it with near-duplicate phrasings of the same intent dilutes the signal that
-            // makes an entity findable. The model's phrasing wins outright when it produced any.
-            var synonyms = profile.Synonyms.Concat(heuristic.Synonyms).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToArray();
-            return profile with { Synonyms = synonyms, Category = string.IsNullOrWhiteSpace(profile.Category) ? heuristic.Category : profile.Category };
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException)
-        {
-            return heuristic;
-        }
-    }
 }

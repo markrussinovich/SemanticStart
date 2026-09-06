@@ -42,7 +42,7 @@ public sealed class EnrichmentPipeline : IEntityProfiler
     public EnrichmentPipeline(IReadOnlyList<IEnricher>? enrichers = null, IProfileSynthesizer? synthesizer = null, int? maxDegreeOfParallelism = null)
     {
         _enrichers = enrichers ?? EnricherRegistry.CreateAll();
-        _synthesizer = synthesizer ?? new CompositeProfileSynthesizer();
+        _synthesizer = synthesizer ?? new HeuristicProfileSynthesizer();
         _maxDegreeOfParallelism = Math.Max(1, maxDegreeOfParallelism ?? Math.Max(2, Environment.ProcessorCount / 2));
     }
 

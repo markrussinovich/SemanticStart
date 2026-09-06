@@ -84,11 +84,9 @@ internal static class ProfileText
     /// came back with a column of "ms-settings:" URIs as its entire description - and indexing that
     /// contributes no vocabulary a user would ever type while adding tokens that match at random.
     ///
-    /// Public because the same judgement is needed before handing a document to a language model.
-    /// A small model asked to describe Startup Apps from the Learn page that tabulates every
-    /// settings URI dutifully reports that it can "download maps" and "set up a kiosk", because
-    /// those are the neighbouring rows. Filtering the input is far more effective than instructing
-    /// the model to ignore it.
+    /// Public because every consumer of harvested text needs the same judgement. Describing Startup
+    /// Apps from the Learn page that tabulates every settings URI otherwise yields "download maps"
+    /// and "set up a kiosk", because those are the neighbouring rows.
     /// </summary>
     public static bool IsProse(string text)
     {
