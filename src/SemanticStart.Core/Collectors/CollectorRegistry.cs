@@ -13,5 +13,6 @@ public static class CollectorRegistry
         new ControlPanelCollector(),
         new OptionalFeatureCollector(),
         new SystemToolCollector(),
+        new CommandAliasCollector(),
     ];
 }

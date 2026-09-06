@@ -42,7 +42,7 @@ public sealed class AdjacentDocsEnricher : IEnricher
         var docs = new List<EnrichmentDocument>();
         try
         {
-            foreach (var file in EnumerateCandidates(dir).Take(8))
+            foreach (var file in EnumerateCandidates(dir, OwnerStem(entity)).Take(8))
             {
                 cts.Token.ThrowIfCancellationRequested();
                 var name = Path.GetFileName(file);
@@ -66,7 +66,21 @@ public sealed class AdjacentDocsEnricher : IEnricher
         return docs;
     }
 
-    private static IEnumerable<string> EnumerateCandidates(string root)
+    /// <summary>
+    /// The executable stem this entity is, used to tell its own documentation from a neighbour's.
+    /// </summary>
+    private static string? OwnerStem(Entity entity)
+    {
+        foreach (var candidate in new[] { entity.RawMetadata.GetValueOrDefault("targetPath"), entity.LaunchTarget })
+        {
+            if (!string.IsNullOrWhiteSpace(candidate) && candidate.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                return Path.GetFileNameWithoutExtension(candidate);
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateCandidates(string root, string? ownerStem)
     {
         var dirs = new Queue<(string Path, int Depth)>();
         dirs.Enqueue((root, 0));
@@ -76,9 +90,23 @@ public sealed class AdjacentDocsEnricher : IEnricher
             IEnumerable<string> files;
             try { files = Directory.EnumerateFiles(dir, "*", SearchOption.TopDirectoryOnly).ToArray(); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException) { continue; }
+
+            // A directory can hold many programs, and then a document named after one of them is
+            // evidence about that one alone. The Sysinternals suite installs seventy-odd tools
+            // side by side with a handful of help files, and without this every one of those tools
+            // was documented as having AdExplorer's, ADInsight's and Dbgview's help available.
+            var neighbours = files
+                .Where(f => f.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                .Select(Path.GetFileNameWithoutExtension)
+                .Where(s => !string.IsNullOrEmpty(s) && !string.Equals(s, ownerStem, StringComparison.OrdinalIgnoreCase))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
             foreach (var file in files)
             {
                 var name = Path.GetFileName(file);
+
+                if (neighbours.Contains(Path.GetFileNameWithoutExtension(name)))
+                    continue;
 
                 // Legal and changelog files are never descriptions. Visual Studio Code was
                 // summarised as "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY
@@ -159,24 +187,52 @@ public sealed class CliHelpEnricher : IEnricher
     };
     public string Provider => "cli-help";
     public bool RequiresNetwork => false;
-    public bool CanEnrich(Entity entity)
-    {
-        var path = ResolveSafeSystem32Path(entity);
-        return entity.Kind == EntityKind.SystemTool && path is not null && Arguments.ContainsKey(Path.GetFileName(path));
-    }
+    public bool CanEnrich(Entity entity) => ResolveTarget(entity) is not null;
+
     public async Task<IReadOnlyList<EnrichmentDocument>> EnrichAsync(Entity entity, CancellationToken cancellationToken = default)
     {
-        var path = ResolveSafeSystem32Path(entity);
-        if (path is null || !Arguments.TryGetValue(Path.GetFileName(path), out var args)) return [];
+        var target = ResolveTarget(entity);
+        if (target is null) return [];
         try
         {
-            var result = await ProcessRunner.RunAsync(path, args, TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+            var result = await ProcessRunner.RunAsync(target.Path, target.Arguments, TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
             var text = result.Output.Trim();
             if (text.Length > 4096) text = text[..4096];
-            return string.IsNullOrWhiteSpace(text) ? [] : [new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = false, Text = text, SourceUri = path }];
+            return string.IsNullOrWhiteSpace(text) ? [] : [new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = false, Text = text, SourceUri = target.Path }];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) { return []; }
     }
+
+    /// <summary>
+    /// Decides whether this entity is a command-line tool that can be asked to describe itself,
+    /// and with which switch.
+    ///
+    /// Two populations qualify. The Windows tools in System32 are named explicitly because their
+    /// help switches vary and a wrong guess on some of them does real work rather than printing
+    /// usage. Everything else must prove it is a console program by its PE subsystem, which is
+    /// what makes the capability general: it is how accesschk and pssuspend get documentation on a
+    /// machine where they are installed, without anyone having written their names down here.
+    /// </summary>
+    private static HelpTarget? ResolveTarget(Entity entity)
+    {
+        var system32 = ResolveSafeSystem32Path(entity);
+        if (entity.Kind == EntityKind.SystemTool && system32 is not null && Arguments.TryGetValue(Path.GetFileName(system32), out var args))
+            return new HelpTarget(system32, args);
+
+        if (entity.Kind != EntityKind.SystemTool || !entity.RawMetadata.ContainsKey("consoleSubsystem"))
+            return null;
+
+        var path = entity.RawMetadata.GetValueOrDefault("targetPath");
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return null;
+
+        // "-?" is the convention these tools share, and unlike a bare invocation it cannot be
+        // mistaken for a request to act. Tools that do not recognise it print usage anyway, which
+        // is the text we wanted.
+        return new HelpTarget(path, ["-?"]);
+    }
+
+    private sealed record HelpTarget(string Path, string[] Arguments);
     private static string? ResolveSafeSystem32Path(Entity entity)
     {
         try
