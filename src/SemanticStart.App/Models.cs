@@ -48,10 +48,89 @@ public sealed class SearchResultItem : ObservableObject
     public string FallbackGlyph { get; }
 
     /// <summary>
-    /// The full synthesized description, shown when the row is expanded. The collapsed row trims the
-    /// summary to one line, which for the longer descriptions is where the useful part gets cut off.
+    /// The description shown when a row is expanded, which has to say more than the row already
+    /// does or the panel is just a bigger copy of the line above it.
+    ///
+    /// Prefers the longer prose harvested for the entity. That text usually opens by restating the
+    /// one-line summary verbatim - "Simple text editor included with Microsoft Windows. Windows
+    /// Notepad is a simple text editor for Windows..." - so the repeated opening is dropped and
+    /// only the part that adds something is kept.
+    ///
+    /// When there is no longer prose, the summary is shown only if it was long enough for the
+    /// single-line row to have trimmed it. Repeating a short summary underneath itself is the
+    /// redundancy this exists to avoid.
     /// </summary>
-    public string DetailSummary => Summary;
+    public string DetailSummary => ExtendedDescription(Hit.Details, Summary);
+
+    public bool HasDetailSummary => DetailSummary.Length > 0;
+
+    /// <summary>
+    /// Who made it and what kind of thing it is, on one line. Both are dropped when they add
+    /// nothing: the category is often just the plural of the badge already on the row, and most
+    /// built-in Windows entities have no recorded publisher at all.
+    /// </summary>
+    public string Provenance
+    {
+        get
+        {
+            var parts = new List<string>(2);
+
+            if (Hit.Entity.Publisher is { Length: > 0 } publisher)
+                parts.Add(publisher);
+
+            if (Hit.Category is { Length: > 0 } category && !RestatesBadge(category))
+                parts.Add(category);
+
+            return string.Join(" · ", parts);
+        }
+    }
+
+    public bool HasProvenance => Provenance.Length > 0;
+
+    /// <summary>
+    /// True when the category says what the badge on the row already says. Categories are plural
+    /// ("Applications") and badges singular ("Application"), so they are compared with the plural
+    /// removed rather than for equality.
+    /// </summary>
+    private bool RestatesBadge(string category) =>
+        string.Equals(category.TrimEnd('s'), KindBadge.TrimEnd('s'), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Drops <paramref name="summary"/> from the front of <paramref name="details"/> when the
+    /// prose opens by restating it, and returns what remains.
+    /// </summary>
+    private static string ExtendedDescription(string? details, string summary)
+    {
+        if (string.IsNullOrWhiteSpace(details))
+        {
+            return LongSummaryOnly(summary);
+        }
+
+        var text = details.Trim();
+        if (text.StartsWith(summary, StringComparison.OrdinalIgnoreCase))
+        {
+            var remainder = text[summary.Length..].TrimStart(' ', '.', '\u2014', '-');
+
+            // Prose that is only the summary again adds nothing, so it is treated as if there were
+            // no longer description at all.
+            return remainder.Length > 0 ? remainder : LongSummaryOnly(summary);
+        }
+
+        return text;
+    }
+
+    /// <summary>
+    /// The summary, but only when one line could not have held it. Repeating a short summary
+    /// directly beneath itself is the redundancy the panel exists to avoid.
+    /// </summary>
+    private static string LongSummaryOnly(string summary) =>
+        summary.Length > SummaryLineLength ? summary : string.Empty;
+
+    /// <summary>
+    /// Roughly how much of a summary the single-line row shows before it ellipsizes, at the
+    /// overlay's width and font size. Only used to decide whether expanding could reveal more.
+    /// </summary>
+    private const int SummaryLineLength = 90;
 
     /// <summary>
     /// Synthesis sometimes pads the task list out to ten near-duplicate phrasings. Showing all of

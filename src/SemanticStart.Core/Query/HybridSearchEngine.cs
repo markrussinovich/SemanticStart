@@ -125,7 +125,7 @@ public sealed class HybridSearchEngine : ISearchEngine
             .ThenByDescending(c => c.Score)
             .ThenBy(c => c.Entity.Entity.DisplayName, StringComparer.OrdinalIgnoreCase)
             .Take(limit)
-            .Select(ToHit)];
+            .Select(c => ToHit(snapshot, c))];
     }
 
     /// <summary>
@@ -714,8 +714,9 @@ public sealed class HybridSearchEngine : ISearchEngine
                 Score = x.Boost,
                 Summary = x.Entity.Profile?.Summary,
                 MatchReason = "frequently used",
-                Tasks = x.Entity.Profile?.Tasks ?? [],
+                Tasks = x.Entity.Profile?.IndexableTasks(x.Entity.Entity.DisplayName) ?? [],
                 Category = x.Entity.Profile?.Category,
+                Details = snapshot.DescriptiveDetails(x.Entity.Profile),
             })];
     }
 
@@ -731,7 +732,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         return candidate;
     }
 
-    private static SearchHit ToHit(Candidate c) => new()
+    private static SearchHit ToHit(Snapshot snapshot, Candidate c) => new()
     {
         Entity = c.Entity.Entity,
         Score = c.Score,
@@ -739,8 +740,9 @@ public sealed class HybridSearchEngine : ISearchEngine
         LexicalScore = c.LexicalScore,
         Summary = c.Entity.Profile?.Summary,
         MatchReason = c.MatchReason,
-        Tasks = c.Entity.Profile?.Tasks ?? [],
+        Tasks = c.Entity.Profile?.IndexableTasks(c.Entity.Entity.DisplayName) ?? [],
         Category = c.Entity.Profile?.Category,
+        Details = snapshot.DescriptiveDetails(c.Entity.Profile),
     };
 
     [DebuggerDisplay("{Entity.Entity.DisplayName} = {Score}")]
@@ -909,6 +911,16 @@ public sealed class HybridSearchEngine : ISearchEngine
         /// at a few thousand entities this is a few hundred thousand tokens and costs milliseconds.
         /// </summary>
         public Dictionary<string, int> DocumentFrequency { get; } = BuildDocumentFrequency(Entities);
+
+        /// <summary>
+        /// Detail prose that is shared by too many entities to be describing any of them. See
+        /// <see cref="SharedDetailFilter"/>.
+        /// </summary>
+        private HashSet<string> SharedDetails { get; } = SharedDetailFilter.Build(Entities.Select(e => e.Profile));
+
+        /// <summary>The profile's detail prose, or null when it is shared boilerplate.</summary>
+        public string? DescriptiveDetails(SynthesizedProfile? profile) =>
+            SharedDetailFilter.Describing(SharedDetails, profile);
 
         private static Dictionary<string, int> BuildDocumentFrequency(IndexedEntity[] entities)
         {

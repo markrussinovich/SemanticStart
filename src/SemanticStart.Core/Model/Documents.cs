@@ -118,7 +118,14 @@ public sealed record SynthesizedProfile
     public string? IndexableSummary(string displayName) =>
         RestatesName(Summary, displayName) ? null : Summary;
 
-    /// <summary>Tasks with name-restating placeholders removed. See <see cref="IndexableSummary"/>.</summary>
+    /// <summary>
+    /// Tasks with name-restating placeholders removed. See <see cref="IndexableSummary"/>.
+    ///
+    /// Used for display as well as for retrieval, which is not the compromise it sounds like: the
+    /// rule is "says nothing the name did not already say", and such a task is as pointless to read
+    /// as it is to index. Listing "open file explorer" under File Explorer tells the reader only
+    /// what the row they clicked already told them.
+    /// </summary>
     public IReadOnlyList<string> IndexableTasks(string displayName) =>
         [.. Tasks.Where(t => !RestatesName(t, displayName))];
 
@@ -221,4 +228,11 @@ public sealed record SearchHit
 
     /// <summary>Broad category from the synthesized profile.</summary>
     public string? Category { get; init; }
+
+    /// <summary>
+    /// The longer prose from the synthesized profile, when it actually describes this entity.
+    /// Empty when the profile has none, and when what it has is boilerplate shared with other
+    /// entities - see HybridSearchEngine's shared-detail filter.
+    /// </summary>
+    public string? Details { get; init; }
 }

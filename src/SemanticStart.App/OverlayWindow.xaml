@@ -217,6 +217,7 @@
                                     Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVisible}}">
                                 <StackPanel>
                                     <TextBlock Text="{Binding DetailSummary}" TextWrapping="Wrap" FontSize="12"
+                                               Visibility="{Binding HasDetailSummary, Converter={StaticResource BoolToVisible}}"
                                                Foreground="{DynamicResource PrimaryTextBrush}" />
                                     <ItemsControl ItemsSource="{Binding Tasks}" Margin="0,6,0,0"
                                                   Visibility="{Binding HasTasks, Converter={StaticResource BoolToVisible}}">
@@ -227,7 +228,10 @@
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
-                                    <TextBlock Text="{Binding LaunchTarget}" FontSize="11" Margin="0,6,0,0" TextTrimming="CharacterEllipsis"
+                                    <TextBlock Text="{Binding Provenance}" FontSize="11" Margin="0,6,0,0" TextTrimming="CharacterEllipsis"
+                                               Visibility="{Binding HasProvenance, Converter={StaticResource BoolToVisible}}"
+                                               Foreground="{DynamicResource SecondaryTextBrush}" />
+                                    <TextBlock Text="{Binding LaunchTarget}" FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
                                                Visibility="{Binding HasLaunchTarget, Converter={StaticResource BoolToVisible}}"
                                                Foreground="{DynamicResource SecondaryTextBrush}" Opacity="0.8" />
                                 </StackPanel>
