@@ -1,7 +1,7 @@
-﻿# SemanticStart
+# SemanticStart
 
-Semantic search for the Windows Start menu. Describe what you want to do â€” *"free up disk space"*,
-*"sandbox for testing untrusted apps"*, *"host a website locally"* â€” and get the app, setting, or
+Semantic search for the Windows Start menu. Describe what you want to do — *"free up disk space"*,
+*"sandbox for testing untrusted apps"*, *"host a website locally"* — and get the app, setting, or
 built-in Windows feature that actually does it.
 
 Windows Start search is lexical: it matches substrings of names. If you don't already know what a
@@ -9,46 +9,41 @@ tool is called, you can't find it. SemanticStart builds a local semantic index o
 applications **and** built-in Windows features, then serves it from a Start-like overlay. All
 inference runs locally; no query ever leaves the machine.
 
-## Status
+![The overlay answering "create a todo list"](docs/overlay-todo.png)
 
-Working end to end. On this Windows 11 machine it indexes **534 entities** and answers
-queries with a **median latency of 2.3 ms (p95 3.2 ms)**, scoring **56/61** on the built-in
-relevance corpus (MRR 0.870, correct answer first 83% of the time). A full rebuild with online
-enrichment takes ~7 minutes; querying never touches the network.
+Nothing in that query matches the name of the app that answers it. "Todo" is not a word in
+"Microsoft To Do", and the two tools below it are there because a *list* is something they make.
+Outlook is last because its tasks are real but secondary. That ordering is the whole product.
 
-Every query ever reported as wrong is a permanent case in that corpus, including the ones still
-failing. The remaining five share a single cause, and it is not ranking: no source on the machine
-uses the words the question does. Nothing indexed about Process Explorer contains "memory";
-nothing about any power setting contains "lid". Cases like these are left failing on purpose
-rather than papered over by lowering an evidence floor or hand-writing knowledge about a specific
-program, because both would trade a general engine for a demo.
+On the Windows 11 machine these numbers were taken from:
 
-The overlay waits for typing to stop before searching (500 ms, adjustable in Settings). Every
-prefix of a word is a different question, not a weaker version of the finished one — "edit do" and
-"edit doc" match different words and score every candidate differently — so searching on each
-keystroke put that churn on screen. A query costs ~2.3 ms; the wait buys a settled answer, and
-Enter skips it.
+| | |
+|---|---|
+| Entities indexed | 521 |
+| Query latency | 2.4 ms median, 3.2 ms p95 |
+| Relevance corpus | 57/61, MRR 0.874, correct answer first 83% of the time |
+| Full rebuild | ~7 minutes, once |
+| Re-running one enricher | 2.5 seconds |
 
 ## How it works
 
 ```
-Collectors â†’ Enrichment â†’ Profile synthesis â†’ Embeddings â†’ SQLite + FTS5 + vectors
-                                                              â”‚
-                              Win+Alt+Space â”€â”€â–º Hybrid retrieval (vector âˆ¥ BM25 â†’ RRF) â”€â”€â–º Overlay
+Collectors -> Enrichment -> Profile synthesis -> Embeddings -> SQLite + FTS5 + vectors
+                                                                |
+                        Win+Alt+Space --> Hybrid retrieval (vector | BM25 -> RRF) --> Overlay
 ```
 
 **Indexing (offline).** Eight collectors enumerate AppsFolder/MSIX apps, Start shortcuts, uninstall
 registry entries, `ms-settings:` pages, Control Panel applets and MMC snap-ins, Windows optional
-features, System32 tools, and MSIX command aliases registered under `App Paths` â€” the last of these
+features, System32 tools, and MSIX command aliases registered under `App Paths` — the last of these
 reaches console tools that ship inside installed suites and that Windows deliberately hides from
-Start. Each entity is enriched from local documentation (PE version resources, MSIX manifests,
-`.lnk` comments, `--help` output) and, optionally, online
-sources. Synthesis then distills that documentation into a one-line description, a list of tasks
-the user might want, and synonyms â€” this is what closes the gap between how people phrase intent
-and how vendors name products. The result is embedded with `all-MiniLM-L6-v2` via ONNX Runtime.
+Start. Each entity is enriched from local documentation and, optionally, online sources. Synthesis
+then distills that documentation into a one-line description, a list of tasks the user might want,
+and synonyms — this is what closes the gap between how people phrase intent and how vendors name
+products. The result is embedded with `all-MiniLM-L6-v2` via ONNX Runtime.
 
 **Querying (hot path).** Two arms run per query. The vector arm supplies semantic recall; the
-lexical FTS5/BM25 arm supplies precision on literal names. Neither is sufficient alone â€” pure vector
+lexical FTS5/BM25 arm supplies precision on literal names. Neither is sufficient alone — pure vector
 search fails on short prefixes like `wor`, and pure lexical search cannot answer *"free up disk
 space"*. Results are fused with Reciprocal Rank Fusion, then adjusted by literal-name boosts and by
 what you actually launch. Results whose evidence is weak are dropped rather than padding the list to
@@ -87,12 +82,12 @@ Run `SemanticStart.App.exe`. It lives in the tray, builds its index on first run
 | `Ctrl+Shift+Enter` | Open file location |
 | `Esc` | Dismiss |
 
-The overlay follows the system light/dark theme and accent colour live, and shows each entry's real
-Shell icon (including MSIX/UWP assets) via `IShellItemImageFactory` â€” the same source Start uses.
+The overlay follows the system light/dark theme and accent color live, and shows each entry's real
+Shell icon (including MSIX/UWP assets) via `IShellItemImageFactory` — the same source Start uses.
 
 **Hotkey fallback.** If `Win+Alt+Space` is already claimed by another app (`RegisterHotKey` fails with
-`ERROR_HOTKEY_ALREADY_REGISTERED`), SemanticStart walks a candidate list â€” `Win+Alt+S`,
-`Win+Ctrl+G`, `Win+Alt+X`, `Ctrl+Alt+Space`, `Ctrl+Alt+S`, `Ctrl+Shift+Space` â€” and registers
+`ERROR_HOTKEY_ALREADY_REGISTERED`), SemanticStart walks a candidate list — `Win+Alt+S`,
+`Win+Ctrl+G`, `Win+Alt+X`, `Ctrl+Alt+Space`, `Ctrl+Alt+S`, `Ctrl+Shift+Space` — and registers
 the first one that is free. The hotkey that actually won is reported by a tray balloon at startup
 and shown under **Hotkey** in Settings (the gear in the lower left of the overlay).
 
@@ -103,13 +98,13 @@ nothing to spell, which matters because key names are not guessable (`PrintScree
 
 While the field is listening, the global hotkey and the Start-key hook are released and restored
 afterwards. Windows delivers a registered hotkey to the owning application as an activation rather
-than as key input, so without this the chord most likely to be pressed while editing â€” the one
-already assigned â€” would open the overlay instead of being recorded.
+than as key input, so without this the chord most likely to be pressed while editing — the one
+already assigned — would open the overlay instead of being recorded.
 
 A chord is rejected, with the reason shown inline, if it has no modifier (Windows would register it
 globally and swallow that key everywhere, including inside text boxes), if `Shift` is its only
 modifier (that is ordinary typing), or if the shell claims it before any application sees it
-(`Win+L`, `Win+G`, `Win+Tab`, `Ctrl+Alt+Delete`) â€” accepting one of those would appear to work and
+(`Win+L`, `Win+G`, `Win+Tab`, `Ctrl+Alt+Delete`) — accepting one of those would appear to work and
 then never fire.
 
 **Why this combination.** Bare `Win+<letter>` is impossible: the shell registers every one of them,
@@ -117,28 +112,69 @@ so `RegisterHotKey` fails for `Win+S`, `Win+Q` and `Win+F` alike. That leaves `W
 where much of the `Win+Alt+<letter>` family (`D`, `F`, `G`, `R`, `T`, `W`) belongs to Xbox Game Bar on
 a stock Windows 11 install, `Win+Shift+S` is Screen Snip, and `Win+Ctrl+S` is Speech Recognition.
 `Win+Alt+Space` avoids all of those, matches the established launcher idiom (Spotlight, Alfred,
-Raycast, PowerToys Run), and sits in one corner of the keyboard so a single hand can hit it â€” the
+Raycast, PowerToys Run), and sits in one corner of the keyboard so a single hand can hit it — the
 thumb covers Alt and Space while the pinky holds Win, with no finger doing double duty.
 
 **Single instance.** A named mutex ensures only one copy runs. Launching the executable again does
 not start a second instance; it signals the running one to show its overlay and exits.
 
+**Typing.** The overlay waits for typing to stop before searching (500 ms, adjustable in Settings).
+Every prefix of a word is a different question, not a weaker version of the finished one — "edit do"
+and "edit doc" match different words and score every candidate differently — so searching on each
+keystroke put that churn on screen. A query costs ~2.4 ms; the wait buys a settled answer, and Enter
+skips it. Holding Backspace extends the wait, because the first gap a held key produces is the
+keyboard's auto-repeat delay rather than a pause for thought.
+
 ### Where descriptions come from
 
-Description quality is what makes intent search work. Every description, task phrase, and synonym
-is distilled from documentation the machine already has or can fetch: PE version resources, MSIX
-manifests, `.lnk` comments, `--help` output, and — when online enrichment is on — Wikipedia,
-Microsoft Learn, and winget manifests. Nothing is hand-written per program, so a tool this project
-has never heard of is described as well as a tool it has.
+Description quality is what makes intent search work. Every description, task phrase, and synonym is
+distilled from documentation the machine already has or can fetch. Nine enrichers contribute, six of
+them offline:
 
-An earlier build handed this job to a small local language model (Foundry Local, Ollama, LM Studio).
-It was removed. Across the 55-query corpus the two scored the same 50/55, with MRR 0.821 vs 0.823
-and top-1 74% vs 76% — a difference of one case. **A local model did not measurably help
+| Enricher | Network | What it reads |
+|---|---|---|
+| `pe-version` | no | PE version resources: file description, product name, company |
+| `msix-manifest` | no | `AppxManifest.xml` display name and description |
+| `shortcut` | no | `.lnk` comment text and the Start Menu folder it sits in |
+| `local-docs` | no | `README`, `.md`, `.txt` and help files next to the executable |
+| `cli-help` | no | `--help` / `/?` output, sandboxed and time-bounded |
+| `ui-resources` | no | The program's own menus and dialogs, read from its resources |
+| `winget` | yes | winget manifest description, tags, and moniker |
+| `learn` | yes | Microsoft Learn pages for built-in tools and settings |
+| `wikipedia` | yes | Article lead and feature sections |
+
+`ui-resources` is the one that earns its keep most often, because articles describe what a tool is
+*for* while its interface states what it can *do*. Nothing written about Process Explorer mentions
+memory; its View menu offers "Physical Memory History". Reading resources structurally also means
+reading the right ones — Resource Monitor launches `perfmon.exe`, so its menus describe Performance
+Monitor, and the labels that actually belong to it live in the module its icon names.
+
+Nothing is hand-written per program, so a tool this project has never heard of is described as well
+as a tool it has.
+
+An earlier build handed synthesis to a small local language model (Foundry Local, Ollama, LM Studio).
+It was removed. Across the 55-query corpus of the time the two scored the same 50/55, with MRR 0.821
+vs 0.823 and top-1 74% vs 76% — a difference of one case. **A local model did not measurably help
 SemanticStart find things**, and it cost a multi-GB download and roughly five extra minutes per
 rebuild, so it was not worth carrying.
 
 Settings shows what the index actually holds — applications, system utilities, Windows settings,
 total entries, and size on disk — so you can see how much of the machine was found.
+
+### Relevance
+
+Every query ever reported as wrong is a permanent case in the built-in corpus, including the ones
+that still fail. Each case is judged against the **eight rows the overlay actually shows** rather
+than against a longer list the user never sees. That distinction is not academic: a required result
+sitting at rank 10 passed the harness twice while being invisible on screen, which is exactly how a
+real defect gets reported as fixed.
+
+Four cases fail. They are left failing rather than papered over by lowering an evidence floor or
+hand-writing knowledge about a specific program, because both would trade a general engine for a
+demo. The most instructive is *"check access"*, which wants AccessChk and gets AccessEnum: both are
+Sysinternals tools, both are documented in nearly the same words, and nothing on the machine says
+that one enumerates share permissions while the other reports effective ones. No amount of ranking
+fixes a distinction the source material never draws.
 
 ### The CLI
 
@@ -146,6 +182,7 @@ total entries, and size on disk — so you can see how much of the machine was f
 
 ```powershell
 dotnet run --project src\SemanticStart.Cli -- index [--force]   # build or rebuild the index
+dotnet run --project src\SemanticStart.Cli -- index --refresh ui-resources
 dotnet run --project src\SemanticStart.Cli -- search "<query>"  # query it
 dotnet run --project src\SemanticStart.Cli -- eval              # run the relevance corpus
 dotnet run --project src\SemanticStart.Cli -- stats             # index statistics
@@ -153,8 +190,12 @@ dotnet run --project src\SemanticStart.Cli -- enrich "<name>"   # what each enri
 dotnet run --project src\SemanticStart.Cli -- diagnose "<query>" --name "<entity>"
 ```
 
+`--refresh` re-runs only the named enrichers and reuses every stored document for the rest. Nothing
+is re-embedded unless its text actually changed, which turns the edit-measure loop on a single
+enricher from a seven-minute rebuild into 2.5 seconds.
+
 `diagnose` answers the question `search` cannot: why something *didn't* come back. A missing result
-is either "no arm retrieved it" or "an arm retrieved it and a surfacing floor rejected it" - opposite
+is either "no arm retrieved it" or "an arm retrieved it and a surfacing floor rejected it" — opposite
 fixes, indistinguishable from outside. It runs the query twice against one snapshot, once with the
 shipped floors and once with every floor disabled, and diffs the two.
 
@@ -179,7 +220,7 @@ Tier 2 is best-effort by nature, and its limits are surfaced in Settings rather 
   intercepted.
 - The hook can be dropped by Windows under load; a watchdog re-installs it.
 
-It is **off by default and fails open** â€” if anything goes wrong, the real Start menu still works.
+It is **off by default and fails open** — if anything goes wrong, the real Start menu still works.
 That is a non-negotiable safety property, and every hook callback is wrapped to guarantee it.
 
 ## Privacy
@@ -187,6 +228,9 @@ That is a non-negotiable safety property, and every hook callback is wrapped to 
 Queries never leave the machine. The only network traffic is the one-time embedding model download
 and opt-in enrichment during indexing, which is cached to disk and can be disabled entirely; the
 index is fully functional without it. No inference of any kind leaves the machine.
+
+A built index is a list of what is installed on the machine that built it, so it is treated as local
+data: it lives in `%LOCALAPPDATA%\SemanticStart` and is ignored by source control.
 
 ## Layout
 
@@ -205,6 +249,6 @@ Palette or PowerToys Run extension later.
 User files and documents (Windows Search already covers these), generative LLM inference at query
 time (hundreds of milliseconds on a path that must feel instant), and any form of Explorer patching.
 
+## License
 
-
-
+MIT. See [LICENSE](LICENSE).
