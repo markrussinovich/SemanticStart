@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using SemanticStart.Core.Collectors;
 using SemanticStart.Core.Embeddings;
 using SemanticStart.Core.Enrichment;
@@ -232,9 +233,8 @@ internal static class Program
 
                     foreach (var doc in docs)
                     {
-                        var text = doc.Text.Replace("\n", " ", StringComparison.Ordinal);
                         Console.WriteLine($"  {enricher.Provider,-16} {doc.SourceUri}");
-                        Console.WriteLine($"  {"",-16} {text[..Math.Min(200, text.Length)]}");
+                        Console.WriteLine($"  {"",-16} {OneLine(doc.Text, 200)}");
                     }
                 }
                 catch (Exception ex)
@@ -246,6 +246,22 @@ internal static class Program
 
         return 0;
     }
+
+    /// <summary>
+    /// Flattens harvested text onto a single line so it stays inside its column.
+    ///
+    /// Every whitespace run collapses, not just newlines. Replacing "\n" alone left the "\r"
+    /// behind, and a lone carriage return returns the cursor to column one rather than ending the
+    /// line, so a manifest's publisher and description lines overwrote the start of the row and
+    /// the output stopped looking like a table at all.
+    /// </summary>
+    private static string OneLine(string text, int limit)
+    {
+        var flattened = WhitespaceRun.Replace(text ?? string.Empty, " ").Trim();
+        return flattened.Length <= limit ? flattened : flattened[..limit].TrimEnd() + "...";
+    }
+
+    private static readonly Regex WhitespaceRun = new(@"\s+", RegexOptions.Compiled);
 
     private static async Task<int> IndexAsync(string[] args)
     {
