@@ -1,8 +1,10 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using SemanticStart.Core.Abstractions;
 using Forms = System.Windows.Forms;
 
@@ -20,6 +22,51 @@ public partial class OverlayWindow : Window
         InitializeComponent();
         _viewModel = viewModel;
         DataContext = viewModel;
+
+        // Expanding a result grows it downwards, so the panel the user just asked to read is
+        // routinely the part that ends up below the fold. Scroll it back into view.
+        ResultsList.AddHandler(System.Windows.Controls.Primitives.ToggleButton.CheckedEvent,
+            new RoutedEventHandler(DetailsToggle_Checked));
+    }
+
+    private void DetailsToggle_Checked(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source)
+            return;
+
+        var container = ItemsControl.ContainerFromElement(ResultsList, source) as ListBoxItem;
+        if (container is null)
+            return;
+
+        // The panel has not been measured yet at Checked time, so its height is still zero and
+        // scrolling now would aim at the collapsed row. Wait for the layout pass it triggers.
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            var viewport = FindScrollViewer(ResultsList)?.ViewportHeight ?? 0;
+
+            // A result taller than the viewport cannot be shown whole. Bringing all of it into
+            // view would scroll to its bottom and push the name off the top, so ask only for as
+            // much as fits, measured from the top.
+            if (viewport > 0 && container.ActualHeight > viewport)
+                container.BringIntoView(new Rect(0, 0, container.ActualWidth, viewport));
+            else
+                container.BringIntoView();
+        });
+    }
+
+    private static ScrollViewer? FindScrollViewer(DependencyObject root)
+    {
+        if (root is ScrollViewer viewer)
+            return viewer;
+
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var found = FindScrollViewer(VisualTreeHelper.GetChild(root, i));
+            if (found is not null)
+                return found;
+        }
+
+        return null;
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
