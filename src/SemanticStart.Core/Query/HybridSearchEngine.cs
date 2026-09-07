@@ -908,6 +908,23 @@ public sealed class HybridSearchEngine : ISearchEngine
 
     private const double _minimumCoverageWeight = 0.2;
 
+    /// <summary>
+    /// The text coverage is measured against: name, summary, tasks and synonyms - the fields that
+    /// state what an entity is *for*. Deliberately narrower than the FTS table, which also scores
+    /// <see cref="SynthesizedProfile.Details"/> and <see cref="SynthesizedProfile.Features"/>.
+    ///
+    /// Including those was tried and measured worse: details drops MRR from 0.883 to 0.853, and
+    /// details plus features to 0.862, both costing a case. Prose harvested from an article
+    /// mentions a great many words in passing, and interface labels are a few hundred nouns per
+    /// app, so admitting either makes coverage cheap to satisfy and it stops discriminating -
+    /// which is the failure it was added to prevent, one level up.
+    ///
+    /// The cost is that coverage under-reports for an entity the lexical arm scored on those
+    /// columns alone: Process Explorer reads 20% for "list services", the floor meaning nothing
+    /// matched, though BM25 paid it for ".NET Services" among its harvested interface labels. That
+    /// is the right trade while coverage only ever gates <see cref="RankingOptions.StrongLexicalScore"/>,
+    /// which such an entity is nowhere near reaching.
+    /// </summary>
     private static string BuildMatchText(IndexedEntity entity)
     {
         var builder = new StringBuilder();
