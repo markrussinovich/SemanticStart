@@ -10,10 +10,16 @@ public partial class SettingsWindow : Window
     private readonly AppSettingsService _settingsService;
     private readonly SemanticSearchService _searchService;
     private readonly ActivationManager _activationManager;
-    private CancellationTokenSource? _rebuildCts;
+    private readonly IndexRebuildCoordinator _rebuilds;
     private AppSettings _settings;
+    private bool _dirty;
+    private bool _loading;
 
-    public SettingsWindow(AppSettingsService settingsService, SemanticSearchService searchService, ActivationManager activationManager)
+    public SettingsWindow(
+        AppSettingsService settingsService,
+        SemanticSearchService searchService,
+        ActivationManager activationManager,
+        IndexRebuildCoordinator rebuilds)
     {
         InitializeComponent();
         ThemeService.Refresh();
@@ -21,9 +27,21 @@ public partial class SettingsWindow : Window
         _settingsService = settingsService;
         _searchService = searchService;
         _activationManager = activationManager;
+        _rebuilds = rebuilds;
         _settings = settingsService.Load();
         VersionText.Text = $"SemanticStart {ProductVersion}";
         LoadControls();
+
+        // The window can open while a rebuild is already running - the tray starts one, and so does
+        // first run - so it adopts the current state rather than assuming it is idle.
+        _rebuilds.StateChanged += OnRebuildStateChanged;
+        ApplyRebuildState(_rebuilds.State);
+
+        // A window that never fits its content is a window with a permanent scrollbar. Growing to
+        // fit and capping at the working area keeps the scrollbar for the screens that need it and
+        // removes it everywhere else.
+        MaxHeight = SystemParameters.WorkArea.Height - 40;
+
         _ = RefreshIndexStatsAsync();
     }
 
@@ -47,48 +65,42 @@ public partial class SettingsWindow : Window
         }
     }
 
-    public async Task RebuildIndexAsync(bool force)
+    /// <summary>
+    /// Starts a rebuild and leaves it running whether or not this window survives.
+    /// </summary>
+    public Task RebuildIndexAsync(bool force)
     {
-        _rebuildCts?.Cancel();
-        _rebuildCts = new CancellationTokenSource();
-        RebuildButton.IsEnabled = false;
-        ProgressText.Text = "Starting rebuild...";
-        ProgressBar.Value = 0;
+        SaveFromControls();
+        return _rebuilds.StartAsync(_settings, force);
+    }
 
-        var progress = new Progress<IndexProgress>(p =>
-        {
-            ProgressBar.Value = p.Fraction;
-            ProgressText.Text = p.Total > 0
-                ? $"{p.Phase}: {p.Completed}/{p.Total} {p.CurrentItem}"
-                : $"{p.Phase}: {p.CurrentItem}";
-        });
+    private void OnRebuildStateChanged(object? sender, IndexRebuildState state) =>
+        Dispatcher.BeginInvoke(() => ApplyRebuildState(state));
 
-        try
-        {
-            SaveFromControls();
-            await _searchService.RebuildIndexAsync(_settings, force, progress, _rebuildCts.Token);
-            ProgressBar.Value = 1;
-            ProgressText.Text = $"Rebuild complete. {_searchService.Count} entities loaded.";
-            await RefreshIndexStatsAsync();
-        }
-        catch (OperationCanceledException)
-        {
-            ProgressText.Text = "Rebuild canceled.";
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Index rebuild failed");
-            ProgressText.Text = "Rebuild failed; see log for details.";
-        }
-        finally
-        {
-            RebuildButton.IsEnabled = true;
-        }
+    private void ApplyRebuildState(IndexRebuildState state)
+    {
+        ProgressBar.Value = state.Fraction;
+        ProgressText.Text = state.Message;
+        RebuildButton.IsEnabled = !state.IsRunning;
+
+        // Says the one thing the user cannot find out by looking: that the work is not tied to this
+        // window. Without it the only safe-looking option is to sit and wait for a job that takes
+        // minutes.
+        BackgroundNote.Visibility = state.IsRunning ? Visibility.Visible : Visibility.Collapsed;
+
+        // The stats block claims the index is empty while a build is filling it, and tells the user
+        // to press a button that is disabled. Re-render so it describes what is actually happening.
+        RenderIndexStats(_lastStats);
+
+        if (state.Outcome == RebuildOutcome.Completed)
+            _ = RefreshIndexStatsAsync();
     }
 
     protected override void OnClosed(EventArgs e)
     {
-        _rebuildCts?.Cancel();
+        // Deliberately does not cancel the rebuild. Closing a window is not a request to throw away
+        // several minutes of indexing.
+        _rebuilds.StateChanged -= OnRebuildStateChanged;
 
         // Closing while the recorder still has focus would otherwise leave the hotkey suspended,
         // so the shortcut would stop working until the app was restarted. Re-applying is harmless
@@ -100,13 +112,49 @@ public partial class SettingsWindow : Window
 
     private void LoadControls()
     {
+        _loading = true;
         HotKeyBox.HotKey = _settings.HotKey;
         OnlineBox.IsChecked = _settings.AllowOnlineEnrichment;
         LoginBox.IsChecked = _settings.LaunchAtLogin;
         LimitSlider.Value = _settings.ResultLimit;
         DebounceSlider.Value = _settings.SearchDebounceMilliseconds;
+        _loading = false;
+
         UpdateHotKeyStatus();
+        UpdateSaveState();
     }
+
+    /// <summary>
+    /// Enables Save only when pressing it would do something.
+    ///
+    /// A permanently-enabled Save on a page that also writes on close cannot be told apart from one
+    /// with pending changes, so it says nothing about whether the user has edited anything. The
+    /// exception is a first run, where nothing has been written yet and confirming the defaults is
+    /// a real action.
+    /// </summary>
+    internal void UpdateSaveState() => SaveButton.IsEnabled = _dirty || !_settingsService.HasSavedSettings;
+
+    /// <summary>
+    /// What to say when the index holds nothing. Telling the user to rebuild while a rebuild is
+    /// running contradicts the progress bar directly below and points at a disabled button.
+    /// </summary>
+    internal static string EmptyIndexMessage(bool rebuilding) => rebuilding
+        ? "Index is empty. The build below is populating it."
+        : "Index is empty. Rebuild to populate it.";
+
+    /// <summary>Marks the form edited. Wired to every control that Save would persist.</summary>
+    internal void MarkDirty(object? sender = null, EventArgs? e = null)
+    {
+        if (_loading || !IsInitialized)
+            return;
+
+        _dirty = true;
+        UpdateSaveState();
+    }
+
+    private void Setting_Changed(object sender, RoutedEventArgs e) => MarkDirty();
+
+    private void Setting_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) => MarkDirty();
 
     /// <summary>The chord currently shown in the hotkey field. Exposed so a test can read what the user sees.</summary>
     internal string HotKeyDisplayText => HotKeyBox.HotKey;
@@ -192,8 +240,16 @@ public partial class SettingsWindow : Window
         _settingsService.Save(_settings);
         _activationManager.ApplySettings(_settings);
         HotKeyBox.HotKey = _settings.HotKey;
+        _dirty = false;
+        UpdateSaveState();
         UpdateHotKeyStatus();
     }
+
+    /// <summary>Whether Save is currently offered. Exposed so a test can check it tracks edits.</summary>
+    internal bool IsSaveEnabled => SaveButton.IsEnabled;
+
+    /// <summary>Whether the "indexing runs in the background" note is showing.</summary>
+    internal bool IsBackgroundNoteVisible => BackgroundNote.Visibility == Visibility.Visible;
 
     /// <summary>
     /// What the stats block ended up showing, as (line count, bolded value count). Exposed so a
@@ -221,6 +277,8 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private IndexStats? _lastStats;
+
     private async Task RefreshIndexStatsAsync()
     {
         try
@@ -231,6 +289,7 @@ public partial class SettingsWindow : Window
         catch (Exception ex)
         {
             Log.Error(ex, "Failed to read index stats");
+            _lastStats = null;
             IndexStatsGrid.Children.Clear();
             IndexStatsGrid.RowDefinitions.Clear();
             IndexStatsGrid.Visibility = Visibility.Collapsed;
@@ -254,17 +313,23 @@ public partial class SettingsWindow : Window
     ///
     /// Separated from the read above so it can be exercised with known numbers.
     /// </summary>
-    internal void RenderIndexStats(IndexStats stats)
+    internal void RenderIndexStats(IndexStats? stats)
     {
+        _lastStats = stats;
         IndexStatsText.Inlines.Clear();
         IndexStatsGrid.Children.Clear();
         IndexStatsGrid.RowDefinitions.Clear();
 
-        if (stats.Total == 0)
+        if (stats is null || stats.Total == 0)
         {
             IndexStatsGrid.Visibility = Visibility.Collapsed;
             IndexStatsText.Visibility = Visibility.Visible;
-            IndexStatsText.Text = "Index is empty. Rebuild to populate it.";
+
+            // "Rebuild to populate it" while a rebuild is running contradicts the progress bar
+            // directly below it and points at a button that is disabled for the duration.
+            IndexStatsText.Text = stats is null
+                ? "Reading index..."
+                : EmptyIndexMessage(_rebuilds.IsRunning);
             return;
         }
 
@@ -320,7 +385,8 @@ public partial class SettingsWindow : Window
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
         SaveFromControls();
-        ProgressText.Text = "Settings saved.";
+        if (!_rebuilds.IsRunning)
+            ProgressText.Text = "Settings saved.";
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e)

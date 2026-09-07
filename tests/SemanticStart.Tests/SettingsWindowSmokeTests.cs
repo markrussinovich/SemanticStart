@@ -24,6 +24,8 @@ public class SettingsWindowSmokeTests
     {
         Exception? failure = null;
         string? hotKeyText = null;
+        var saveEnabledAfterEdit = false;
+        var backgroundNoteVisibleWhenIdle = true;
         (int Lines, int BoldValues) statsShape = default;
 
         var thread = new Thread(() =>
@@ -41,7 +43,9 @@ public class SettingsWindowSmokeTests
                 var searchService = new SemanticSearchService(settings);
                 var activation = new ActivationManager(Dispatcher.CurrentDispatcher, () => { }, settings);
 
-                var window = new SettingsWindow(settingsService, searchService, activation);
+                var rebuilds = new IndexRebuildCoordinator(searchService);
+
+                var window = new SettingsWindow(settingsService, searchService, activation, rebuilds);
 
                 // Control templates are applied on show, not on construct, so anything a template
                 // does to a value set in the constructor stays invisible until the window renders.
@@ -63,6 +67,14 @@ public class SettingsWindowSmokeTests
                     Total: 553, Apps: 300, SystemTools: 150, WindowsSettings: 100, Other: 3,
                     SizeBytes: 12_345_678));
                 statsShape = window.IndexStatsShape;
+
+                // Save tracks edits. It starts disabled only once settings have been written at
+                // least once, so the meaningful assertion is that editing turns it on.
+                window.MarkDirty();
+                saveEnabledAfterEdit = window.IsSaveEnabled;
+
+                // Nothing is rebuilding, so the note about closing the window must stay hidden.
+                backgroundNoteVisibleWhenIdle = window.IsBackgroundNoteVisible;
 
                 window.Close();
             }
@@ -87,5 +99,22 @@ public class SettingsWindowSmokeTests
         // The counts are the reason to read this block, so a run-on line, an unbolded number, or a
         // count that starts wherever its label happened to end is a regression.
         Assert.Equal((6, 6), statsShape);
+
+        Assert.True(saveEnabledAfterEdit, "Save stayed disabled after a setting was changed, so the change cannot be committed.");
+        Assert.False(backgroundNoteVisibleWhenIdle, "The 'indexing runs in the background' note showed with no rebuild running.");
+    }
+
+    /// <summary>
+    /// The empty-index line used to tell the user to rebuild while a rebuild was already running,
+    /// next to a live progress bar and a disabled Rebuild button.
+    /// </summary>
+    [Fact]
+    public void TheEmptyIndexLineDoesNotAskForARebuildWhileOneIsRunning()
+    {
+        Assert.Equal("Index is empty. Rebuild to populate it.", SettingsWindow.EmptyIndexMessage(rebuilding: false));
+
+        var running = SettingsWindow.EmptyIndexMessage(rebuilding: true);
+        Assert.DoesNotContain("Rebuild to populate", running, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("populating", running, StringComparison.OrdinalIgnoreCase);
     }
 }

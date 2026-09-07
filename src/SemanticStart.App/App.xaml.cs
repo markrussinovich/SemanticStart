@@ -11,6 +11,8 @@ public partial class App : System.Windows.Application
     private OverlayWindow? _overlayWindow;
     private ActivationManager? _activationManager;
     private TrayIconService? _trayIconService;
+    private IndexRebuildCoordinator? _rebuilds;
+    private SettingsWindow? _settingsWindow;
     private Mutex? _instanceMutex;
     private EventWaitHandle? _activateSignal;
     private volatile bool _shuttingDown;
@@ -45,6 +47,8 @@ public partial class App : System.Windows.Application
         _settingsService = new AppSettingsService();
         var settings = _settingsService.Load();
         _searchService = new SemanticSearchService(settings);
+        _rebuilds = new IndexRebuildCoordinator(_searchService);
+        _rebuilds.StateChanged += OnRebuildStateChanged;
         var iconProvider = new IconProvider();
         _overlayViewModel = new OverlayViewModel(_searchService, iconProvider, settings);
         _overlayWindow = new OverlayWindow(_overlayViewModel);
@@ -165,6 +169,7 @@ public partial class App : System.Windows.Application
     protected override void OnExit(ExitEventArgs e)
     {
         _trayIconService?.Dispose();
+        _rebuilds?.Dispose();
         _activationManager?.Dispose();
         _searchService?.Dispose();
         _shuttingDown = true;
@@ -222,27 +227,61 @@ public partial class App : System.Windows.Application
         });
     }
 
+    /// <summary>
+    /// Shows the settings window, reusing the one already open.
+    ///
+    /// There are three ways in - the tray menu, the overlay's gear, and a tray rebuild - and each
+    /// used to construct its own window. Two copies of a page that writes the same settings file
+    /// means whichever is closed last wins, and the progress of a rebuild appears in only one of
+    /// them.
+    /// </summary>
     private SettingsWindow ShowSettingsWindow()
     {
-        if (_settingsService is null || _searchService is null || _activationManager is null)
+        if (_settingsService is null || _searchService is null || _activationManager is null || _rebuilds is null)
             throw new InvalidOperationException("Application services are not ready.");
 
-        var window = new SettingsWindow(_settingsService, _searchService, _activationManager);
-        window.Show();
-        window.Activate();
-        return window;
+        if (_settingsWindow is null)
+        {
+            _settingsWindow = new SettingsWindow(_settingsService, _searchService, _activationManager, _rebuilds);
+            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+            _settingsWindow.Show();
+        }
+        else if (_settingsWindow.WindowState == WindowState.Minimized)
+        {
+            _settingsWindow.WindowState = WindowState.Normal;
+        }
+
+        _settingsWindow.Activate();
+        return _settingsWindow;
     }
 
-    private async Task RebuildIndexFromTrayAsync()
+    /// <summary>
+    /// Tells the user a background rebuild finished. Now that closing the settings window no longer
+    /// stops the build, the window that was showing progress is often gone by the time it ends.
+    /// </summary>
+    private void OnRebuildStateChanged(object? sender, IndexRebuildState state)
+    {
+        if (state.Outcome is not (RebuildOutcome.Completed or RebuildOutcome.Failed))
+            return;
+
+        var message = state.Outcome == RebuildOutcome.Completed
+            ? $"Indexing finished. {_searchService?.Count ?? 0} apps, tools, and settings are searchable."
+            : "Indexing failed; see the log for details.";
+
+        Dispatcher.BeginInvoke(new Action(() => _trayIconService?.ShowMessage("SemanticStart", message)));
+    }
+
+    private Task RebuildIndexFromTrayAsync()
     {
         try
         {
             var window = ShowSettingsWindow();
-            await window.RebuildIndexAsync(force: true);
+            return window.RebuildIndexAsync(force: true);
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Tray rebuild failed");
+            return Task.CompletedTask;
         }
     }
 

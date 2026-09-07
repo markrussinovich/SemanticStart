@@ -2,7 +2,8 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:SemanticStart.App"
-        Title="SemanticStart Settings" Width="620" Height="760" WindowStartupLocation="CenterScreen"
+        Title="SemanticStart Settings" Width="620" SizeToContent="Height" WindowStartupLocation="CenterScreen"
+        Icon="/SemanticStart.App;component/Assets/SemanticStart.ico"
         ResizeMode="CanMinimize" FontFamily="{DynamicResource UiFont}"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Ideal"
         Background="{DynamicResource PanelBrush}" Foreground="{DynamicResource PrimaryTextBrush}">
@@ -109,7 +110,7 @@
 
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
-                        <CheckBox x:Name="OnlineBox" Content="Allow online enrichment while indexing" />
+                        <CheckBox x:Name="OnlineBox" Content="Allow online enrichment while indexing" Checked="Setting_Changed" Unchecked="Setting_Changed" />
                         <TextBlock Style="{StaticResource Caption}"
                                    Text="Fetches public documentation to improve descriptions. Searches always stay on this device; only indexing touches the network, and results are cached." />
                     </StackPanel>
@@ -125,7 +126,7 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="Results shown" VerticalAlignment="Center" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                <Slider x:Name="LimitSlider" Width="180" Minimum="3" Maximum="20" IsSnapToTickEnabled="True"
+                                <Slider x:Name="LimitSlider" Width="180" Minimum="3" Maximum="20" IsSnapToTickEnabled="True" ValueChanged="Setting_ValueChanged"
                                         TickFrequency="1" VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding ElementName=LimitSlider, Path=Value, StringFormat=F0}" Width="26"
                                            TextAlignment="Right" Margin="10,0,0,0" VerticalAlignment="Center" />
@@ -142,7 +143,7 @@
                                            Style="{StaticResource Caption}" TextWrapping="Wrap" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Slider x:Name="DebounceSlider" Width="180" Minimum="0" Maximum="1000" IsSnapToTickEnabled="True"
+                                <Slider x:Name="DebounceSlider" Width="180" Minimum="0" Maximum="1000" IsSnapToTickEnabled="True" ValueChanged="Setting_ValueChanged"
                                         TickFrequency="50" VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding ElementName=DebounceSlider, Path=Value, StringFormat={}{0:F0} ms}" Width="58"
                                            TextAlignment="Right" Margin="10,0,0,0" VerticalAlignment="Center" />
@@ -165,6 +166,8 @@
                             </Grid.ColumnDefinitions>
                         </Grid>
                         <TextBlock x:Name="ProgressText" Style="{StaticResource Caption}" Text="Ready" />
+                        <TextBlock x:Name="BackgroundNote" Style="{StaticResource Caption}" Visibility="Collapsed"
+                                   Text="You can close this window; indexing runs in the background." />
                         <ProgressBar x:Name="ProgressBar" Height="4" Minimum="0" Maximum="1" Margin="0,10,0,10"
                                      Background="{DynamicResource ItemHoverBrush}" Foreground="{DynamicResource AccentBrush}"
                                      BorderThickness="0" />
@@ -176,7 +179,7 @@
                 <TextBlock Text="Startup" Style="{StaticResource SectionHeader}" />
 
                 <Border Style="{StaticResource Card}">
-                    <CheckBox x:Name="LoginBox" Content="Start SemanticStart when I sign in" />
+                    <CheckBox x:Name="LoginBox" Content="Start SemanticStart when I sign in" Checked="Setting_Changed" Unchecked="Setting_Changed" />
                 </Border>
             </StackPanel>
         </ScrollViewer>
@@ -185,7 +188,7 @@
             <TextBlock x:Name="VersionText" VerticalAlignment="Center" HorizontalAlignment="Left" FontSize="12"
                        Foreground="{DynamicResource SecondaryTextBrush}" />
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="Save" Width="100" Margin="0,0,8,0" Style="{StaticResource AccentButton}" Click="SaveButton_Click" />
+                <Button x:Name="SaveButton" Content="Save" Width="100" Margin="0,0,8,0" Style="{StaticResource AccentButton}" Click="SaveButton_Click" />
                 <Button Content="Close" Width="100" Style="{StaticResource FluentButton}" Click="CloseButton_Click" />
             </StackPanel>
         </Grid>

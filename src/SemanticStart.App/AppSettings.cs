@@ -89,6 +89,12 @@ public sealed class AppSettingsService
         }
     }
 
+    /// <summary>
+    /// Whether anything has ever been written. False on a first run, where Save is a real action
+    /// even with nothing edited: it is what turns the defaults on screen into a stored choice.
+    /// </summary>
+    public bool HasSavedSettings => File.Exists(AppPaths.SettingsFile);
+
     public void Save(AppSettings settings)
     {
         try

@@ -179,6 +179,11 @@ rebuild, so it was not worth carrying.
 Settings shows what the index actually holds — applications, system utilities, Windows settings,
 total entries, and size on disk — so you can see how much of the machine was found.
 
+Rebuilding belongs to the app, not to the Settings window: you can close Settings while indexing
+runs in the background, and a tray notification tells you when it finishes. Reopening Settings
+rejoins the build already in progress. (It used to be the other way round, so closing the window
+silently threw away the first index build and left the app finding nothing.)
+
 ### Relevance
 
 Every query ever reported as wrong is a permanent case in the built-in corpus, including the ones
@@ -252,6 +257,11 @@ data: it lives in `%LOCALAPPDATA%\SemanticStart` and is ignored by source contro
 | `src/SemanticStart.Cli` | Diagnostic CLI (`index`, `search`, `eval`, `stats`, `enrich`, `diagnose`) |
 | `src/SemanticStart.App` | WPF overlay, activation, tray icon, settings |
 | `tests/SemanticStart.Tests` | Unit and regression tests |
+| `tools/make-icon.ps1` | Redraws the app icon (`src/SemanticStart.App/Assets/SemanticStart.ico`) |
+
+The icon is generated rather than drawn by hand so that every size in the `.ico` is rendered at its
+own resolution — a 16px tray icon resampled from a big bitmap loses the magnifier's ring. Run the
+script only when the mark changes; the `.ico` it produces is checked in.
 
 The query engine is a standalone library with no UI dependency, so it can also back a Command
 Palette or PowerToys Run extension later.
