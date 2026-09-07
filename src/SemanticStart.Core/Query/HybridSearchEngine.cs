@@ -371,6 +371,14 @@ public sealed class HybridSearchEngine : ISearchEngine
                 && (uint)ordinal < (uint)vectorEvidence.Length)
                 candidate.VectorScore = vectorEvidence[ordinal];
 
+            // Computed for every candidate the lexical arm found, not only for those it paid, for
+            // the same reason the cosine above is recorded: the surfacing floors need to know how
+            // much of the query a candidate accounts for, and the arm's own contribution cut is a
+            // different question. Candidates no lexical hit reached keep the default, which no
+            // path consults because every consumer requires a BM25 score first.
+            if (candidate.LexicalScore.HasValue)
+                candidate.LexicalCoverage = LexicalCoverageWeight(snapshot, candidate.Entity, queryTerms);
+
             if (IsUnlistedCommand(candidate.Entity.Entity))
                 candidate.Score *= _options.UnlistedCommandPenalty;
 
@@ -498,7 +506,25 @@ public sealed class HybridSearchEngine : ISearchEngine
         if (candidate.LiteralStrength >= _options.MinLiteralSurfaceStrength)
             return true;
 
-        if (candidate.LexicalScore >= _options.StrongLexicalScore)
+        // BM25 this high is meant to be proof that a *distinctive* term matched: "values around
+        // eight in the current corpus correspond to distinctive names or terms". That reading
+        // holds for a short query, where there is nowhere else for the score to come from. A
+        // multi-word query breaks it, because the same total is reachable by stacking ordinary
+        // words: "create a todo list" scored Sysinternals Junction at 8.5 on "Creates and lists
+        // directory links", from the two words the query shares with most of the index, while the
+        // term that actually says what the user wants appears nowhere in it.
+        //
+        // So for a multi-word query the score has to be backed by the match covering the query,
+        // measured by IDF so that missing the telling word is what costs. Junction covers 58% and
+        // is out; Microsoft Edge for "search the web" covers 100% and stays, which is the case
+        // this path exists for - its cosine is 28% of that query's leader, far below every other
+        // floor, and matching the whole query is the only evidence it has.
+        //
+        // Reading the cosine here instead was tried first and is wrong: it drops Edge, whose
+        // 0.078 is below the floor for exactly the reason the vector arm is unreliable on a
+        // two-word query that names no product.
+        if (candidate.LexicalScore >= _options.StrongLexicalScore
+            && (queryTermCount < 2 || candidate.LexicalCoverage >= _options.MinStrongLexicalCoverage))
             return true;
 
         // A hit may also surface on lexical evidence alone, but only when it is essentially tied
@@ -755,6 +781,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         Score = c.Score,
         VectorScore = c.VectorScore,
         LexicalScore = c.LexicalScore,
+        LexicalCoverage = c.LexicalCoverage,
         Summary = c.Entity.Profile?.Summary,
         MatchReason = c.MatchReason,
         Tasks = c.Entity.Profile?.IndexableTasks(c.Entity.Entity.DisplayName) ?? [],
@@ -777,6 +804,13 @@ public sealed class HybridSearchEngine : ISearchEngine
         /// </summary>
         public bool VectorRanked { get; set; }
         public double? LexicalScore { get; set; }
+
+        /// <summary>
+        /// How much of the query's distinctiveness this candidate's text accounts for, as an
+        /// IDF-weighted fraction. One means every query term appears; a candidate matching only
+        /// the query's common words scores near zero however high its BM25 climbs.
+        /// </summary>
+        public double LexicalCoverage { get; set; } = 1.0;
         public string? MatchReason { get; set; }
         public double VectorContribution { get; set; }
         public double LexicalContribution { get; set; }

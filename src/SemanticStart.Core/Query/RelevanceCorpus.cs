@@ -498,6 +498,19 @@ public static class RelevanceCorpus
         },
         new()
         {
+            Query = "create a todo list",
+            AcceptableResults = ["Microsoft To Do", "To Do", "Sticky Notes", "Tasks"],
+            ForbiddenResults = ["Sysinternals Junction"],
+            WithinTopN = 1,
+            Rationale = "Reported. Junction surfaced on BM25 alone: 8.5 for 'Creates and lists directory links', "
+                + "built entirely from 'create' and 'list', the two words this query shares with most of the "
+                + "index, while never matching 'todo' - which carries 42% of the query's IDF by itself. "
+                + "Tasklist is deliberately not forbidden: it holds the best cosine in the whole index for this "
+                + "query, marginally above Microsoft To Do's, so there is no evidence left to reject it with "
+                + "and the claim we can make is that it does not win.",
+        },
+        new()
+        {
             Query = "asdfghjkl",
             ExpectNoResults = true,
             Rationale = "A nonsense query should produce the empty-state path, not MiniLM noise.",

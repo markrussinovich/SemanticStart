@@ -136,7 +136,8 @@ internal static class Program
             {
                 Console.WriteLine(
                     $"  vector {Format(subject.VectorScore)} = {Ratio(subject.VectorScore, topVector)} of leader" +
-                    $"   lexical {Format(subject.LexicalScore)} = {Ratio(subject.LexicalScore, topLexical)} of leader");
+                    $"   lexical {Format(subject.LexicalScore)} = {Ratio(subject.LexicalScore, topLexical)} of leader" +
+                    $"   coverage {subject.LexicalCoverage:P0} of query terms by IDF");
             }
 
             return 0;

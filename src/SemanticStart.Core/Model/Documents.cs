@@ -213,6 +213,13 @@ public sealed record SearchHit
     /// <summary>BM25 relevance from the lexical arm, when the lexical arm retrieved it.</summary>
     public double? LexicalScore { get; init; }
 
+    /// <summary>
+    /// How much of the query's distinctiveness this hit's text accounts for, IDF-weighted, where
+    /// one means every query term appears. Exposed for diagnosis: a high BM25 next to a low
+    /// coverage is a hit that matched the query's common words and missed the telling one.
+    /// </summary>
+    public double LexicalCoverage { get; init; } = 1.0;
+
     /// <summary>The one-line description shown under the result. Comes from the synthesized profile.</summary>
     public string? Summary { get; init; }
 

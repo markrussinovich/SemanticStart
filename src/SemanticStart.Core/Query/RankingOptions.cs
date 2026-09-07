@@ -160,6 +160,21 @@ public sealed record RankingOptions
     public double StrongLexicalScore { get; init; } = 8.0;
 
     /// <summary>
+    /// IDF-weighted fraction of a multi-term query that a hit must match before
+    /// <see cref="StrongLexicalScore"/> alone may surface it.
+    ///
+    /// That threshold encodes "a score this high means a distinctive term matched", which is only
+    /// true where there is nowhere else for the score to come from. Across several words the same
+    /// total is reachable by stacking ordinary ones: "create a todo list" scores Sysinternals
+    /// Junction at 8.5 on "Creates and lists directory links" while never matching "todo".
+    ///
+    /// Near one on purpose. This path is the one that carries a hit whose only evidence is words,
+    /// so the words have to be the whole query: Microsoft Edge answers "search the web" on a
+    /// cosine of 0.078, 28% of that query's leader, and 100% coverage.
+    /// </summary>
+    public double MinStrongLexicalCoverage { get; init; } = 0.85;
+
+    /// <summary>
     /// Fraction of the query's best lexical score at which a hit may surface on lexical evidence
     /// alone, mirroring <see cref="MinVectorOnlyLeaderRatio"/> for the other arm. Deliberately
     /// near-tie: measured at 0.70 this readmitted the weak single-token matches the evidence floors
