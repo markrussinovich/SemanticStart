@@ -85,9 +85,126 @@ internal static class ProfileText
     }
 
     /// <summary>
-    /// Drops the sentence-shaped runs that are actually columns of labels, keeping the prose around
-    /// them. Applied before the length cap because these listings sit at the top of a documentation
-    /// page, so a capped extract is otherwise made almost entirely of them.
+    /// The interface labels harvested from a program's own menu and dialog resources, passed
+    /// through unchanged apart from the enricher's own filtering.
+    ///
+    /// Kept out of <see cref="Details"/> deliberately. Details is chosen by <see cref="IsProse"/>,
+    /// which exists to reject columns of labels, and a caption list is exactly that - it would be
+    /// rejected, and were the filter relaxed to admit it the filter would stop doing its job.
+    /// Giving the captions their own column also lets them be weighted for what they are: broad
+    /// recall of capability vocabulary, not evidence strong enough to outrank a task phrase.
+    ///
+    /// The list is reduced to each word's first appearance. A menu names one capability many times
+    /// over - Registry Editor offers "Edit String", "Edit Binary Value", "Edit DWORD (32-bit)
+    /// Value" and "Edit Multi-String" - and BM25 reads that repetition as four times the evidence.
+    /// It ranked second for "edit a file", a query the corpus explicitly forbids it from answering,
+    /// on the strength of a word its interface happens to repeat. What the field should assert is
+    /// that a capability is present, not how many menu items mention it.
+    ///
+    /// Done word by word rather than by dropping whole captions. Discarding near-duplicate phrases
+    /// was tried first, reusing <see cref="Distinctive"/>, and it removed "Physical Memory Usage"
+    /// as a near-duplicate of "Physical Memory History" - taking the query's own word with it.
+    /// That rule is right for synthesized task lists, which restate a single idea, and wrong for a
+    /// menu, where two labels sharing two words routinely name two different features.
+    ///
+    /// Words the name or summary already carry are dropped. The field exists to say what the other
+    /// fields cannot; a word they already assert is being counted twice, once in a field weighted
+    /// for it and once here. That double counting is not harmless. The corpus records that
+    /// "edit a file" must not return Registry Editor, and the reason it did was that "-editor"
+    /// yields the verb "edit" - the object of the query has to count for something. Regedit's menu
+    /// then reintroduces a literal "Edit" and hands back the match the ranker had learned to
+    /// refuse. Comparison is by prefix rather than by equality, with a four-character floor, since
+    /// it is precisely the morphological variants - "Editor"/"Edit", "Processes"/"Process" - that
+    /// re-assert the name. Process Explorer keeps "Memory" and "Usage", which nothing else it has
+    /// says.
+    /// </summary>
+    public static string? Features(
+        IReadOnlyList<Model.EnrichmentDocument> documents,
+        string? displayName = null,
+        string? summary = null)
+    {
+        var text = documents?
+            .FirstOrDefault(d => d.Provider.Equals("ui-resources", StringComparison.OrdinalIgnoreCase))?
+            .Text;
+
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        var separator = text.IndexOf(':', StringComparison.Ordinal);
+        var body = separator >= 0 ? text[(separator + 1)..] : text;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var kept = new List<string>();
+        var known = Vocabulary(displayName, summary);
+
+        foreach (var word in Regex.Split(body, @"[^\p{L}\p{N}]+"))
+        {
+            if (word.Length < 2 || !seen.Add(word) || Restates(word, known))
+                continue;
+
+            kept.Add(word);
+            if (kept.Count >= MaxDistinctFeatureWords)
+                break;
+        }
+
+        return kept.Count == 0 ? null : "Interface labels: " + string.Join(" ", kept) + ".";
+    }
+
+    private static IReadOnlyCollection<string> Vocabulary(string? displayName, string? summary)
+    {
+        var words = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var source in new[] { displayName, summary })
+        {
+            if (string.IsNullOrWhiteSpace(source))
+                continue;
+
+            foreach (var word in Regex.Split(source, @"[^\p{L}\p{N}]+"))
+            {
+                if (word.Length >= 2)
+                    words.Add(word);
+            }
+        }
+
+        return words;
+    }
+
+    /// <summary>
+    /// True when the caption word and a word the entity already carries are the same word in
+    /// different form. Shorter than the floor, a prefix match is meaningless - "on" prefixes
+    /// "online" - so below it only equality counts.
+    /// </summary>
+    private static bool Restates(string word, IReadOnlyCollection<string> known)
+    {
+        foreach (var other in known)
+        {
+            if (word.Equals(other, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            var shorter = word.Length <= other.Length ? word : other;
+            var longer = word.Length <= other.Length ? other : word;
+
+            if (shorter.Length >= MinStemLength &&
+                longer.StartsWith(shorter, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private const int MinStemLength = 4;
+
+    /// <summary>
+    /// Generous, because unlike the task list this is not a curated set and a large application
+    /// genuinely does many distinct things; the point of the cap is only to keep one program from
+    /// dominating the lexical index.
+    /// </summary>
+    private const int MaxDistinctFeatureWords = 200;
+
+    /// <summary>
+    /// Drops the sentence-shaped runs that are actually columns of labels, keeping the prose
+    /// around them. Applied before the length cap because these listings sit at the top of a
+    /// documentation page, so a capped extract is otherwise made almost entirely of them.
     /// </summary>
     private static string WithoutListings(string text)
     {

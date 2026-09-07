@@ -20,7 +20,7 @@ public sealed class HeuristicProfileSynthesizer : IProfileSynthesizer
         var synonyms = BuildSynonyms(entity, documents)
             .Concat(ActionVerbs(summary, entity.DisplayName))
             .Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToArray();
-        return Task.FromResult(new SynthesizedProfile { EntityId = entity.Id, Summary = summary, Tasks = tasks, Synonyms = synonyms, Category = category, Details = ProfileText.Details(documents), Generator = Generator });
+        return Task.FromResult(new SynthesizedProfile { EntityId = entity.Id, Summary = summary, Tasks = tasks, Synonyms = synonyms, Category = category, Details = ProfileText.Details(documents), Features = ProfileText.Features(documents, entity.DisplayName, summary), Generator = Generator });
     }
 
     /// <summary>

@@ -56,6 +56,19 @@ public sealed record SynthesizedProfile
     public string? Details { get; init; }
 
     /// <summary>
+    /// The labels the program shows for its own features, harvested from its menu and dialog
+    /// resources. Kept apart from <see cref="Details"/> because it is not prose and must not be
+    /// judged as prose: it is a list of nouns and verb phrases, which the prose filters correctly
+    /// reject, and it belongs in its own low-weighted lexical column rather than mixed into
+    /// sentences.
+    ///
+    /// It exists because articles describe a tool's purpose while its interface states its
+    /// capabilities. Nothing written about Process Explorer mentions memory; its View menu offers
+    /// "Physical Memory History" and its columns are named "Physical Memory Usage".
+    /// </summary>
+    public string? Features { get; init; }
+
+    /// <summary>
     /// Which generator produced this, recorded so an index can be attributed after the fact.
     /// Currently always "heuristic"; older indexes may carry other values.
     /// </summary>

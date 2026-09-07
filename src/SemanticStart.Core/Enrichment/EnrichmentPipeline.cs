@@ -25,6 +25,7 @@ public static class EnricherRegistry
             new ShortcutMetadataEnricher(),
             new AdjacentDocsEnricher(),
             new CliHelpEnricher(),
+            new UiResourceEnricher(),
             new WingetManifestEnricher(),
             new LearnEnricher(http),
             new WikipediaEnricher(http),

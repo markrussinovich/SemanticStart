@@ -59,11 +59,20 @@ public sealed partial class SqliteIndexStore : IIndexStore
             }.ToString());
             _connection.Open();
 
+            // Compatibility has to be settled before the tables are created, not after. Initialize
+            // creates every table with IF NOT EXISTS, so a table left over from an older schema
+            // version survives it unchanged and the new columns are silently missing - which shows
+            // up as every single entity failing to write, long after the version check has passed.
+            IndexSchema.EnsureMetaTable(_connection);
+            var compatible = IndexSchema.IsCompatible(_connection, embeddingModelId);
+            if (!compatible)
+                IndexSchema.DropContent(_connection);
+
             IndexSchema.Initialize(_connection);
             _vectors = new VectorFile(_vectorPath, dimensions);
             _dimensions = dimensions;
 
-            if (!IndexSchema.IsCompatible(_connection, embeddingModelId))
+            if (!compatible)
             {
                 IndexSchema.ClearContent(_connection);
                 _vectors.Truncate();
@@ -171,7 +180,7 @@ public sealed partial class SqliteIndexStore : IIndexStore
                 SELECT e.id, e.kind, e.display_name, e.launch_kind, e.launch_target,
                        e.launch_arguments, e.icon_source, e.publisher, e.source,
                        e.raw_metadata, e.content_hash, e.vector_ordinal,
-                       p.summary, p.tasks, p.synonyms, p.category, p.generator, p.details
+                       p.summary, p.tasks, p.synonyms, p.category, p.generator, p.details, p.features
                 FROM entities e
                 LEFT JOIN profiles p ON p.entity_id = e.id
                 ORDER BY e.id;
@@ -206,7 +215,8 @@ public sealed partial class SqliteIndexStore : IIndexStore
                         Synonyms = DeserializeList(reader.GetString(14)),
                         Category = GetNullableString(reader, 15),
                         Generator = reader.GetString(16),
-                        Details = GetNullableString(reader, 17)
+                        Details = GetNullableString(reader, 17),
+                        Features = GetNullableString(reader, 18)
                     };
                 }
 
@@ -245,7 +255,7 @@ public sealed partial class SqliteIndexStore : IIndexStore
             using var cmd = Connection.CreateCommand();
 
             // Per-column BM25 weights, in declaration order:
-            //   entity_id, display_name, summary, tasks, synonyms, publisher, details
+            //   entity_id, display_name, summary, tasks, synonyms, publisher, details, features
             //
             // BM25 divides term frequency by document length, so a term landing in a very short
             // field scores enormously. With uniform weights that made the display name the single
@@ -262,6 +272,25 @@ public sealed partial class SqliteIndexStore : IIndexStore
             // Details is weighted low. It is many sentences of harvested prose, so it is the field
             // most likely to contain an incidental term; it is here to make a genuinely relevant
             // entity reachable at all, not to outrank a curated task phrase.
+            //
+            // Features is weighted at 1.9, above the display name and below the intent fields. It
+            // is a list of interface labels rather than sentences, so one matching menu item is
+            // weak evidence, but it is often the only evidence there is: nothing written about
+            // Process Explorer mentions memory while its View menu offers "Physical Memory
+            // History". Swept at 1.0, 1.5, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.5 and 3.0 for 56, 56,
+            // 57, 57, 57, 57, 57, 56, 56 and 56 cases; 1.9 is the centre of the plateau rather
+            // than its edge. MRR is flat at 0.863 across it.
+            //
+            // The weight has to be this high because BM25 divides by field length and this field
+            // is the longest one an entity has - up to two hundred words, against a three-word
+            // summary. Read literally the number says interface labels outrank an entity's name,
+            // which is not the intent; what it buys is one label in two hundred counting for as
+            // much as one word in three.
+            //
+            // Note that zero is not the same as not having the column. At weight 0 the corpus
+            // scores 52, four *below* where it started, because BM25 normalises by total document
+            // length and the column lengthens every entity that has one - which changes the set of
+            // entities that MATCH at all, not merely their order.
             //
             // The weights are read from the environment so they can be swept against a fixed index
             // without a rebuild. Retuning them matters whenever the shape of the profiles changes:
@@ -289,7 +318,7 @@ public sealed partial class SqliteIndexStore : IIndexStore
 
     /// <summary>
     /// BM25 column weights, in the order the FTS table declares its columns: entity_id,
-    /// display_name, summary, tasks, synonyms, publisher, details. Overridable through
+    /// display_name, summary, tasks, synonyms, publisher, details, features. Overridable through
     /// SEMANTICSTART_BM25 purely so the relevance harness can sweep them; the literal below is the
     /// shipped default and the only value any user sees.
     /// </summary>
@@ -297,13 +326,13 @@ public sealed partial class SqliteIndexStore : IIndexStore
 
     private static string ResolveLexicalWeights()
     {
-        const string shipped = "0.0, 1.0, 3.0, 5.0, 2.0, 0.25, 0.75";
+        const string shipped = "0.0, 1.0, 3.0, 5.0, 2.0, 0.25, 0.75, 1.9";
         var raw = Environment.GetEnvironmentVariable("SEMANTICSTART_BM25");
         if (string.IsNullOrWhiteSpace(raw))
             return shipped;
 
         var parts = raw.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 7 || !parts.All(p => double.TryParse(p, NumberStyles.Float, CultureInfo.InvariantCulture, out _)))
+        if (parts.Length != 8 || !parts.All(p => double.TryParse(p, NumberStyles.Float, CultureInfo.InvariantCulture, out _)))
             return shipped;
 
         return string.Join(", ", parts.Select(p => double.Parse(p, NumberStyles.Float, CultureInfo.InvariantCulture).ToString("0.####", CultureInfo.InvariantCulture)));
@@ -513,14 +542,15 @@ public sealed partial class SqliteIndexStore : IIndexStore
         using var cmd = Connection.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO profiles (entity_id, summary, tasks, synonyms, category, details, generator)
-            VALUES ($entity_id, $summary, $tasks, $synonyms, $category, $details, $generator)
+            INSERT INTO profiles (entity_id, summary, tasks, synonyms, category, details, features, generator)
+            VALUES ($entity_id, $summary, $tasks, $synonyms, $category, $details, $features, $generator)
             ON CONFLICT(entity_id) DO UPDATE SET
                 summary = excluded.summary,
                 tasks = excluded.tasks,
                 synonyms = excluded.synonyms,
                 category = excluded.category,
                 details = excluded.details,
+                features = excluded.features,
                 generator = excluded.generator;
             """;
         cmd.Parameters.AddWithValue("$entity_id", profile.EntityId);
@@ -529,6 +559,7 @@ public sealed partial class SqliteIndexStore : IIndexStore
         cmd.Parameters.AddWithValue("$synonyms", JsonSerializer.Serialize(profile.Synonyms, JsonOptions));
         AddNullable(cmd, "$category", profile.Category);
         AddNullable(cmd, "$details", profile.Details);
+        AddNullable(cmd, "$features", profile.Features);
         cmd.Parameters.AddWithValue("$generator", profile.Generator);
         cmd.ExecuteNonQuery();
     }
@@ -555,8 +586,8 @@ public sealed partial class SqliteIndexStore : IIndexStore
         using var insert = Connection.CreateCommand();
         insert.Transaction = tx;
         insert.CommandText = """
-            INSERT INTO entities_fts (entity_id, display_name, summary, tasks, synonyms, publisher, details)
-            VALUES ($id, $name, $summary, $tasks, $synonyms, $publisher, $details);
+            INSERT INTO entities_fts (entity_id, display_name, summary, tasks, synonyms, publisher, details, features)
+            VALUES ($id, $name, $summary, $tasks, $synonyms, $publisher, $details, $features);
             """;
         insert.Parameters.AddWithValue("$id", entity.Id);
         insert.Parameters.AddWithValue("$name", WithFoldedCompounds(entity.DisplayName));
@@ -565,6 +596,7 @@ public sealed partial class SqliteIndexStore : IIndexStore
         insert.Parameters.AddWithValue("$synonyms", WithFoldedCompounds(string.Join(", ", profile?.Synonyms ?? [])));
         insert.Parameters.AddWithValue("$publisher", entity.Publisher ?? string.Empty);
         insert.Parameters.AddWithValue("$details", WithFoldedCompounds(profile?.Details ?? string.Empty));
+        insert.Parameters.AddWithValue("$features", WithFoldedCompounds(profile?.Features ?? string.Empty));
         insert.ExecuteNonQuery();
     }
 
