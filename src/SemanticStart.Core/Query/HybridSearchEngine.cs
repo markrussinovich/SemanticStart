@@ -107,10 +107,10 @@ public sealed class HybridSearchEngine : ISearchEngine
 
         await Task.WhenAll(vectorTask, lexicalTask).ConfigureAwait(false);
 
-        var vectorHits = await vectorTask.ConfigureAwait(false);
+        var vectorArm = await vectorTask.ConfigureAwait(false);
         var lexicalHits = await lexicalTask.ConfigureAwait(false);
 
-        var fused = Fuse(snapshot, query, vectorHits, lexicalHits);
+        var fused = Fuse(snapshot, query, vectorArm, lexicalHits);
 
         return [.. PruneLowConfidence(fused)
             .OrderByDescending(c => c.Score)
@@ -119,30 +119,44 @@ public sealed class HybridSearchEngine : ISearchEngine
             .Select(ToHit)];
     }
 
+    /// <summary>
+    /// The vector arm's output: the rows it ranks, and the cosine it assigned to every row in the
+    /// index. The second is not a superset used for retrieval - it is evidence, consulted only for
+    /// candidates some other arm already found.
+    /// </summary>
+    private readonly record struct VectorArmResult(
+        List<(int Ordinal, double Score)> Ranked,
+        double[] ScoreByOrdinal);
+
     /// <summary>Embeds the query and scans the vector matrix. Returns ordinals paired with cosine similarity.</summary>
-    private async Task<List<(int Ordinal, double Score)>> RunVectorArmAsync(
+    private async Task<VectorArmResult> RunVectorArmAsync(
         Snapshot snapshot, string query, CancellationToken cancellationToken)
     {
         var results = new List<(int, double)>();
 
         if (snapshot.Vectors.Length == 0 || snapshot.Dimensions == 0)
-            return results;
+            return new VectorArmResult(results, []);
 
         var embedded = await _embeddings.EmbedAsync([query], cancellationToken).ConfigureAwait(false);
         if (embedded.Count == 0)
-            return results;
+            return new VectorArmResult(results, []);
 
         var q = embedded[0];
         var rows = snapshot.Vectors.Length / snapshot.Dimensions;
 
         // Both sides are L2-normalized by contract, so the dot product is the cosine similarity.
+        // Every row is scored and kept, because the floor below decides which rows the arm will
+        // *rank*, not which rows it has an opinion about. See Fuse, where the scores of rows below
+        // the floor are still recorded as evidence.
+        var scores = new double[rows];
+
         for (var row = 0; row < rows; row++)
         {
             var span = snapshot.Vectors.AsSpan(row * snapshot.Dimensions, snapshot.Dimensions);
-            var score = VectorMath.Dot(q, span);
+            scores[row] = VectorMath.Dot(q, span);
 
-            if (score >= _options.MinVectorScore)
-                results.Add((row, score));
+            if (scores[row] >= _options.MinVectorScore)
+                results.Add((row, scores[row]));
         }
 
         results.Sort(static (a, b) => b.Item2.CompareTo(a.Item2));
@@ -150,7 +164,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         if (results.Count > _options.CandidatesPerArm)
             results.RemoveRange(_options.CandidatesPerArm, results.Count - _options.CandidatesPerArm);
 
-        return results;
+        return new VectorArmResult(results, scores);
     }
 
     /// <summary>
@@ -184,10 +198,11 @@ public sealed class HybridSearchEngine : ISearchEngine
     private List<Candidate> Fuse(
         Snapshot snapshot,
         string query,
-        List<(int Ordinal, double Score)> vectorHits,
+        VectorArmResult vectorArm,
         IReadOnlyList<(string EntityId, double Score)> lexicalHits)
     {
         var candidates = new Dictionary<string, Candidate>(StringComparer.Ordinal);
+        var vectorHits = vectorArm.Ranked;
         var vectorRanks = TieredRanks([.. vectorHits.Select(h => h.Score)]);
 
         for (var rank = 0; rank < vectorHits.Count; rank++)
@@ -198,6 +213,7 @@ public sealed class HybridSearchEngine : ISearchEngine
 
             var candidate = GetOrAdd(snapshot, candidates, index);
             candidate.VectorScore = score;
+            candidate.VectorRanked = true;
             candidate.VectorContribution = _options.VectorArmWeight / (_options.RrfK + vectorRanks[rank] + 1)
                 + _options.VectorMagnitudeWeight * score;
             candidate.Score += candidate.VectorContribution;
@@ -236,6 +252,27 @@ public sealed class HybridSearchEngine : ISearchEngine
                 / (_options.RrfK + lexicalRanks[rank] + 1);
             candidate.Score += candidate.LexicalContribution;
         }
+
+        // The vector arm's opinion of a candidate another arm found is recorded, even where that
+        // opinion was too weak to earn the candidate a place in the vector ranking. This is the
+        // mirror of the lexical rule above, and it exists for the same reason: not being ranked
+        // and not being scored are different facts, and only the surfacing floors need the second.
+        //
+        // The distinction matters because a fixed cosine floor is not comparable between queries.
+        // "edit do" retrieved 167 entities and surfaced one: the best cosine in the entire query
+        // was 0.220 against a 0.20 floor, so all but a handful of rows were stripped of their
+        // vector score and arrived here looking lexical-only, judged by the 0.95 bar that admits
+        // the lexical leader and nothing else. Clipchamp held 75% of the vector leader and 72% of
+        // the lexical leader - better relative evidence than the 77%/71% that surfaces it once
+        // "edit doc" lifts the leader to 0.343 - and vanished. A list collapsing to one entry
+        // mid-word is an answer blinking in and out, one level up.
+        //
+        // Relaxing the retrieval floor instead was measured and rejected: at every fraction from
+        // 0.55 to 0.85 it admits rows the floor exists to remove, and cost two corpus cases and
+        // 0.02 MRR. Nothing is retrieved here that was not already retrieved, and no score changes;
+        // only what the floors are allowed to know does. Applied in the final pass below, so it
+        // covers candidates from every arm.
+        var vectorEvidence = vectorArm.ScoreByOrdinal;
 
         // Literal-name signals are applied to every entity, not just to those an arm retrieved.
         // Without this a very short prefix could miss entirely: it is too short to embed
@@ -306,6 +343,11 @@ public sealed class HybridSearchEngine : ISearchEngine
 
         foreach (var candidate in candidates.Values)
         {
+            if (!candidate.VectorScore.HasValue
+                && candidate.Entity.VectorOrdinal is { } ordinal
+                && (uint)ordinal < (uint)vectorEvidence.Length)
+                candidate.VectorScore = vectorEvidence[ordinal];
+
             if (IsUnlistedCommand(candidate.Entity.Entity))
                 candidate.Score *= _options.UnlistedCommandPenalty;
 
@@ -352,6 +394,15 @@ public sealed class HybridSearchEngine : ISearchEngine
 
     private bool ShouldSurface(Candidate candidate, double topScore, double topVector, double topLexical)
     {
+        // Cosine is not comparable between queries, so the floor is stated relative to the best
+        // cosine this query found and capped by the fixed value. See
+        // RankingOptions.CosineFloorLeaderFraction.
+        var vectorFloor = topVector > 0
+            ? Math.Min(
+                _options.MinHybridSurfaceVectorScore,
+                topVector * _options.CosineFloorLeaderFraction)
+            : _options.MinHybridSurfaceVectorScore;
+
         if (candidate.LiteralStrength >= _options.MinLiteralSurfaceStrength)
             return true;
 
@@ -372,8 +423,14 @@ public sealed class HybridSearchEngine : ISearchEngine
             // solely because "Editor" contains the verb; its vector score sits below the floor
             // every other arm must clear. Exempting this clause from that floor made the floor
             // conditional on which arm found the candidate, which is not a property of the match.
-            && (candidate.VectorScore is not { } tieVector
-                || tieVector >= _options.MinHybridSurfaceVectorScore))
+            //
+            // The test is whether the vector arm ranked the candidate and placed it low, not
+            // whether a cosine exists for it. Every candidate now carries a cosine - see Fuse -
+            // and reading those as disagreement would turn recording evidence into a penalty,
+            // which measured as two lost cases including the "edit" query this comment is about.
+            && (!candidate.VectorRanked
+                || candidate.VectorScore is not { } tieVector
+                || tieVector >= vectorFloor))
             return true;
 
         var relativeScore = topScore <= 0
@@ -394,7 +451,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         var relativeVector = topVector <= 0
             || vectorScore >= topVector * _options.MinHybridVectorLeaderRatio;
 
-        if (vectorScore >= _options.MinHybridSurfaceVectorScore && relativeVector)
+        if (vectorScore >= vectorFloor && relativeVector)
             return true;
 
         // Corroboration. Every floor above judges one arm against that arm's leader, which asks
@@ -416,15 +473,20 @@ public sealed class HybridSearchEngine : ISearchEngine
         // A single-token FTS coincidence sitting at the lexical floor with noise-band cosine
         // yields around 0.13 and stays out; Task Manager yields 0.23.
         //
-        // The absolute cosine floor is kept here even though it is the reason a result can appear
-        // and vanish while a word is being typed: cosine is not comparable across queries and a
-        // half-typed word depresses all of it, so "list process", "list processe" and "list
-        // processes" - which retrieve a byte-identical lexical list, porter stemming folding all
-        // three - score Task Manager at 0.248, 0.298 and 0.367 across a 0.25 floor. Dropping it
-        // and letting the product carry the decision alone was measured at three thresholds and
-        // cost a corpus case at every one. Stability is worth buying, but not with accuracy.
+        // The cosine floor is kept here rather than letting the product carry the decision alone:
+        // dropping it was measured at three thresholds and cost a corpus case at every one. It is
+        // the query-relative floor, which removes the reason a result could appear and vanish
+        // while a word was being typed - "list process", "list processe" and "list processes"
+        // retrieve a byte-identical lexical list, porter stemming folding all three, yet scored
+        // Task Manager at 0.248, 0.298 and 0.367 against what used to be a fixed 0.25 bar.
+        // Corroboration requires the vector arm to have actually ranked the candidate, not merely
+        // to hold a cosine for it. The clause's whole claim is that two arms found the same thing
+        // independently; letting a below-floor cosine stand in for that turns it into a second,
+        // weaker version of the hybrid floor above. Measured: without this restriction "search the
+        // web" buries Microsoft Edge under msoasb, Get Started, Command Palette and IIS.
         if (topVector > 0 && topLexical > 0
-            && vectorScore >= _options.MinHybridSurfaceVectorScore
+            && candidate.VectorRanked
+            && vectorScore >= vectorFloor
             && vectorScore / topVector * (candidate.LexicalScore.Value / topLexical)
                 >= _options.MinCorroboratedEvidenceProduct)
             return true;
@@ -579,6 +641,14 @@ public sealed class HybridSearchEngine : ISearchEngine
         public required IndexedEntity Entity { get; init; }
         public double Score { get; set; }
         public double? VectorScore { get; set; }
+
+        /// <summary>
+        /// True when the vector arm ranked this candidate, as opposed to merely holding a cosine
+        /// for it. The distinction is only consulted by the lexical-tie clause in ShouldSurface,
+        /// which asks whether a contradicting semantic reading exists rather than how strong the
+        /// agreeing one is.
+        /// </summary>
+        public bool VectorRanked { get; set; }
         public double? LexicalScore { get; set; }
         public string? MatchReason { get; set; }
         public double VectorContribution { get; set; }

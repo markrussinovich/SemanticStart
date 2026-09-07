@@ -38,6 +38,10 @@ public sealed record RankingOptions
     /// <summary>
     /// Cosine floor for the vector arm. Below this a hit is semantic noise; MiniLM assigns
     /// non-trivial similarity to almost any pair of strings, so an explicit floor is required.
+    ///
+    /// Dropping a row here decides only what this arm will *rank*. The cosine is still recorded
+    /// against any candidate another arm found, because being unfit to move a ranking and being
+    /// unscored are different facts - see Fuse.
     /// </summary>
     public double MinVectorScore { get; init; } = 0.20;
 
@@ -59,8 +63,47 @@ public sealed record RankingOptions
     /// while MiniLM scores Task Manager at 0.248, 0.298 and 0.367 for them - straddling 0.25, so
     /// an answer appeared, vanished and reappeared as the user typed. Swept at 0.25, 0.22 and
     /// 0.20; 0.22 leaves the corpus untouched and 0.20 costs a case.
+    ///
+    /// Lowering it was not enough on its own - see
+    /// <see cref="CosineFloorLeaderFraction"/>, which is what makes it hold for a
+    /// query that is still being typed.
     /// </summary>
     public double MinHybridSurfaceVectorScore { get; init; } = 0.22;
+
+    /// <summary>
+    /// Ceiling on every absolute cosine floor in the pipeline, expressed as a fraction of the best
+    /// cosine the query actually found. Each floor's effective value is the lower of the two.
+    ///
+    /// A fixed cosine floor assumes cosine is comparable between queries, and it is not. A query
+    /// that is half typed depresses every cosine at once, so a fixed bar stops measuring "is this
+    /// related" and starts measuring "is this query finished". "edit do" retrieved 167 entities
+    /// and surfaced exactly one: the best cosine in the entire query was 0.220 against a 0.20
+    /// retrieval floor, so nearly every candidate was stripped of its vector evidence and arrived
+    /// at surfacing looking lexical-only, where the 0.95 lexical-only bar admits the leader and
+    /// nothing else. Clipchamp sat at 75% of the vector leader and 72% of the lexical leader -
+    /// better relative evidence than the 77%/71% that surfaces it once "edit doc" lifts the leader
+    /// to 0.343 - and was dropped anyway. A result list collapsing to one entry mid-word is the
+    /// same defect as an answer blinking in and out, one level up.
+    ///
+    /// Scaling states each floor as a comparison the query can answer for itself: nothing is
+    /// required to beat a bar its own best answer barely clears. It only ever relaxes a floor, and
+    /// only when the leader is weak - at a healthy leader of 0.343 the product is 0.24, so the
+    /// fixed floors still bind and well-formed queries are untouched.
+    ///
+    /// Applies to <see cref="MinHybridSurfaceVectorScore"/> only. <see cref="MinVectorScore"/> is
+    /// excluded because relaxing retrieval widens the candidate pool with the noise that floor
+    /// exists to remove: swept from 0.55 to 0.85, it cost two corpus cases and 0.02 MRR at every
+    /// value. <see cref="MinVectorOnlySurfaceScore"/> is excluded because with no second arm to
+    /// corroborate it, an absolute floor is the only evidence there is.
+    ///
+    /// Swept at 0.70, 0.75, 0.80, 0.90 and 1.00 (1.00 being the fixed floor). 0.80 is the best
+    /// the corpus has measured - 56/61 and MRR 0.864 against 55/61 and 0.860 - because the
+    /// scaling has to cut both ways. A low leader does not only mean "the query is unfinished";
+    /// it can also mean "nothing in the index matches", which is when a strict bar is most
+    /// wanted. "search the web" tops out at 0.277 for that second reason, and below 0.80 the
+    /// relaxed floor admits Get Started at 0.217 and pushes Microsoft Edge out of the window.
+    /// </summary>
+    public double CosineFloorLeaderFraction { get; init; } = 0.80;
 
     /// <summary>
     /// Hybrid hits with weak BM25 must stay within this fraction of the best vector similarity
@@ -193,6 +236,7 @@ public sealed record RankingOptions
     /// further down, which eventually costs the queries they are the right answer to.
     /// </summary>
     public double UnlistedCommandPenalty { get; init; } = 0.65;
+
 
     /// <summary>
     /// Share of entities that must use a word before a partial-name match on it is fully
