@@ -58,6 +58,21 @@ page of near-misses.
 ## Building
 
 ```powershell
+.\run.ps1
+```
+
+`run.ps1` stops any running instance, builds, and starts the app. Stopping first is the point:
+SemanticStart lives in the tray, so a copy from the last build is usually still running and holding
+`SemanticStart.Core.dll` open, which fails the build with a locked-file error that looks like a
+build problem and is not one. It finishes by printing the hotkey that actually registered — worth
+seeing rather than assuming, since a contended chord falls back to the next free one.
+
+`-Test` runs the suite before launching, `-Configuration Debug` builds Debug, `-NoLaunch` builds
+only.
+
+The underlying commands, if you would rather run them yourself:
+
+```powershell
 dotnet build SemanticStart.slnx
 dotnet test tests\SemanticStart.Tests
 ```
@@ -240,11 +255,6 @@ data: it lives in `%LOCALAPPDATA%\SemanticStart` and is ignored by source contro
 
 The query engine is a standalone library with no UI dependency, so it can also back a Command
 Palette or PowerToys Run extension later.
-
-## Not in scope for v1
-
-User files and documents (Windows Search already covers these), generative LLM inference at query
-time (hundreds of milliseconds on a path that must feel instant), and any form of Explorer patching.
 
 ## License
 
