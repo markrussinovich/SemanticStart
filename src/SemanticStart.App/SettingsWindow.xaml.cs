@@ -273,9 +273,17 @@ public partial class SettingsWindow : Window
                 t.FontWeight == FontWeights.SemiBold
                 && t.HorizontalAlignment == System.Windows.HorizontalAlignment.Right);
 
-            return (IndexStatsGrid.RowDefinitions.Count, bold);
+            // Rows, not RowDefinitions: the grid also holds a rule row separating the totals from
+            // the categories above them, and that is not a statistic.
+            return (values.Count, bold);
         }
     }
+
+    /// <summary>
+    /// Whether a rule separates the summary rows from the category rows above them.
+    /// </summary>
+    internal bool IndexStatsHasSummaryRule =>
+        IndexStatsGrid.Children.OfType<Border>().Any(b => Grid.GetColumnSpan(b) == 2);
 
     private IndexStats? _lastStats;
 
@@ -343,6 +351,10 @@ public partial class SettingsWindow : Window
         if (stats.Other > 0)
             rows.Add(("Other", stats.Other.ToString("N0")));
 
+        // Total entries and Size on disk summarise the rows above rather than sitting alongside
+        // them, so a rule separates the two groups instead of letting the total read as one more
+        // category that happens to be much larger.
+        var summaryStart = rows.Count;
         rows.Add(("Total entries", stats.Total.ToString("N0")));
         rows.Add(("Size on disk", stats.SizeDisplay));
 
@@ -350,9 +362,28 @@ public partial class SettingsWindow : Window
         IndexStatsGrid.Visibility = Visibility.Visible;
 
         var caption = (Style)FindResource("Caption");
+        var row = 0;
 
         for (var i = 0; i < rows.Count; i++)
         {
+            if (i == summaryStart)
+            {
+                IndexStatsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+                var rule = new Border
+                {
+                    Height = 1,
+                    Margin = new Thickness(0, 5, 0, 5),
+                    Background = (System.Windows.Media.Brush)FindResource("DividerBrush"),
+                };
+
+                Grid.SetRow(rule, row);
+                Grid.SetColumn(rule, 0);
+                Grid.SetColumnSpan(rule, 2);
+                IndexStatsGrid.Children.Add(rule);
+                row++;
+            }
+
             IndexStatsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
             var label = new TextBlock
@@ -370,13 +401,14 @@ public partial class SettingsWindow : Window
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
             };
 
-            Grid.SetRow(label, i);
+            Grid.SetRow(label, row);
             Grid.SetColumn(label, 0);
-            Grid.SetRow(value, i);
+            Grid.SetRow(value, row);
             Grid.SetColumn(value, 1);
 
             IndexStatsGrid.Children.Add(label);
             IndexStatsGrid.Children.Add(value);
+            row++;
         }
     }
 

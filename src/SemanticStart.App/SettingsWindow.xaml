@@ -154,7 +154,13 @@
 
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
-                        <TextBlock Text="Index" />
+                        <!-- Status sits beside the header rather than under the numbers: it describes
+                             the index as a whole, and below the list it read like one more statistic. -->
+                        <Grid>
+                            <TextBlock Text="Index" />
+                            <TextBlock x:Name="ProgressText" Style="{StaticResource Caption}" Text="Ready"
+                                       HorizontalAlignment="Right" VerticalAlignment="Center" />
+                        </Grid>
                         <TextBlock x:Name="IndexStatsText" Style="{StaticResource Caption}" Text="Reading index..."
                                    LineHeight="18" LineStackingStrategy="BlockLineHeight" />
                         <!-- Counts live in their own right-aligned column so digits line up and can
@@ -165,7 +171,6 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                         </Grid>
-                        <TextBlock x:Name="ProgressText" Style="{StaticResource Caption}" Text="Ready" />
                         <TextBlock x:Name="BackgroundNote" Style="{StaticResource Caption}" Visibility="Collapsed"
                                    Text="You can close this window; indexing runs in the background." />
                         <ProgressBar x:Name="ProgressBar" Height="4" Minimum="0" Maximum="1" Margin="0,10,0,10"

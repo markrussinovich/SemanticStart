@@ -27,6 +27,7 @@ public class SettingsWindowSmokeTests
         var saveEnabledAfterEdit = false;
         var backgroundNoteVisibleWhenIdle = true;
         (int Lines, int BoldValues) statsShape = default;
+        var statsHasSummaryRule = false;
 
         var thread = new Thread(() =>
         {
@@ -67,6 +68,7 @@ public class SettingsWindowSmokeTests
                     Total: 553, Apps: 300, SystemTools: 150, WindowsSettings: 100, Other: 3,
                     SizeBytes: 12_345_678));
                 statsShape = window.IndexStatsShape;
+                statsHasSummaryRule = window.IndexStatsHasSummaryRule;
 
                 // Save tracks edits. It starts disabled only once settings have been written at
                 // least once, so the meaningful assertion is that editing turns it on.
@@ -99,6 +101,10 @@ public class SettingsWindowSmokeTests
         // The counts are the reason to read this block, so a run-on line, an unbolded number, or a
         // count that starts wherever its label happened to end is a regression.
         Assert.Equal((6, 6), statsShape);
+
+        // Total entries and Size on disk summarise the categories above them; without a rule the
+        // total reads as one more category that happens to be far larger than the rest.
+        Assert.True(statsHasSummaryRule, "Nothing separated the totals from the per-category counts.");
 
         Assert.True(saveEnabledAfterEdit, "Save stayed disabled after a setting was changed, so the change cannot be committed.");
         Assert.False(backgroundNoteVisibleWhenIdle, "The 'indexing runs in the background' note showed with no rebuild running.");
