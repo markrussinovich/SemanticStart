@@ -238,6 +238,29 @@ public sealed record RankingOptions
     public double UnlistedCommandPenalty { get; init; } = 0.65;
 
     /// <summary>
+    /// Multiplier applied to entities that only the uninstall registry knows about.
+    ///
+    /// That collector is the index's fallback: it exists to catch software that installed itself
+    /// without leaving a Start entry, and it reads Add/Remove Programs, which is a list of things
+    /// that can be *uninstalled* rather than a list of things that can be run. An entry reaching
+    /// the index only through it is one that neither the AppsFolder nor the Start menu considers a
+    /// launchable app, so Windows itself would not offer it in response to any search.
+    ///
+    /// The entries are kept because the fallback earns its place - some genuinely installed
+    /// programs have no Start entry - but they are the weakest evidence in the index in a second
+    /// way too. With no shortcut and no package manifest, enrichment has nothing to read but the
+    /// install directory, so their description is whatever prose happened to sit in a README. That
+    /// is how "NVIDIA FrameView SDK", a benchmarking SDK whose summary is a fragment of a CSV
+    /// column list, came sixth for "view memory usage", ahead of Process Explorer.
+    ///
+    /// Swept at 1.0, 0.9, 0.85, 0.75, 0.65 and 0.5 for 56, 56, 56, 57, 57 and 57 cases. Everything
+    /// from 0.75 down passes the same set, so 0.65 is taken rather than the edge of the plateau,
+    /// and it is not pushed further: these entries are still real installed software and a harder
+    /// penalty would eventually cost the queries they are the right answer to.
+    /// </summary>
+    public double UninstallRecordPenalty { get; init; } = 0.65;
+
+    /// <summary>
     /// Width of a score band, as a fraction of the best score in the result set. Candidates
     /// landing in the same band are treated as having scored equally, and among them one that
     /// Windows ships is listed first.

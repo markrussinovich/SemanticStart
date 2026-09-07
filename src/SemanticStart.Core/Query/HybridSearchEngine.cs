@@ -374,6 +374,9 @@ public sealed class HybridSearchEngine : ISearchEngine
             if (IsUnlistedCommand(candidate.Entity.Entity))
                 candidate.Score *= _options.UnlistedCommandPenalty;
 
+            if (IsUninstallRecord(candidate.Entity.Entity))
+                candidate.Score *= UninstallRecordPenalty;
+
             candidate.UsageContribution = UsageBoost(snapshot, candidate.Entity.Entity.Id);
             candidate.Score += candidate.UsageContribution;
             candidate.MatchReason = ExplainMatch(candidate);
@@ -433,6 +436,27 @@ public sealed class HybridSearchEngine : ISearchEngine
     /// </summary>
     private static bool IsUnlistedCommand(Entity entity) =>
         string.Equals(entity.Source, "command", StringComparison.Ordinal);
+
+    /// <summary>
+    /// True for entities the uninstall-registry collector found and no other collector did. Ids are
+    /// "source:key", so an entity carries the single source it was discovered through.
+    /// See <see cref="RankingOptions.UninstallRecordPenalty"/>.
+    /// </summary>
+    private static bool IsUninstallRecord(Entity entity) =>
+        string.Equals(entity.Source, "uninstall", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The penalty in force, overridable from the environment so it can be swept against a fixed
+    /// index without a rebuild, in the same way as the BM25 column weights.
+    /// </summary>
+    private double UninstallRecordPenalty =>
+        double.TryParse(
+            Environment.GetEnvironmentVariable("SEMANTICSTART_UNINSTALL_PENALTY"),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var configured) && configured > 0
+            ? configured
+            : _options.UninstallRecordPenalty;
 
     /// <summary>
     /// Removes low-confidence tail results instead of padding the UI to the requested count.

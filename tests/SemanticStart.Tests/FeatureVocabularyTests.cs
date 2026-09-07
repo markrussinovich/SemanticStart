@@ -102,4 +102,27 @@ public sealed class FeatureVocabularyTests
     {
         Assert.Null(Features("Registry Editor", "Registry Editor", "Open Registry Editor."));
     }
+
+    /// <summary>
+    /// The cap is what keeps one matching label meaningful. BM25 divides term frequency by field
+    /// length, and de-duplication leaves each label here exactly once, so an uncapped column lets a
+    /// large program's whole interface bury the one word that answers the query. Process Explorer
+    /// sat at rank 10 for "view memory usage" - outside the eight rows the overlay shows - on a
+    /// "Physical Memory History" diluted across two hundred words.
+    /// </summary>
+    [Fact]
+    public void Features_AreCappedSoOneMatchingLabelStillCounts()
+    {
+        var captions = string.Join(" ", Enumerable.Range(0, 400).Select(i => $"Label{i}"));
+        var text = Features(captions, "Thing", "Does things.");
+
+        Assert.NotNull(text);
+
+        var words = text!.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(w => w.StartsWith("Label", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.InRange(words.Length, 1, 175);
+        Assert.Equal(words.Length, words.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
 }

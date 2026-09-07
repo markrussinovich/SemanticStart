@@ -198,8 +198,33 @@ internal static class ProfileText
     /// Generous, because unlike the task list this is not a curated set and a large application
     /// genuinely does many distinct things; the point of the cap is only to keep one program from
     /// dominating the lexical index.
+    ///
+    /// It is also, less obviously, the strongest lever on whether this field is worth anything at
+    /// all. BM25 divides term frequency by field length, and after word-level de-duplication a
+    /// label appears here once however many menus mention it, so a program's entire interface
+    /// contributes a single occurrence against a denominator two hundred words wide. Process
+    /// Explorer's View menu offers "Physical Memory History" and that was the only word in the
+    /// index connecting it to memory; diluted across two hundred words it left the program tenth
+    /// for "view memory usage", outside the eight rows the overlay shows, which is where a user
+    /// reported it missing three times.
+    ///
+    /// Swept at 60, 80, 100, 140, 150, 160, 170, 180, 190 and 200 with the uninstall-record
+    /// penalty in force, for 57, 57, 57, 57, 57, 57, 57, 57, 56 and 55 cases. The pass count is
+    /// flat from 100 to 180 and MRR is not: it sits at 0.863 up to 160 and reaches 0.874 from 170,
+    /// so 175 is the centre of the range that is best on both. Two hundred is a cliff rather than
+    /// a slope - it loses two cases outright - which is the reason not to leave it there.
+    ///
+    /// Overridable from the environment so it can be swept against a fixed index; a sweep needs
+    /// only "index --refresh ui-resources", since this field is lexical and never embedded.
     /// </summary>
-    private const int MaxDistinctFeatureWords = 200;
+    private static readonly int MaxDistinctFeatureWords =
+        int.TryParse(
+            Environment.GetEnvironmentVariable("SEMANTICSTART_FEATUREWORDS"),
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var configured) && configured > 0
+            ? configured
+            : 175;
 
     /// <summary>
     /// Drops the sentence-shaped runs that are actually columns of labels, keeping the prose
