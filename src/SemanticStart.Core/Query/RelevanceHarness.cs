@@ -104,7 +104,7 @@ public sealed record RelevanceReport
                     lines.Add($"    forbidden: {string.Join(" | ", f.Case.ForbiddenResults)}");
 
                 if (f.Case.RequiredResults.Length > 0)
-                    lines.Add($"    must also return: {string.Join(" | ", f.Case.RequiredResults)}");
+                    lines.Add($"    must also appear within the visible {RelevanceCase.VisibleResults}: {string.Join(" | ", f.Case.RequiredResults)}");
 
                 if (f.Case.MaxResults is { } max)
                     lines.Add($"    max results: {max}");
@@ -146,7 +146,7 @@ public sealed class RelevanceHarness(ISearchEngine engine)
 
             var sw = Stopwatch.StartNew();
             var hits = await _engine
-                .SearchAsync(testCase.Query, Math.Max(testCase.WithinTopN, 10), cancellationToken)
+                .SearchAsync(testCase.Query, Math.Max(testCase.WithinTopN, RelevanceCase.VisibleResults), cancellationToken)
                 .ConfigureAwait(false);
             sw.Stop();
 
@@ -166,7 +166,8 @@ public sealed class RelevanceHarness(ISearchEngine engine)
             var noResultsPassed = !testCase.ExpectNoResults || names.Length == 0;
             var maxResultsPassed = !testCase.MaxResults.HasValue || names.Length <= testCase.MaxResults.Value;
             var forbiddenPassed = !names.Any(n => testCase.ForbiddenResults.Any(f => IsForbiddenMatch(n, f)));
-            var requiredPassed = testCase.RequiredResults.All(r => names.Any(n => IsMatch(n, r)));
+            var requiredPassed = testCase.RequiredResults.All(
+                r => names.Take(RelevanceCase.VisibleResults).Any(n => IsMatch(n, r)));
 
             var unstablePrefix = await FindUnstablePrefixAsync(testCase, cancellationToken).ConfigureAwait(false);
 
@@ -175,7 +176,7 @@ public sealed class RelevanceHarness(ISearchEngine engine)
                 Case = testCase,
                 Passed = recallPassed && noResultsPassed && maxResultsPassed && forbiddenPassed && requiredPassed
                     && unstablePrefix is null,
-                ActualTop = [.. names.Take(5)],
+                ActualTop = [.. names.Take(RelevanceCase.VisibleResults)],
                 MatchedRank = matchedRank,
                 ElapsedMs = sw.Elapsed.TotalMilliseconds,
                 UnstablePrefix = unstablePrefix,
@@ -202,14 +203,15 @@ public sealed class RelevanceHarness(ISearchEngine engine)
 
             var prefix = testCase.Query[..^dropped];
             var hits = await _engine
-                .SearchAsync(prefix, Math.Max(testCase.WithinTopN, 10), cancellationToken)
+                .SearchAsync(prefix, Math.Max(testCase.WithinTopN, RelevanceCase.VisibleResults), cancellationToken)
                 .ConfigureAwait(false);
 
             var names = hits.Select(h => h.Entity.DisplayName).ToArray();
 
             var recalled = testCase.AcceptableResults.Length == 0
                 || names.Take(testCase.WithinTopN).Any(n => testCase.AcceptableResults.Any(a => IsMatch(n, a)));
-            var required = testCase.RequiredResults.All(r => names.Any(n => IsMatch(n, r)));
+            var required = testCase.RequiredResults.All(
+                r => names.Take(RelevanceCase.VisibleResults).Any(n => IsMatch(n, r)));
 
             if (!recalled || !required)
                 return prefix;

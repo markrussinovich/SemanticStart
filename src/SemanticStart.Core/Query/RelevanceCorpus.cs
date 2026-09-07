@@ -25,12 +25,24 @@ public sealed record RelevanceCase
     public string[] ForbiddenResults { get; init; } = [];
 
     /// <summary>
-    /// Display names that must appear somewhere in the results, at any rank. Separate from
+    /// Display names that must appear where the user can see them. Separate from
     /// <see cref="AcceptableResults"/>, which asks only that *one* of several good answers reached
     /// the top: this asks that a specific answer was not lost, which is a recall question rather
     /// than an ordering one.
+    ///
+    /// Checked against <see cref="VisibleResults"/> rather than the whole result list. "Present at
+    /// any rank" sounds like the stricter reading of recall but is not a claim about anything the
+    /// user experiences: the overlay shows eight rows, so a required result at rank ten is a
+    /// result they did not get. Process Explorer sat at rank ten for "view memory usage" through
+    /// two reports of it being missing, with the harness calling the case passed both times.
     /// </summary>
     public string[] RequiredResults { get; init; } = [];
+
+    /// <summary>
+    /// How many results the overlay shows, which is the AppSettings.ResultLimit default. A case
+    /// asserting that something is reachable has to mean reachable on screen.
+    /// </summary>
+    public const int VisibleResults = 8;
 
     /// <summary>When true, the correct result is an empty list with a clean no-match contract.</summary>
     public bool ExpectNoResults { get; init; }
@@ -111,7 +123,7 @@ public static class RelevanceCorpus
             AcceptableResults = ["RAMMap", "RamMap", "Resource Monitor", "Task Manager", "Performance Monitor", "VMMap"],
             RequiredResults = ["Process Explorer"],
             WithinTopN = 5,
-            Rationale = "Reported as missing Process Explorer. It was a pure source-coverage gap: the word 'memory' appears zero times in everything that had been written about it - the MSIX manifest and version resource give only its name, its Microsoft Learn page talks about handles and DLLs, and its Wikipedia lead calls it a freeware system monitor. The vector arm placed it at 0.285, which is the model recognising what its neighbours are, not evidence of what it does, and no ranking change could have fixed that. It is answered now by a source that does state the capability: the program's own View menu offers 'Physical Memory History' and 'System Information', harvested by UiResourceEnricher into the features column.",
+            Rationale = "RATIONALE_PE_PLACEHOLDER",
         },
         new()
         {
@@ -119,7 +131,7 @@ public static class RelevanceCorpus
             AcceptableResults = ["Resource Monitor", "Task Manager", "Performance Monitor", "VMMap", "RAMMap", "Sysinternals Process Explorer", "Process Explorer"],
             RequiredResults = ["Resource Monitor"],
             WithinTopN = 5,
-            Rationale = "Reported as missing Resource Monitor, which reports per-process memory and is what Windows itself ships for this. The Sysinternals memory analyzers are accepted for the top slot because they answer it too, but Resource Monitor is required outright: it already ranks for its own name, so accepting VMMap alone would let the case pass while the reported gap remained. It was a source-coverage gap - nothing indexed about it used the word 'process', because its Wikipedia lead calls it a utility that displays hardware resource information and only the article's Features section names processes. Harvesting that section reached it and cost 'file edit', 'uninstall a program' and 0.05 MRR, because a longer details column widens the FTS candidate pool even at zero weight. What answered it instead was the program's own interface, once UiResourceEnricher learned to read the module the entry's icon names rather than the shared host it launches: the entry is resmon.exe, it resolves to perfmon.exe, and perfmon's menus describe Performance Monitor. Its icon points at wdc.dll, whose menus offer 'End Process', 'Suspend Process' and 'Analyze Wait Chain'.",
+            Rationale = "Reported as missing Resource Monitor, which reports per-process memory and is what Windows itself ships for this. The Sysinternals memory analyzers are accepted for the top slot because they answer it too, but Resource Monitor is required outright: it already ranks for its own name, so accepting VMMap alone would let the case pass while the reported gap remained. It was a source-coverage gap - nothing indexed about it used the word 'process', because its Wikipedia lead calls it a utility that displays hardware resource information and only the article's Features section names processes. Harvesting that section reached it and cost 'file edit', 'uninstall a program' and 0.05 MRR, because a longer details column widens the FTS candidate pool even at zero weight. What answered it instead was the program's own interface, once UiResourceEnricher learned to read the module the entry's icon names rather than the shared host it launches: the entry is resmon.exe, it resolves to perfmon.exe, and perfmon's menus describe Performance Monitor. Its icon points at wdc.dll, whose menus offer 'End Process', 'Suspend Process' and 'Analyze Wait Chain'.RATIONALE_RM_PLACEHOLDER",
         },
         new()
         {
