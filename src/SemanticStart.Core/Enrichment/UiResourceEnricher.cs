@@ -35,6 +35,14 @@ public sealed class UiResourceEnricher : IEnricher
     private const int MaxCaptionLength = 48;
 
     /// <summary>
+    /// Where a label stops naming a feature and starts explaining one. Menu items and buttons run
+    /// to a few words; dialog body text runs to a sentence. Measured on the corpus: cutting at
+    /// five words loses real labels and costs a case, and not cutting at all lets explanatory
+    /// prose through to be shredded into word soup by the dedupe downstream.
+    /// </summary>
+    private const int MaxCaptionWords = 8;
+
+    /// <summary>
     /// Three-character runs out of a resource blob are far more often two bytes of structure
     /// followed by a letter than they are a real caption, and the genuine three-letter menu items
     /// - Run, New, Del, Cut - are all standard chrome that is discarded anyway.
@@ -87,7 +95,16 @@ public sealed class UiResourceEnricher : IEnricher
                 cancellationToken.ThrowIfCancellationRequested();
                 foreach (var bytes in EnumerateResources(module, type))
                 {
-                    foreach (var caption in ExtractStrings(bytes))
+                    var raw = type == NativeMethods.RtMenu
+                        ? ReadMenu(bytes)
+                        : [.. ExtractStrings(bytes)];
+
+                    // Judged per resource rather than per caption, because what identifies an
+                    // About box is the company and copyright line sitting alongside the rest.
+                    if (IsAboutBox(raw))
+                        continue;
+
+                    foreach (var caption in raw)
                     {
                         if (ordered.Count >= MaxCaptions)
                             return ordered;
@@ -111,6 +128,11 @@ public sealed class UiResourceEnricher : IEnricher
     }
 
     private static List<byte[]> EnumerateResources(IntPtr module, IntPtr type)
+    {
+        return [.. Enumerate(module, type)];
+    }
+
+    private static List<byte[]> Enumerate(IntPtr module, IntPtr type)
     {
         var blobs = new List<byte[]>();
 
@@ -145,14 +167,154 @@ public sealed class UiResourceEnricher : IEnricher
     }
 
     /// <summary>
-    /// Pulls the UTF-16 runs out of a menu or dialog resource.
+    /// The captions of a menu resource, read structurally.
     ///
-    /// The two formats are parsed rather than decoded structurally on purpose. Both have several
-    /// incompatible versions - MENUEX and DIALOGEX differ from their originals in header size and
-    /// in per-item fields - and a parser that mis-steps on one variant silently produces
-    /// nonsense. Reading the strings out of a blob that only ever contains an interface makes the
-    /// worst case a few extra words rather than garbage, and the filtering below removes the
-    /// structural leftovers that are not captions.
+    /// Scanning a menu for text cannot work, and the reason is in the format rather than in the
+    /// filtering. A MENUITEM stores its command id in the two bytes immediately before its label,
+    /// with no separator; when the low byte of that id happens to be printable and the high byte
+    /// is zero, it reads as the first character of the caption. Performance Monitor's menus came
+    /// out as "hExit", "pStart Monitoring", "qStop Monitoring" and "ySnap to Compare". The noise
+    /// is not at the edge of the string where a filter could reach it - it is inside the word.
+    ///
+    /// Both layouts are handled: the original, where a popup item is a flags word followed by
+    /// text and a command item has its id between the two, and MENUEX, which is DWORD-aligned and
+    /// carries type, state and id before a resource-info word.
+    ///
+    /// A parser that mis-steps on an unfamiliar variant produces silent nonsense, so anything
+    /// that walks off the end of the blob falls back to scanning it. That keeps the failure mode
+    /// no worse than what this replaces.
+    /// </summary>
+    internal static List<string> ReadMenu(byte[] blob)
+    {
+        try
+        {
+            var captions = new List<string>();
+            if (blob.Length < 4)
+                return captions;
+
+            var version = ReadUInt16(blob, 0);
+            if (version == 1)
+            {
+                var headerSize = ReadUInt16(blob, 2);
+                ReadMenuExItems(blob, 4 + headerSize, captions, 0);
+            }
+            else
+            {
+                var headerSize = ReadUInt16(blob, 2);
+                ReadMenuItems(blob, 4 + headerSize, captions, 0);
+            }
+
+            return captions;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return [.. ExtractStrings(blob)];
+        }
+    }
+
+    private const int MaxMenuDepth = 12;
+
+    private static int ReadMenuItems(byte[] blob, int offset, List<string> captions, int depth)
+    {
+        while (offset + 2 <= blob.Length)
+        {
+            var flags = ReadUInt16(blob, offset);
+            offset += 2;
+
+            var popup = (flags & 0x0010) != 0;
+            if (!popup)
+                offset += 2;
+
+            offset = ReadNulTerminated(blob, offset, out var text);
+            if (Clean(text) is { } caption)
+                captions.Add(caption);
+
+            if (popup && depth < MaxMenuDepth)
+                offset = ReadMenuItems(blob, offset, captions, depth + 1);
+
+            if ((flags & 0x0080) != 0)
+                return offset;
+        }
+
+        return offset;
+    }
+
+    private static int ReadMenuExItems(byte[] blob, int offset, List<string> captions, int depth)
+    {
+        while (true)
+        {
+            offset = Align(offset);
+            if (offset + 14 > blob.Length)
+                return offset;
+
+            var popup = (blob[offset + 12] & 0x01) != 0;
+            var last = (blob[offset + 12] & 0x80) != 0;
+            offset = ReadNulTerminated(blob, offset + 14, out var text);
+            if (Clean(text) is { } caption)
+                captions.Add(caption);
+
+            if (popup)
+            {
+                offset = Align(offset) + 4;
+                if (depth < MaxMenuDepth)
+                    offset = ReadMenuExItems(blob, offset, captions, depth + 1);
+            }
+
+            if (last)
+                return offset;
+        }
+    }
+
+    private static int Align(int offset) => (offset + 3) & ~3;
+
+    private static ushort ReadUInt16(byte[] blob, int offset)
+    {
+        if (offset + 2 > blob.Length)
+            throw new ArgumentOutOfRangeException(nameof(offset));
+        return (ushort)(blob[offset] | (blob[offset + 1] << 8));
+    }
+
+    private static int ReadNulTerminated(byte[] blob, int offset, out string text)
+    {
+        var builder = new StringBuilder();
+        while (true)
+        {
+            if (offset + 2 > blob.Length)
+                throw new ArgumentOutOfRangeException(nameof(offset));
+
+            var value = (char)(blob[offset] | (blob[offset + 1] << 8));
+            offset += 2;
+            if (value == '\0')
+                break;
+
+            builder.Append(value);
+        }
+
+        text = builder.ToString();
+        return offset;
+    }
+
+    /// <summary>
+    /// True for the one dialog every program has that describes its publisher rather than itself.
+    /// Performance Monitor's contributed "APPLICATION", "Microsoft Windows Operating System" and
+    /// "Microsoft Corporation. All rights reserved" - a vendor's name and a legal notice, which
+    /// say nothing about the program and are shared by most of the index.
+    /// </summary>
+    internal static bool IsAboutBox(IReadOnlyList<string> captions) =>
+        captions.Any(c => AboutBoxNotice.IsMatch(c));
+
+    private static readonly Regex AboutBoxNotice = new(
+        @"rights reserved|copyright|\(c\)\s*\d|Â©",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Pulls the UTF-16 runs out of a dialog resource.
+    ///
+    /// The format is scanned rather than decoded structurally on purpose. DIALOG and DIALOGEX
+    /// differ in header size and in per-control fields, and a parser that mis-steps on one
+    /// variant silently produces nonsense. Unlike a menu, a dialog stores each control's caption
+    /// as its own NUL-terminated string with structure on either side, so scanning costs only the
+    /// occasional structural leftover at an edge, which the filtering below removes.
     /// </summary>
     internal static IEnumerable<string> ExtractStrings(byte[] blob)
     {
@@ -232,6 +394,20 @@ public sealed class UiResourceEnricher : IEnricher
         if (!Regex.IsMatch(raw, "[A-Za-z]{2}"))
             return null;
 
+        // Format placeholders - "yyyyMMddHH", "dddd", "NNNNNN", "MMddHHmm" - are how a dialog
+        // spells out a date or serial pattern to the user. They are shaped unlike any word: a
+        // letter repeated three times running, or a long run with no vowel in it at all. Left in,
+        // they cost twice, once as tokens that can never be searched for and once as length that
+        // dilutes the words worth matching.
+        if (raw.Split(' ').Any(IsFormatPattern))
+            return null;
+
+        // A label names a thing; explanatory dialog text describes it in a sentence. Beyond five
+        // words a caption has stopped naming a feature and started explaining one, and the
+        // explanation is prose that the word-level dedupe downstream can only shred.
+        if (raw.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length > MaxCaptionWords)
+            return null;
+
         // Letters must dominate, which excludes version strings, GUID fragments and the runs of
         // punctuation that separate dialog controls.
         var letters = raw.Count(char.IsLetter);
@@ -247,6 +423,29 @@ public sealed class UiResourceEnricher : IEnricher
     }
 
     private static readonly char[] TrimmedEdges = [' ', '\t', '.', ':', '>', '<', '(', ')', '[', ']', '-', ',', '\'', '"', '/'];
+
+    /// <summary>
+    /// Whether a word is a date or serial format placeholder rather than something a user could
+    /// ever type. Three of the same letter running does not occur in English; neither does a
+    /// five-letter run without a vowel, which is long enough to spare the acronyms - CPU, GPU,
+    /// DNS, HTML - that are worth keeping.
+    /// </summary>
+    private static bool IsFormatPattern(string word)
+    {
+        if (word.Length < MinCaptionLength || !word.All(char.IsLetter))
+            return false;
+
+        for (var i = 2; i < word.Length; i++)
+        {
+            if (char.ToLowerInvariant(word[i]) == char.ToLowerInvariant(word[i - 1])
+                && char.ToLowerInvariant(word[i - 1]) == char.ToLowerInvariant(word[i - 2]))
+                return true;
+        }
+
+        return word.Length >= 5 && !word.Any(c => Vowels.Contains(char.ToLowerInvariant(c)));
+    }
+
+    private const string Vowels = "aeiou";
 
     private static readonly HashSet<string> UniversalChrome = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -306,13 +505,46 @@ public sealed class UiResourceEnricher : IEnricher
         return null;
     }
 
+    /// <summary>
+    /// The paths that might hold this entity's interface, best first.
+    ///
+    /// The icon leads when the entry is launched indirectly - either the target takes arguments,
+    /// or the entry's own file name is not the executable it resolves to. Both mean the resolved
+    /// binary serves more than this one entry, and reading it describes the wrong feature:
+    /// Resource Monitor is "resmon.exe", resolves to perfmon.exe, and perfmon's menus describe
+    /// Performance Monitor with no mention of a process anywhere. The icon is the one part of
+    /// such an entry that has to be specific to it, so it names the module that implements it -
+    /// Resource Monitor's points at wdc.dll, whose menus offer "End Process", "Suspend Process"
+    /// and "Analyze Wait Chain". A directly launched entry keeps its own target in front, which
+    /// is what stops a shared icon library such as shell32.dll from speaking for an ordinary app.
+    /// </summary>
     private static IEnumerable<string?> CandidatePaths(Entity entity)
     {
-        if (entity.RawMetadata.TryGetValue("targetPath", out var target)) yield return target;
+        var target = entity.RawMetadata.GetValueOrDefault("targetPath");
+        if (!string.IsNullOrWhiteSpace(entity.LaunchArguments) || LaunchesThroughAnotherBinary(entity, target))
+            yield return entity.IconSource;
+
+        yield return target;
         yield return entity.LaunchTarget;
         yield return entity.IconSource;
         if (entity.RawMetadata.TryGetValue("fileName", out var fileName) && !Path.IsPathRooted(fileName))
             yield return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), fileName);
+    }
+
+    /// <summary>
+    /// True when the entry's own file name is not the executable it ends up running. The
+    /// difference is the fingerprint of a stub: a small binary whose only job is to start a
+    /// shared host, which is why the host cannot be read as a description of this entry.
+    /// </summary>
+    private static bool LaunchesThroughAnotherBinary(Entity entity, string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+            return false;
+
+        if (!entity.RawMetadata.TryGetValue("fileName", out var fileName) || string.IsNullOrWhiteSpace(fileName))
+            return false;
+
+        return !string.Equals(Path.GetFileName(target), Path.GetFileName(fileName), StringComparison.OrdinalIgnoreCase);
     }
 
     private static class NativeMethods

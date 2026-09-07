@@ -82,6 +82,36 @@ public class UiResourceEnricherTests
         Assert.Equal(2, captions.Count);
     }
 
+    /// <summary>
+    /// A dialog that spells out a date or serial pattern for the user contributes tokens nobody
+    /// could ever search for, and every one of them lengthens the field that BM25 divides by.
+    /// </summary>
+    [Fact]
+    public void DropsDateAndSerialFormatPlaceholders()
+    {
+        Assert.Empty(Extract("yyyyMMddHH", "dddd", "NNNNNN", "MMddHHmm", "yyyyDDD"));
+    }
+
+    /// <summary>
+    /// The same shape test must not take the acronyms that genuinely name capabilities.
+    /// </summary>
+    [Fact]
+    public void KeepsAcronymsThatNameACapability()
+    {
+        Assert.Equal(["CPU Context", "HTML Report", "DNS Cache"], Extract("CPU Context", "HTML Report", "DNS Cache"));
+    }
+
+    /// <summary>
+    /// Explanatory dialog text is prose. Kept, the word-level dedupe downstream shreds it into
+    /// disconnected words that match queries no one meant.
+    /// </summary>
+    [Fact]
+    public void DropsExplanatorySentencesButKeepsLongLabels()
+    {
+        Assert.Empty(Extract("Which of these would you like to use for this collector set"));
+        Assert.Equal(["Overwrite the existing log file"], Extract("Overwrite the existing log file"));
+    }
+
     private static List<string> Extract(params string[] strings)
     {
         var buffer = new List<byte>();
