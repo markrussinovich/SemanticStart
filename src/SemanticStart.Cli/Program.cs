@@ -288,12 +288,28 @@ internal static class Program
 
         if (reuseAll)
         {
-            var known = EnricherRegistry.CreateAll().Select(e => e.Provider).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var all = EnricherRegistry.CreateAll();
+            var known = all.Select(e => e.Provider).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var unknown = refresh.Where(p => !known.Contains(p)).ToArray();
             if (unknown.Length > 0)
             {
                 Console.Error.WriteLine($"unknown provider(s): {string.Join(", ", unknown)}");
                 Console.Error.WriteLine($"known providers: {string.Join(", ", known.Order(StringComparer.Ordinal))}");
+                return 1;
+            }
+
+            // Refreshing a provider discards what it stored last time. For an online provider with
+            // the network switched off that is a one-way delete: nothing re-runs to replace the
+            // documents, so the index quietly loses every article it had. Refuse instead.
+            var offline = all
+                .Where(e => e.RequiresNetwork && refresh.Contains(e.Provider))
+                .Select(e => e.Provider)
+                .ToArray();
+            if (offline.Length > 0 && !allowNetwork)
+            {
+                Console.Error.WriteLine(
+                    $"--refresh {string.Join(", ", offline)} needs --online: refreshing discards the stored " +
+                    "documents, and without the network there is nothing to replace them with.");
                 return 1;
             }
         }
