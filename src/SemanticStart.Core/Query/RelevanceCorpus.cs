@@ -111,7 +111,7 @@ public static class RelevanceCorpus
             AcceptableResults = ["RAMMap", "RamMap", "Resource Monitor", "Task Manager", "Performance Monitor", "VMMap"],
             RequiredResults = ["Process Explorer"],
             WithinTopN = 5,
-            Rationale = "Reported as missing Process Explorer. KNOWN GAP, and a pure source-coverage one: the word 'memory' appears zero times in everything indexed about it - the MSIX manifest and version resource give only its name, its Microsoft Learn page talks about handles and DLLs, and its Wikipedia lead calls it a freeware system monitor. The vector arm still places it at 0.285, which is the model recognising what its neighbours are, not evidence of what it does. No ranking change can fix this and none should be made to; it needs a source that states the capability.",
+            Rationale = "Reported as missing Process Explorer. It was a pure source-coverage gap: the word 'memory' appears zero times in everything that had been written about it - the MSIX manifest and version resource give only its name, its Microsoft Learn page talks about handles and DLLs, and its Wikipedia lead calls it a freeware system monitor. The vector arm placed it at 0.285, which is the model recognising what its neighbours are, not evidence of what it does, and no ranking change could have fixed that. It is answered now by a source that does state the capability: the program's own View menu offers 'Physical Memory History' and 'System Information', harvested by UiResourceEnricher into the features column.",
         },
         new()
         {

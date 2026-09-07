@@ -111,7 +111,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         var lexicalHits = await lexicalTask.ConfigureAwait(false);
 
         var fused = Fuse(snapshot, query, vectorArm, lexicalHits);
-        var surviving = PruneLowConfidence(fused);
+        var surviving = PruneLowConfidence(fused, ContentTerms(query).Count);
 
         // Ordered by score band rather than by score, so that a preference for what Windows ships
         // can break ties without ever overturning a decision the arms made clearly. See
@@ -440,7 +440,7 @@ public sealed class HybridSearchEngine : ISearchEngine
     /// based on the underlying evidence: literal name matches, strong BM25, absolute vector
     /// floors, and a relative score guard for weak-evidence tails after a strong leader.
     /// </summary>
-    private List<Candidate> PruneLowConfidence(List<Candidate> candidates)
+    private List<Candidate> PruneLowConfidence(List<Candidate> candidates, int queryTermCount)
     {
         if (candidates.Count == 0)
             return candidates;
@@ -457,10 +457,10 @@ public sealed class HybridSearchEngine : ISearchEngine
             .DefaultIfEmpty(0)
             .Max();
 
-        return [.. candidates.Where(c => ShouldSurface(c, topScore, topVector, topLexical))];
+        return [.. candidates.Where(c => ShouldSurface(c, topScore, topVector, topLexical, queryTermCount))];
     }
 
-    private bool ShouldSurface(Candidate candidate, double topScore, double topVector, double topLexical)
+    private bool ShouldSurface(Candidate candidate, double topScore, double topVector, double topLexical, int queryTermCount)
     {
         // Cosine is not comparable between queries, so the floor is stated relative to the best
         // cosine this query found and capped by the fixed value. See
@@ -519,7 +519,22 @@ public sealed class HybridSearchEngine : ISearchEngine
         var relativeVector = topVector <= 0
             || vectorScore >= topVector * _options.MinHybridVectorLeaderRatio;
 
-        if (vectorScore >= vectorFloor && relativeVector)
+        // A cosine is treated as a semantic reading everywhere else in this method. For a third of
+        // the index it is not one. Those entities have no description, no task and no harvested
+        // text: ToEmbeddingText suppresses "Open Registry Editor." and "open registry editor" as
+        // restating the name, so what remains to embed *is* the name. The resulting vector cannot
+        // disagree with anything, and the model happily places "Registry Editor" at 78% of the
+        // best cosine for "edit a file" - a query the corpus forbids it from answering - because
+        // "Editor" and "edit" are the same word to it.
+        //
+        // Only multi-word queries are affected. A one-word query is a name being typed, where name
+        // similarity is the right reading and the literal-match paths above handle it anyway.
+        // Such an entity can still surface: it needs a word in common with the query, through the
+        // lexical paths above or the corroboration below. What it may not do is arrive on a
+        // similarity to its own name alone.
+        var nameOnlySemantics = queryTermCount >= 2 && candidate.HasNameOnlySemantics;
+
+        if (vectorScore >= vectorFloor && relativeVector && !nameOnlySemantics)
             return true;
 
         // Corroboration. Every floor above judges one arm against that arm's leader, which asks
@@ -554,6 +569,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         // web" buries Microsoft Edge under msoasb, Get Started, Command Palette and IIS.
         if (topVector > 0 && topLexical > 0
             && candidate.VectorRanked
+            && !nameOnlySemantics
             && vectorScore >= vectorFloor
             && vectorScore / topVector * (candidate.LexicalScore.Value / topLexical)
                 >= _options.MinCorroboratedEvidenceProduct)
@@ -725,6 +741,21 @@ public sealed class HybridSearchEngine : ISearchEngine
         public double UsageContribution { get; set; }
         public double LiteralStrength { get; set; }
         public string? LiteralReason { get; set; }
+
+        /// <summary>
+        /// True when the text handed to the embedding model carried nothing beyond the entity's
+        /// own name and category, so its cosine measures name similarity rather than meaning.
+        /// See the use in <c>ShouldSurface</c>.
+        ///
+        /// Tests exactly the fields <see cref="SynthesizedProfile.ToEmbeddingText"/> reads. The
+        /// interface labels are deliberately not among them: they are a lexical column only, and
+        /// counting them here would clear an entity of a charge about a vector they never entered.
+        /// </summary>
+        public bool HasNameOnlySemantics =>
+            Entity.Profile is not { } profile
+            || (profile.IndexableSummary(Entity.Entity.DisplayName) is null
+                && profile.IndexableTasks(Entity.Entity.DisplayName).Count == 0
+                && string.IsNullOrWhiteSpace(profile.Details));
     }
 
     /// <summary>
