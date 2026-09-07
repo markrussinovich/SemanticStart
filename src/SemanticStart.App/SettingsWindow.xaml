@@ -105,14 +105,6 @@
                     </Grid>
                 </Border>
 
-                <Border Style="{StaticResource Card}">
-                    <StackPanel>
-                        <CheckBox x:Name="TakeStartBox" Content="Take over the Start key (solo Windows key press)" />
-                        <TextBlock Style="{StaticResource Caption}"
-                                   Text="Off by default. This uses a low-level keyboard hook, which cannot see input while an elevated window has focus, so the real Start menu opens normally there. Reserved combinations such as Win+L are never intercepted." />
-                    </StackPanel>
-                </Border>
-
                 <TextBlock Text="Indexing" Style="{StaticResource SectionHeader}" />
 
                 <Border Style="{StaticResource Card}">

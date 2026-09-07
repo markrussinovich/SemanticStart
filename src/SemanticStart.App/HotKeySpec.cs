@@ -18,7 +18,7 @@ public sealed record HotKeySpec(int Modifiers, int VirtualKey, string Normalized
     public const int ModWin = 0x0008;
 
     /// <summary>
-    /// Parses a chord such as "Win+Alt+Space". Returns false with a reason the user can act on.
+    /// Parses a chord such as "Win+Alt+.". Returns false with a reason the user can act on.
     /// </summary>
     public static bool TryParse(string? text, out HotKeySpec? spec, out string? error)
     {
@@ -27,14 +27,14 @@ public sealed record HotKeySpec(int Modifiers, int VirtualKey, string Normalized
 
         if (string.IsNullOrWhiteSpace(text))
         {
-            error = "Enter a shortcut, for example Win+Alt+Space.";
+            error = $"Enter a shortcut, for example {AppSettings.DefaultHotKey}.";
             return false;
         }
 
         var parts = text.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length == 0)
         {
-            error = "Enter a shortcut, for example Win+Alt+Space.";
+            error = $"Enter a shortcut, for example {AppSettings.DefaultHotKey}.";
             return false;
         }
 
@@ -70,7 +70,7 @@ public sealed record HotKeySpec(int Modifiers, int VirtualKey, string Normalized
 
             if (!TryParseKey(part, out var parsed))
             {
-                error = $"'{part}' is not a key name. Try a letter, digit, function key, or Space.";
+                error = $"'{part}' is not a key name. Try a letter, digit, function key, Space, or punctuation such as '.'.";
                 return false;
             }
 
@@ -120,6 +120,9 @@ public sealed record HotKeySpec(int Modifiers, int VirtualKey, string Normalized
 
     private static bool TryParseKey(string part, out Key key)
     {
+        if (PunctuationKeys.TryGetValue(part, out key))
+            return true;
+
         if (Enum.TryParse(part, ignoreCase: true, out key) && key != Key.None)
         {
             // Enum.TryParse accepts the modifier keys themselves ("LeftAlt") and numeric values
@@ -149,9 +152,38 @@ public sealed record HotKeySpec(int Modifiers, int VirtualKey, string Normalized
         or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin
         or Key.System;
 
-    private static string KeyDisplayName(Key key)
+    /// <summary>
+    /// The punctuation keys a user can reasonably press, by the character printed on the keycap.
+    /// WPF names these Oem*, which nobody types and which would be meaningless on a chip, and
+    /// several of them share an enum value (Key.Oem1 is Key.OemSemicolon), so the mapping has to
+    /// be spelled out in both directions rather than derived from the enum.
+    /// </summary>
+    private static readonly Dictionary<string, Key> PunctuationKeys = new(StringComparer.Ordinal)
     {
+        ["."] = Key.OemPeriod,
+        [","] = Key.OemComma,
+        [";"] = Key.OemSemicolon,
+        ["'"] = Key.OemQuotes,
+        ["["] = Key.OemOpenBrackets,
+        ["]"] = Key.OemCloseBrackets,
+        ["\\"] = Key.OemPipe,
+        ["/"] = Key.OemQuestion,
+        ["-"] = Key.OemMinus,
+        ["="] = Key.OemPlus,
+        ["`"] = Key.OemTilde,
+    };
+
+    /// <summary>The text shown for a key, on a chip and in a stored chord.</summary>
+    internal static string KeyDisplayName(Key key)
+    {
+        foreach (var (symbol, punctuation) in PunctuationKeys)
+        {
+            if (punctuation == key)
+                return symbol;
+        }
+
         var name = key.ToString();
+        // Key.D1 is the "1" key; showing "D1" would be meaningless.
         return name.Length == 2 && name[0] == 'D' && char.IsDigit(name[1]) ? name[1..] : name;
     }
 

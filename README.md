@@ -71,11 +71,11 @@ dotnet publish src\SemanticStart.App -c Release -r win-x64 --self-contained true
 ## Usage
 
 Run `SemanticStart.App.exe`. It lives in the tray, builds its index on first run (downloading the
-~90 MB embedding model once), and opens on **Win+Alt+Space**.
+~90 MB embedding model once), and opens on **Win+Alt+.** — Win, Alt, and the period key.
 
 | Key | Action |
 |---|---|
-| `Win+Alt+Space` | Open the overlay (configurable) |
+| `Win+Alt+.` | Open the overlay (configurable) |
 | `Enter` | Launch |
 | `Ctrl+Enter` | Launch as administrator |
 | `Ctrl+Shift+Enter` | Open file location |
@@ -84,9 +84,9 @@ Run `SemanticStart.App.exe`. It lives in the tray, builds its index on first run
 The overlay follows the system light/dark theme and accent color live, and shows each entry's real
 Shell icon (including MSIX/UWP assets) via `IShellItemImageFactory` — the same source Start uses.
 
-**Hotkey fallback.** If `Win+Alt+Space` is already claimed by another app (`RegisterHotKey` fails with
-`ERROR_HOTKEY_ALREADY_REGISTERED`), SemanticStart walks a candidate list — `Win+Alt+S`,
-`Win+Ctrl+G`, `Win+Alt+X`, `Ctrl+Alt+Space`, `Ctrl+Alt+S`, `Ctrl+Shift+Space` — and registers
+**Hotkey fallback.** If `Win+Alt+.` is already claimed by another app (`RegisterHotKey` fails with
+`ERROR_HOTKEY_ALREADY_REGISTERED`), SemanticStart walks a candidate list — `Win+Alt+,`,
+`Win+Alt+;`, `Win+Ctrl+G`, `Win+Alt+X`, `Ctrl+Alt+.`, `Ctrl+Shift+.` — and registers
 the first one that is free. The hotkey that actually won is reported by a tray balloon at startup
 and shown under **Hotkey** in Settings (the gear in the lower left of the overlay).
 
@@ -95,10 +95,10 @@ combination you want, and each key appears as its own chip. Escape keeps the cur
 nothing to spell, which matters because key names are not guessable (`PrintScreen`, `Prior`,
 `OemQuestion`), and the field cannot display a chord it would refuse to store.
 
-While the field is listening, the global hotkey and the Start-key hook are released and restored
-afterwards. Windows delivers a registered hotkey to the owning application as an activation rather
-than as key input, so without this the chord most likely to be pressed while editing — the one
-already assigned — would open the overlay instead of being recorded.
+While the field is listening, the global hotkey is released and restored afterwards. Windows delivers
+a registered hotkey to the owning application as an activation rather than as key input, so without
+this the chord most likely to be pressed while editing — the one already assigned — would open the
+overlay instead of being recorded.
 
 A chord is rejected, with the reason shown inline, if it has no modifier (Windows would register it
 globally and swallow that key everywhere, including inside text boxes), if `Shift` is its only
@@ -110,9 +110,13 @@ then never fire.
 so `RegisterHotKey` fails for `Win+S`, `Win+Q` and `Win+F` alike. That leaves `Win+<modifier>+<key>`,
 where much of the `Win+Alt+<letter>` family (`D`, `F`, `G`, `R`, `T`, `W`) belongs to Xbox Game Bar on
 a stock Windows 11 install, `Win+Shift+S` is Screen Snip, and `Win+Ctrl+S` is Speech Recognition.
-`Win+Alt+Space` avoids all of those, matches the established launcher idiom (Spotlight, Alfred,
-Raycast, PowerToys Run), and sits in one corner of the keyboard so a single hand can hit it — the
-thumb covers Alt and Space while the pinky holds Win, with no finger doing double duty.
+
+`Win+Alt+Space` is the launcher idiom (Spotlight, Alfred, Raycast) and was the original default, but
+PowerToys' Command Palette ships with exactly that chord. A hotkey belongs to whichever process
+registers it first, so on any machine with PowerToys installed the two race and SemanticStart
+frequently loses — which looks, from the outside, like the app simply not opening. `Win+Alt+.` keeps
+the same one-handed bottom-row shape without the collision, and anyone still carrying the old default
+in their settings is migrated to it on the next launch.
 
 **Single instance.** A named mutex ensures only one copy runs. Launching the executable again does
 not start a second instance; it signals the running one to show its overlay and exits.
@@ -198,29 +202,23 @@ is either "no arm retrieved it" or "an arm retrieved it and a surfacing floor re
 fixes, indistinguishable from outside. It runs the query twice against one snapshot, once with the
 shipped floors and once with every floor disabled, and diffs the two.
 
-## Taking over the Windows key
+## Why a hotkey, and not the Start key
 
 **Windows exposes no supported API for adding local results to Start search.** The only official
 extension point is the web search provider model, which is web-results-only and EEA-only. Products
 that genuinely replace the Start menu do it by injecting into or patching `explorer.exe`, which
 breaks on feature updates and trips security software. SemanticStart does not do this.
 
-Instead there are two activation tiers:
+So the overlay is opened by a global hotkey registered with `RegisterHotKey`, and that is the only
+activation path. Your Start menu is untouched and keeps working exactly as it did.
 
-1. **Default:** a global hotkey (`Win+Alt+Space`). Fully supported, always reliable.
-2. **Opt-in:** a low-level keyboard hook that detects a *solo* Win press-and-release and opens
-   SemanticStart instead of Start.
-
-Tier 2 is best-effort by nature, and its limits are surfaced in Settings rather than hidden:
-
-- It cannot see input while an **elevated** window has focus, so Win falls through to the real Start
-  menu there.
-- Reserved combinations (`Win+L`, `Win+G`, Ctrl+Alt+Del) are handled below the hook and are never
-  intercepted.
-- The hook can be dropped by Windows under load; a watchdog re-installs it.
-
-It is **off by default and fails open** — if anything goes wrong, the real Start menu still works.
-That is a non-negotiable safety property, and every hook callback is wrapped to guarantee it.
+An earlier version also offered, opt-in, to take over a solo Windows key press using a
+`WH_KEYBOARD_LL` hook. **That has been removed.** A low-level keyboard hook sits in the input path of
+every keystroke on the machine, cannot see input while an elevated window has focus, is silently
+dropped by Windows when it exceeds `LowLevelHooksTimeout`, and is the shape of thing security
+software objects to. That is a large, permanently load-bearing risk to the user's keyboard in
+exchange for saving one modifier. `RegisterHotKey` has none of those properties: the shell either
+delivers the message or it does not, and nothing else in the system is affected.
 
 ## Privacy
 

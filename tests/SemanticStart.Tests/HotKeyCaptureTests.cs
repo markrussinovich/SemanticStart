@@ -58,6 +58,23 @@ public class HotKeyCaptureTests
         Assert.Equal("Ctrl+Alt+1", chord);
     }
 
+    /// <summary>
+    /// The shipped default is a punctuation chord, so pressing it has to capture as "Win+Alt+."
+    /// and not as the WPF enum name. A chord that captured as "Win+Alt+OemPeriod" would compare
+    /// unequal to the stored default and make the field look like the user had changed it.
+    /// </summary>
+    [Fact]
+    public void PressingTheDefaultCapturesAsTheDefault()
+    {
+        Assert.True(HotKeyCapture.TryCapture(
+            Key.OemPeriod,
+            ModifierKeys.Windows | ModifierKeys.Alt,
+            out var chord,
+            out var error), error);
+
+        Assert.Equal(AppSettings.DefaultHotKey, chord);
+    }
+
     [Fact]
     public void AKeyWithNoModifierIsRejectedWithAReason()
     {

@@ -54,7 +54,7 @@
         <StackPanel Grid.Row="1">
             <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock x:Name="HotKeyText" Text="Open with Win+Alt+Space" />
+                    <TextBlock x:Name="HotKeyText" Text="Open with Win+Alt+." />
                     <TextBlock Style="{StaticResource Caption}"
                                Text="Your Start menu is not modified. You can change this hotkey later in Settings." />
                     <CheckBox x:Name="LaunchAtLoginCheck" Content="Start SemanticStart when I sign in" Margin="0,10,0,0" />

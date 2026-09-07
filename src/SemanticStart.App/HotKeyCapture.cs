@@ -42,7 +42,7 @@ public static class HotKeyCapture
         if (modifiers.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
         if (modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
 
-        parts.Add(DisplayName(key));
+        parts.Add(HotKeySpec.KeyDisplayName(key));
 
         // HotKeySpec owns every rule about what is allowed, so a chord that is captured here is
         // judged by exactly the same code as one restored from settings.
@@ -60,15 +60,4 @@ public static class HotKeyCapture
         string.IsNullOrWhiteSpace(chord)
             ? Array.Empty<string>()
             : chord.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-    private static string DisplayName(Key key)
-    {
-        var name = key.ToString();
-
-        // Key.D1 is the "1" key; showing "D1" on a chip would be meaningless.
-        if (name.Length == 2 && name[0] == 'D' && char.IsDigit(name[1]))
-            return name[1..];
-
-        return name;
-    }
 }

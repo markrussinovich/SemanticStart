@@ -101,7 +101,6 @@ public partial class SettingsWindow : Window
     private void LoadControls()
     {
         HotKeyBox.HotKey = _settings.HotKey;
-        TakeStartBox.IsChecked = _settings.TakeOverStartKey;
         OnlineBox.IsChecked = _settings.AllowOnlineEnrichment;
         LoginBox.IsChecked = _settings.LaunchAtLogin;
         LimitSlider.Value = _settings.ResultLimit;
@@ -185,7 +184,6 @@ public partial class SettingsWindow : Window
         _settings = _settings with
         {
             HotKey = hotKey,
-            TakeOverStartKey = TakeStartBox.IsChecked == true,
             AllowOnlineEnrichment = OnlineBox.IsChecked == true,
             LaunchAtLogin = LoginBox.IsChecked == true,
             ResultLimit = (int)Math.Round(LimitSlider.Value),

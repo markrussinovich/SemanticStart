@@ -10,21 +10,24 @@ namespace SemanticStart.App;
 public sealed record AppSettings
 {
     /// <summary>
-    /// Chosen against three constraints. Every bare Win+&lt;letter&gt; is registered by the shell
+    /// Chosen against four constraints. Every bare Win+&lt;letter&gt; is registered by the shell
     /// itself, so no app can take one. Xbox Game Bar squats on much of the Win+Alt+&lt;letter&gt;
     /// family (D, F, G, R, T, W) on a stock Windows 11 install, and Win+Shift+S is Screen Snip
-    /// while Win+Ctrl+S is Speech Recognition. Modifier+Space is also the established launcher
-    /// idiom (Spotlight, Alfred, Raycast, PowerToys Run), and Win, Alt, and Space sit next to each
-    /// other at the bottom left, so one hand can hit it without the pinky and the letter fighting
-    /// over the same finger.
+    /// while Win+Ctrl+S is Speech Recognition. Modifier+Space is the established launcher idiom -
+    /// which is exactly the problem, because PowerToys' Command Palette already uses Win+Alt+Space
+    /// and a hotkey belongs to whichever process registers it first, so on a machine with PowerToys
+    /// installed we would simply never open. The period keeps the same one-handed bottom-row shape
+    /// as Space without the collision.
     /// </summary>
-    public const string DefaultHotKey = "Win+Alt+Space";
+    public const string DefaultHotKey = "Win+Alt+.";
 
-    /// <summary>Pre-1.0 defaults, migrated away from on load.</summary>
-    internal static readonly string[] LegacyDefaultHotKeys = ["Alt+Space", "Win+Shift+S", "Win+Alt+S"];
+    /// <summary>
+    /// Defaults we have shipped before, migrated away from on load. Win+Alt+Space is here because
+    /// it collides with PowerToys' Command Palette, which is the reason it stopped being default.
+    /// </summary>
+    internal static readonly string[] LegacyDefaultHotKeys = ["Alt+Space", "Win+Shift+S", "Win+Alt+S", "Win+Alt+Space"];
 
     public string HotKey { get; init; } = DefaultHotKey;
-    public bool TakeOverStartKey { get; init; }
     public bool AllowOnlineEnrichment { get; init; }
     public int ResultLimit { get; init; } = 8;
     public bool LaunchAtLogin { get; init; }
