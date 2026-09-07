@@ -144,6 +144,13 @@ public sealed class OverlayViewModel : ObservableObject
     private readonly IconProvider _iconProvider;
     private readonly AppSettings _settings;
     private CancellationTokenSource? _debounceCts;
+
+    /// <summary>
+    /// The query the visible results were produced from. Compared against the current text before
+    /// launching, so a keystroke that is still inside the debounce window cannot be acted on with
+    /// the previous query's selection.
+    /// </summary>
+    private string _resultsQuery = string.Empty;
     private string _query = string.Empty;
     private string _status = IdleStatus;
     private int _selectedIndex = -1;
@@ -206,6 +213,7 @@ public sealed class OverlayViewModel : ObservableObject
             foreach (var hit in hits)
                 Results.Add(new SearchResultItem(hit));
 
+            _resultsQuery = query;
             SelectedIndex = Results.Count > 0 ? 0 : -1;
             Status = Results.Count == 0 ? (string.IsNullOrWhiteSpace(query) ? IdleStatus : NoMatchStatus) : string.Empty;
             _ = LoadIconsAsync(cancellationToken);
@@ -233,9 +241,27 @@ public sealed class OverlayViewModel : ObservableObject
 
     public async Task LaunchSelectedAsync(LaunchOptions options, CancellationToken cancellationToken = default)
     {
+        // Waiting for the query to settle means the visible list can lag the text box by up to the
+        // debounce interval, and pressing Enter in that window would launch the previous query's
+        // answer. Settle first, then act on what the user can actually see.
+        await FlushPendingSearchAsync(cancellationToken);
+
         if (SelectedItem is null)
             return;
         await _searchService.LaunchAsync(SelectedItem.Entity, options, cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs the pending debounced search immediately, if the visible results are out of date.
+    /// </summary>
+    public async Task FlushPendingSearchAsync(CancellationToken cancellationToken = default)
+    {
+        if (string.Equals(_resultsQuery, Query, StringComparison.Ordinal))
+            return;
+
+        _debounceCts?.Cancel();
+        _debounceCts = null;
+        await SearchNowAsync(Query, cancellationToken);
     }
 
     public void Clear()
@@ -244,10 +270,23 @@ public sealed class OverlayViewModel : ObservableObject
         _query = string.Empty;
         OnPropertyChanged(nameof(Query));
         Results.Clear();
+        _resultsQuery = string.Empty;
         SelectedIndex = -1;
         Status = IdleStatus;
     }
 
+    /// <summary>
+    /// Ranking is only meaningful for a query the user has finished writing. Every prefix of a
+    /// word is itself a query, and an unfinished one is not a weaker version of the finished one -
+    /// it is a different question, matching different words and depressing every cosine at once.
+    /// Searching on each keystroke put that churn on screen: "edit do" and "edit doc" return two
+    /// results and seven, and watching a list rebuild itself letter by letter reads as broken.
+    ///
+    /// Waiting for a pause spends latency the engine does not need - a query costs about 2.5 ms -
+    /// to buy the appearance of a settled answer, which is what the user is actually reading. The
+    /// wait is dead time only while the user is still typing, and Enter flushes it, so the cost is
+    /// never paid by someone who has finished.
+    /// </summary>
     private void DebounceSearch()
     {
         _debounceCts?.Cancel();
@@ -257,7 +296,7 @@ public sealed class OverlayViewModel : ObservableObject
         {
             try
             {
-                await Task.Delay(70, cts.Token);
+                await Task.Delay(_settings.SearchDebounceMilliseconds, cts.Token);
                 await System.Windows.Application.Current.Dispatcher.InvokeAsync(
                     () => SearchNowAsync(Query, cts.Token)).Task.Unwrap();
             }

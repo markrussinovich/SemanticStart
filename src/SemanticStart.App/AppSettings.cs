@@ -30,6 +30,12 @@ public sealed record AppSettings
     public bool LaunchAtLogin { get; init; }
 
     /// <summary>
+    /// How long to wait for typing to stop before searching. See OverlayViewModel.DebounceSearch
+    /// for why a settled query is worth waiting for.
+    /// </summary>
+    public int SearchDebounceMilliseconds { get; init; } = 500;
+
+    /// <summary>
     /// Whether the user has been through first-run setup. The first index build is the expensive,
     /// hard-to-undo one - it is what decides whether online documentation was used at all - so that
     /// choice has to be offered before it starts, not after.
@@ -69,6 +75,7 @@ public sealed class AppSettingsService
             {
                 HotKey = hotKey,
                 ResultLimit = Math.Clamp(settings.ResultLimit, 3, 20),
+                SearchDebounceMilliseconds = Math.Clamp(settings.SearchDebounceMilliseconds, 0, 2000),
                 LaunchAtLogin = IsLaunchAtLoginEnabled(),
             };
         }

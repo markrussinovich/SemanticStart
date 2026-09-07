@@ -104,6 +104,7 @@ public partial class SettingsWindow : Window
         OnlineBox.IsChecked = _settings.AllowOnlineEnrichment;
         LoginBox.IsChecked = _settings.LaunchAtLogin;
         LimitSlider.Value = _settings.ResultLimit;
+        DebounceSlider.Value = _settings.SearchDebounceMilliseconds;
         UpdateHotKeyStatus();
     }
 
@@ -187,6 +188,7 @@ public partial class SettingsWindow : Window
             AllowOnlineEnrichment = OnlineBox.IsChecked == true,
             LaunchAtLogin = LoginBox.IsChecked == true,
             ResultLimit = (int)Math.Round(LimitSlider.Value),
+            SearchDebounceMilliseconds = (int)Math.Round(DebounceSlider.Value),
         };
         _settingsService.Save(_settings);
         _activationManager.ApplySettings(_settings);

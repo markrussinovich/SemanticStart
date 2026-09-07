@@ -12,16 +12,22 @@ inference runs locally; no query ever leaves the machine.
 ## Status
 
 Working end to end. On this Windows 11 machine it indexes **534 entities** and answers
-queries with a **median latency of 2.4 ms (p95 3.1 ms)**, scoring **55/61** on the built-in
-relevance corpus (MRR 0.851, correct answer first 80% of the time). A full rebuild with online
+queries with a **median latency of 2.3 ms (p95 3.2 ms)**, scoring **56/61** on the built-in
+relevance corpus (MRR 0.870, correct answer first 83% of the time). A full rebuild with online
 enrichment takes ~7 minutes; querying never touches the network.
 
 Every query ever reported as wrong is a permanent case in that corpus, including the ones still
-failing. The remaining six share a single cause, and it is not ranking: no source on the machine
+failing. The remaining five share a single cause, and it is not ranking: no source on the machine
 uses the words the question does. Nothing indexed about Process Explorer contains "memory";
 nothing about any power setting contains "lid". Cases like these are left failing on purpose
 rather than papered over by lowering an evidence floor or hand-writing knowledge about a specific
 program, because both would trade a general engine for a demo.
+
+The overlay waits for typing to stop before searching (500 ms, adjustable in Settings). Every
+prefix of a word is a different question, not a weaker version of the finished one — "edit do" and
+"edit doc" match different words and score every candidate differently — so searching on each
+keystroke put that churn on screen. A query costs ~2.3 ms; the wait buys a settled answer, and
+Enter skips it.
 
 ## How it works
 

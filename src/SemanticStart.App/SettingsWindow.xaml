@@ -139,6 +139,23 @@
                                            TextAlignment="Right" Margin="10,0,0,0" VerticalAlignment="Center" />
                             </StackPanel>
                         </Grid>
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Wait for typing to stop" />
+                                <TextBlock Text="Searches only once the query settles, so results stop rebuilding letter by letter. Enter searches immediately."
+                                           Style="{StaticResource Caption}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="DebounceSlider" Width="180" Minimum="0" Maximum="1000" IsSnapToTickEnabled="True"
+                                        TickFrequency="50" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding ElementName=DebounceSlider, Path=Value, StringFormat={}{0:F0} ms}" Width="58"
+                                           TextAlignment="Right" Margin="10,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Grid>
                     </StackPanel>
                 </Border>
 
