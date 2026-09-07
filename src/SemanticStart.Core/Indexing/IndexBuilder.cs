@@ -302,8 +302,7 @@ public sealed class IndexBuilder
         // Arguments are part of the key because a shared executable does not imply a shared app:
         // shortcuts that launch rundll32.exe, control.exe, or msiexec.exe differ only in what they
         // are told to run, and collapsing those would erase genuinely distinct entries.
-        if (entity.Kind is EntityKind.Application or EntityKind.PackagedApp or EntityKind.SystemTool
-            && ExecutablePath(entity) is { } executable)
+        if (IsRunnableProgram(entity) && ExecutablePath(entity) is { } executable)
         {
             keys.Add("exe|" + executable.ToLowerInvariant() + "|" + (entity.LaunchArguments ?? string.Empty).ToLowerInvariant());
         }
@@ -321,26 +320,81 @@ public sealed class IndexBuilder
         if (entity.RawMetadata.TryGetValue("targetPath", out var target) && IsExecutable(target))
             return target;
 
-        if (entity.LaunchKind == LaunchKind.Executable && IsExecutable(entity.LaunchTarget))
+        if (entity.LaunchKind is LaunchKind.Executable or LaunchKind.Mmc or LaunchKind.Shortcut
+            && IsExecutable(entity.LaunchTarget))
             return entity.LaunchTarget;
+
+        // The AppsFolder addresses some items by a shell parsing name rather than by path -
+        // "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\MdSched.exe" for the Administrative Tools
+        // folder. The trailing segment is a real program in the system directory, and resolving it
+        // is what lets that record meet the Start Menu shortcut for the same tool, which carries
+        // the full path. Windows Memory Diagnostic and Memory Diagnostics Tool are one program
+        // under two names, and nothing but the binary they share can establish that.
+        if (entity.LaunchKind == LaunchKind.AppsFolder && ResolveSystemProgram(entity.LaunchTarget) is { } resolved)
+            return resolved;
 
         return null;
 
         static bool IsExecutable(string? path) =>
             !string.IsNullOrWhiteSpace(path)
-            && path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            && ProgramExtensions.Contains(Path.GetExtension(path))
             && Path.IsPathFullyQualified(path);
     }
 
-    private static string DedupeKey(Entity entity) => entity.Kind switch
+    private static readonly HashSet<string> ProgramExtensions =
+        new(StringComparer.OrdinalIgnoreCase) { ".exe", ".msc", ".cpl" };
+
+    /// <summary>
+    /// Resolves the trailing segment of a shell parsing name to a program in the system
+    /// directory, or null when there is no such program. Existence on disk is the whole test: it
+    /// is what keeps a bare file name from colliding two unrelated apps that both ship a
+    /// "setup.exe", because neither of those is in System32.
+    /// </summary>
+    private static string? ResolveSystemProgram(string? parsingName)
     {
-        // Runnable programs are deduplicated across kinds as well as across collectors. Disk
-        // Cleanup is reported both as an AppsFolder application and as a System32 tool; they
-        // are the same thing to the user, and showing both twice in a row looks broken.
-        EntityKind.Application or EntityKind.PackagedApp or EntityKind.SystemTool =>
-            "app|" + Normalize(entity.DisplayName),
-        _ => entity.LaunchKind + "|" + entity.LaunchTarget + "|" + Normalize(entity.DisplayName),
-    };
+        if (string.IsNullOrWhiteSpace(parsingName))
+            return null;
+
+        var separator = parsingName.LastIndexOf('\\');
+        var leaf = separator >= 0 ? parsingName[(separator + 1)..] : parsingName;
+
+        if (leaf.Length == 0
+            || !ProgramExtensions.Contains(Path.GetExtension(leaf))
+            || leaf.AsSpan().ContainsAny(Path.GetInvalidFileNameChars()))
+            return null;
+
+        var candidate = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            leaf);
+
+        return File.Exists(candidate) ? candidate : null;
+    }
+
+    /// <summary>
+    /// Whether an entity is a program the user runs, as opposed to a place the shell navigates to.
+    ///
+    /// Every kind on this list is something that starts and does a job, which is what makes two
+    /// records for one of them a duplicate rather than two ways in. Settings pages and shell
+    /// locations are excluded because they legitimately share both names and targets: every
+    /// optional feature deep-links to the same ms-settings:optionalfeatures page.
+    /// </summary>
+    private static bool IsRunnableProgram(Entity entity) =>
+        entity.Kind is EntityKind.Application
+            or EntityKind.PackagedApp
+            or EntityKind.SystemTool
+            or EntityKind.ControlPanelApplet
+            or EntityKind.ManagementConsole;
+
+    private static string DedupeKey(Entity entity) => IsRunnableProgram(entity)
+        // Runnable programs are deduplicated across kinds as well as across collectors, because
+        // the kind records how a program was found rather than what it is. Disk Cleanup is
+        // reported both as an AppsFolder application and as a System32 tool; Performance Monitor
+        // arrives as an AppsFolder application with an auto-generated id and as a Control Panel
+        // snap-in pointing at perfmon.msc, so it was listed twice with two different descriptions
+        // and no key in common. They are one thing to the user, and showing either twice in a row
+        // looks broken.
+        ? "app|" + Normalize(entity.DisplayName)
+        : entity.LaunchKind + "|" + entity.LaunchTarget + "|" + Normalize(entity.DisplayName);
 
     /// <summary>
     /// Folds a suppressed duplicate's metadata into the entity that beat it, filling only keys the

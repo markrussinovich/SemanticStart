@@ -76,6 +76,98 @@ public sealed class IndexBuilderTests : IDisposable
     }
 
     /// <summary>
+    /// The kind of an entity records how it was found, not what it is, so it cannot be part of the
+    /// question "are these the same program". Performance Monitor arrives from the AppsFolder as
+    /// an Application under an auto-generated id, and from the Control Panel as a ManagementConsole
+    /// pointing at perfmon.msc. Nothing about the two records matches except the name, and the
+    /// name key used to be reserved for three kinds, so the user saw it listed twice with two
+    /// different descriptions.
+    /// </summary>
+    [Fact]
+    public async Task Build_DeduplicatesOneProgramReportedUnderDifferentKinds()
+    {
+        var appsFolder = new FakeCollector("appsfolder",
+        [
+            Make("appsfolder", "perfmon-aumid", "Performance Monitor", EntityKind.Application, LaunchKind.AppsFolder),
+        ]);
+
+        var controlPanel = new FakeCollector("controlpanel",
+        [
+            Make("controlpanel", @"c:\windows\system32\perfmon.msc", "Performance Monitor",
+                EntityKind.ManagementConsole, LaunchKind.Mmc, @"C:\Windows\system32\perfmon.msc"),
+            Make("controlpanel", @"c:\windows\system32\comexp.msc", "Component Services",
+                EntityKind.ManagementConsole, LaunchKind.Mmc, @"C:\Windows\system32\comexp.msc"),
+        ]);
+
+        using var store = new SqliteIndexStore(DbPath, VectorPath);
+        var builder = new IndexBuilder([appsFolder, controlPanel], new FakeProfiler(), new FakeEmbeddings(), store);
+
+        await builder.BuildAsync(IndexOptions.Default);
+
+        var all = await store.GetAllAsync();
+        Assert.Equal(2, all.Count);
+        Assert.Single(all, e => e.Entity.DisplayName == "Performance Monitor");
+        Assert.Single(all, e => e.Entity.DisplayName == "Component Services");
+    }
+
+    /// <summary>
+    /// Two records for one program, under two different names, with only the binary in common.
+    /// The AppsFolder addresses it by shell parsing name - a folder CLSID followed by the program
+    /// - which is not a path, so it never met the Start Menu shortcut that carries the full one.
+    /// "Windows Memory Diagnostic" and "Memory Diagnostics Tool" are both MdSched.exe.
+    /// </summary>
+    [Fact]
+    public async Task Build_DeduplicatesOneProgramReachedByShellParsingNameAndByPath()
+    {
+        // Any real program in the system directory demonstrates the rule; existence on disk is
+        // what the resolution turns on, so a fabricated name would prove nothing.
+        var system = Environment.GetFolderPath(Environment.SpecialFolder.System);
+        var program = Path.Combine(system, "charmap.exe");
+        Assert.True(File.Exists(program), $"expected {program} to exist on any Windows install");
+
+        var appsFolder = new FakeCollector("appsfolder",
+        [
+            Make("appsfolder", "charmap-shell", "Character Map", EntityKind.Application, LaunchKind.AppsFolder,
+                @"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\charmap.exe"),
+        ]);
+
+        var startMenu = new FakeCollector("startmenu",
+        [
+            Make("startmenu", @"c:\charmap.lnk", "Character Map Tool", EntityKind.Application, LaunchKind.Shortcut, program),
+        ]);
+
+        using var store = new SqliteIndexStore(DbPath, VectorPath);
+        var builder = new IndexBuilder([appsFolder, startMenu], new FakeProfiler(), new FakeEmbeddings(), store);
+
+        await builder.BuildAsync(IndexOptions.Default);
+
+        var all = await store.GetAllAsync();
+        var survivor = Assert.Single(all);
+        Assert.Equal("Character Map", survivor.Entity.DisplayName);
+    }
+
+    /// <summary>
+    /// The parsing-name rule resolves against the system directory and nowhere else. Two unrelated
+    /// installers both shipping a "setup.exe" must not collapse into one entry.
+    /// </summary>
+    [Fact]
+    public async Task Build_DoesNotCollapseUnrelatedProgramsSharingAFileName()
+    {
+        var collector = new FakeCollector("appsfolder",
+        [
+            Make("appsfolder", "a", "Contoso Setup", EntityKind.Application, LaunchKind.AppsFolder, @"{GUID-A}\setup.exe"),
+            Make("appsfolder", "b", "Fabrikam Setup", EntityKind.Application, LaunchKind.AppsFolder, @"{GUID-B}\setup.exe"),
+        ]);
+
+        using var store = new SqliteIndexStore(DbPath, VectorPath);
+        var builder = new IndexBuilder([collector], new FakeProfiler(), new FakeEmbeddings(), store);
+
+        await builder.BuildAsync(IndexOptions.Default);
+
+        Assert.Equal(2, (await store.GetAllAsync()).Count);
+    }
+
+    /// <summary>
     /// A forced rebuild clears the hash map used for skip decisions. Reusing that same cleared map
     /// to compute removals meant nothing was ever considered stale, so entities a collector had
     /// stopped producing lingered in the index indefinitely.
