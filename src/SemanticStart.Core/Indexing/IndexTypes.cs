@@ -22,11 +22,20 @@ public sealed record IndexResult
     public int Unchanged { get; init; }
     public int Removed { get; init; }
     public int Failed { get; init; }
+
+    /// <summary>
+    /// Why the first failure happened. Failures were previously written only to the debugger, so
+    /// a run in which every single entity failed to persist reported success and a plausible
+    /// count; the cause was only found by querying the database by hand.
+    /// </summary>
+    public string? FirstFailure { get; init; }
+
     public TimeSpan Duration { get; init; }
 
     public override string ToString() =>
         $"discovered {Discovered}, added {Added}, updated {Updated}, unchanged {Unchanged}, " +
-        $"removed {Removed}, failed {Failed} in {Duration.TotalSeconds:F1}s";
+        $"removed {Removed}, failed {Failed} in {Duration.TotalSeconds:F1}s" +
+        (Failed > 0 && FirstFailure is { Length: > 0 } reason ? $"{Environment.NewLine}first failure: {reason}" : string.Empty);
 }
 
 /// <summary>Knobs for a build pass.</summary>

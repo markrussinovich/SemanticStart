@@ -79,7 +79,7 @@ public sealed class IndexBuilder
             toProcess.Add(entity);
         }
 
-        var failed = await ProcessAsync(toProcess, options, progress, cancellationToken).ConfigureAwait(false);
+        var (failed, firstFailure) = await ProcessAsync(toProcess, options, progress, cancellationToken).ConfigureAwait(false);
 
         // Anything previously indexed but no longer discovered has been uninstalled, removed, or
         // collapsed into another entity by deduplication.
@@ -97,6 +97,7 @@ public sealed class IndexBuilder
             Unchanged = unchanged,
             Removed = stale.Length,
             Failed = failed,
+            FirstFailure = firstFailure,
             Duration = stopwatch.Elapsed,
         };
     }
@@ -453,18 +454,19 @@ public sealed class IndexBuilder
     /// serialized into batches after profiling rather than done per entity: the ONNX per-call
     /// overhead dominates the actual matrix multiply at this text length.
     /// </summary>
-    private async Task<int> ProcessAsync(
+    private async Task<(int Failed, string? FirstFailure)> ProcessAsync(
         IReadOnlyList<Entity> entities,
         IndexOptions options,
         IProgress<IndexProgress>? progress,
         CancellationToken cancellationToken)
     {
         if (entities.Count == 0)
-            return 0;
+            return (0, null);
 
         var profiled = new ConcurrentBag<(Entity Entity, IReadOnlyList<EnrichmentDocument> Docs, SynthesizedProfile Profile)>();
         var failed = 0;
         var completed = 0;
+        string? firstFailure = null;
 
         await Parallel.ForEachAsync(
             entities,
@@ -490,7 +492,8 @@ public sealed class IndexBuilder
                 catch (Exception ex)
                 {
                     Interlocked.Increment(ref failed);
-                    Debug.WriteLine($"Profiling failed for {entity.Id}: {ex.Message}");
+                    Interlocked.CompareExchange(ref firstFailure, $"profiling {entity.Id}: {ex.Message}", null);
+                    Debug.WriteLine($"Profiling failed for {entity.Id}: {ex}");
                 }
                 finally
                 {
@@ -547,7 +550,8 @@ public sealed class IndexBuilder
                 catch (Exception ex)
                 {
                     Interlocked.Increment(ref failed);
-                    Debug.WriteLine($"Persist failed for {entity.Id}: {ex.Message}");
+                    firstFailure ??= $"persisting {entity.Id}: {ex.Message}";
+                    Debug.WriteLine($"Persist failed for {entity.Id}: {ex}");
                 }
             }
 
@@ -560,6 +564,6 @@ public sealed class IndexBuilder
             });
         }
 
-        return failed;
+        return (failed, firstFailure);
     }
 }

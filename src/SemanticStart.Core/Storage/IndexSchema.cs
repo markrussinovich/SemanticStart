@@ -19,8 +19,12 @@ public static class IndexSchema
     /// previously kept only a one-line summary, so text like Wikipedia's "forcibly terminate
     /// processes" was fetched, used to pick a single sentence, and then thrown away - which is why
     /// Task Manager could not be found by "kill a process" no matter how good the enrichment was.
+    /// v5 added a features column carrying the interface labels read out of a program's own menu
+    /// and dialog resources. Prose about a tool describes its purpose; its menus state its
+    /// capabilities, and the two often share no vocabulary at all - nothing written about Process
+    /// Explorer mentions memory, while its View menu offers "Physical Memory History".
     /// </remarks>
-    public const int Version = 4;
+    public const int Version = 5;
 
     public static void Initialize(SqliteConnection connection)
     {
@@ -81,6 +85,7 @@ public static class IndexSchema
                 synonyms  TEXT NOT NULL DEFAULT '[]',
                 category  TEXT,
                 details   TEXT,
+                features  TEXT,
                 generator TEXT NOT NULL
             );
 
@@ -103,6 +108,7 @@ public static class IndexSchema
                 synonyms,
                 publisher,
                 details,
+                features,
                 tokenize = 'porter unicode61 remove_diacritics 2'
             );
             """);
@@ -110,7 +116,12 @@ public static class IndexSchema
 
     /// <summary>
     /// True when the stored schema version and embedding model both match what this build
-    /// expects. When false the caller must rebuild: stale vectors are worse than no vectors.
+    /// expects, and the tables on disk really have the shape that version implies.
+    ///
+    /// The recorded version is not trusted on its own. It is written at the end of startup, so a
+    /// build that failed to migrate still stamps the new number, and every subsequent run then
+    /// believes a stale table is current. Reading the columns back costs one query per table and
+    /// makes the check answer the question that actually matters.
     /// </summary>
     public static bool IsCompatible(SqliteConnection connection, string expectedModelId)
     {
@@ -118,7 +129,45 @@ public static class IndexSchema
         var model = GetMeta(connection, "embedding_model");
 
         return version == Version.ToString()
-               && string.Equals(model, expectedModelId, StringComparison.Ordinal);
+               && string.Equals(model, expectedModelId, StringComparison.Ordinal)
+               && HasCurrentShape(connection);
+    }
+
+    /// <summary>
+    /// True when every content table that exists carries at least the columns this build writes.
+    /// A table that does not exist yet is fine - Initialize is about to create it correctly.
+    /// </summary>
+    private static bool HasCurrentShape(SqliteConnection connection) =>
+        RequiredColumns.All(table => HasColumns(connection, table.Key, table.Value));
+
+    private static readonly Dictionary<string, string[]> RequiredColumns = new(StringComparer.Ordinal)
+    {
+        ["entities"] = ["id", "kind", "display_name", "launch_kind", "launch_target", "content_hash", "vector_ordinal"],
+        ["documents"] = ["entity_id", "provider", "is_online", "text"],
+        ["profiles"] = ["entity_id", "summary", "tasks", "synonyms", "category", "details", "features", "generator"],
+        ["entities_fts"] = ["entity_id", "display_name", "summary", "tasks", "synonyms", "publisher", "details", "features"],
+    };
+
+    private static bool HasColumns(SqliteConnection connection, string table, IReadOnlyList<string> required)
+    {
+        var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = $"PRAGMA table_info({table});";
+            try
+            {
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                    present.Add(reader.GetString(1));
+            }
+            catch (SqliteException)
+            {
+                return true;
+            }
+        }
+
+        // No rows means the table does not exist, which Initialize will put right.
+        return present.Count == 0 || required.All(present.Contains);
     }
 
     public static void SetMeta(SqliteConnection connection, string key, string value)
@@ -149,6 +198,40 @@ public static class IndexSchema
             DELETE FROM profiles;
             DELETE FROM documents;
             DELETE FROM entities;
+            """);
+    }
+
+    /// <summary>
+    /// Removes the content tables outright, so that <see cref="Initialize"/> recreates them at the
+    /// current shape. Required whenever the stored version does not match, because every statement
+    /// in Initialize is IF NOT EXISTS and would otherwise leave a table from an older version in
+    /// place, missing whatever columns were added since.
+    ///
+    /// Usage stats and the schema metadata are deliberately left alone: they are not derived from
+    /// the index, and a user's launch history is expensive to relearn.
+    /// </summary>
+    public static void DropContent(SqliteConnection connection)
+    {
+        Execute(connection, """
+            DROP TABLE IF EXISTS entities_fts;
+            DROP TABLE IF EXISTS profiles;
+            DROP TABLE IF EXISTS documents;
+            DROP TABLE IF EXISTS entities;
+            """);
+    }
+
+    /// <summary>
+    /// Creates just enough of the schema to read the stored version, so compatibility can be
+    /// decided before any table is created at the current shape.
+    /// </summary>
+    public static void EnsureMetaTable(SqliteConnection connection)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        Execute(connection, """
+            CREATE TABLE IF NOT EXISTS schema_info (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """);
     }
 
