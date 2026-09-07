@@ -6,6 +6,8 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Gives the exe its icon: taskbar, Alt+Tab, Explorer, and the shortcut the installer writes. -->
+    <ApplicationIcon>Assets\SemanticStart.ico</ApplicationIcon>
     <!--
       DPI awareness lives in the manifest because the OS applies it before any managed code runs;
       WinForms' ApplicationHighDpiMode is never applied here since a WPF app does not call
@@ -18,6 +20,15 @@
   <ItemGroup>
     <!-- The smoke test reads what the settings window is showing, without widening its public surface. -->
     <InternalsVisibleTo Include="SemanticStart.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Also embedded, not just stamped on the exe. The tray needs to choose the entry that matches
+      the current small-icon size, and reading it back out of the exe would give whatever single
+      size the shell felt like handing over.
+    -->
+    <Resource Include="Assets\SemanticStart.ico" />
   </ItemGroup>
 
   <ItemGroup>

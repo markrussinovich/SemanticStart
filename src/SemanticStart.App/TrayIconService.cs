@@ -19,7 +19,7 @@ public sealed class TrayIconService : IDisposable
         _notifyIcon = new Forms.NotifyIcon
         {
             Text = "SemanticStart",
-            Icon = Drawing.SystemIcons.Application,
+            Icon = AppIcon.LoadSmall(),
             Visible = true,
             ContextMenuStrip = menu,
         };
