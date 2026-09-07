@@ -27,11 +27,10 @@ On the Windows 11 machine these numbers were taken from:
 
 ## How it works
 
-```
-Collectors -> Enrichment -> Profile synthesis -> Embeddings -> SQLite + FTS5 + vectors
-                                                                |
-                        Win+Alt+Space --> Hybrid retrieval (vector | BM25 -> RRF) --> Overlay
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/pipeline-dark.svg">
+  <img alt="Indexing runs offline: collectors, enrichment, synthesis and embeddings build index.sqlite. Querying is local: Win+Alt+. runs a vector arm and a lexical BM25 arm in parallel over that index, fused by RRF into the overlay." src="docs/pipeline-light.svg">
+</picture>
 
 **Indexing (offline).** Eight collectors enumerate AppsFolder/MSIX apps, Start shortcuts, uninstall
 registry entries, `ms-settings:` pages, Control Panel applets and MMC snap-ins, Windows optional
