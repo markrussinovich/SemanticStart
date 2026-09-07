@@ -258,10 +258,17 @@ public sealed record RankingOptions
     /// scaling every score by category overturns those clear wins along with the ties it was meant
     /// to settle. Banding can only act where the arms were undecided.
     ///
-    /// Swept at 0.02, 0.05, 0.08, 0.12 and 0.20. 0.05 is the best the corpus has measured -
-    /// 56/61, MRR 0.870, top-1 83% - and wider bands trade cases for average rank as the
-    /// preference starts overruling real differences: 0.08 reaches MRR 0.873 and top-1 85% but
-    /// gives up a case, and by 0.20 it has given up three.
+    /// Swept twice, and the second sweep is the one to trust. The first ran against an index
+    /// built before duplicate entries were collapsed, and chose 0.05. Re-swept against the
+    /// rebuilt index at 0.0, 0.01, 0.02, 0.03, 0.05 and 0.08, the width turns out to buy nothing:
+    /// 56/61 at 0.0 and 0.01, then 56, 55, 55 and 54 as it widens. A band wide enough to cover
+    /// real score differences demotes correct third-party answers - at 0.05 "search the web" puts
+    /// Internet Information Services and Internet Explorer above Microsoft Edge, which is not
+    /// under the Windows directory and so does not read as an inbox app.
+    ///
+    /// Held at 0.01, which is the widest setting that costs nothing: it lets the preference
+    /// settle candidates the fusion scored to within a percent of each other - genuine ties,
+    /// where the arms expressed no opinion - and stays silent everywhere else.
     ///
     /// Zero disables the tiebreaker. It has to be handled as a special case rather than falling
     /// out of the arithmetic: a band of zero width would put every candidate in one band and hand
@@ -270,7 +277,7 @@ public sealed record RankingOptions
     /// Decided structurally by HybridSearchEngine.IsWindowsComponent; publisher is not consulted,
     /// because Word, Edge and Clipchamp all say Microsoft and none of them ship with Windows.
     /// </summary>
-    public double WindowsComponentTieBand { get; init; } = 0.05;
+    public double WindowsComponentTieBand { get; init; } = 0.01;
 
     /// <summary>
     /// Share of entities that must use a word before a partial-name match on it is fully
