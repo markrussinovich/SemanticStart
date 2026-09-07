@@ -250,14 +250,43 @@ public sealed class CliHelpEnricher : IEnricher
 
 internal static class ProcessRunner
 {
+    /// <summary>
+    /// Hard cap on captured output. A help screen is a few kilobytes; anything past this is a tool
+    /// that ignored its arguments and started doing work, and none of it is documentation.
+    /// </summary>
+    private const int MaxCapturedCharacters = 64 * 1024;
+
     public static async Task<(int ExitCode, string Output)> RunAsync(string fileName, IReadOnlyList<string> args, TimeSpan timeout, CancellationToken cancellationToken)
     {
         using var process = new Process();
         process.StartInfo = new ProcessStartInfo { FileName = fileName, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true, CreateNoWindow = true };
         foreach (var arg in args) process.StartInfo.ArgumentList.Add(arg);
+
+        // Standard output and standard error are delivered on two different threadpool threads, so
+        // the buffer they share has to be locked. Without this the two racing appends corrupt the
+        // builder's internal length and it throws "Destination is too short" from inside the event
+        // handler - on a threadpool thread, where there is nobody to catch it, so the whole index
+        // build dies partway through. It only shows up on tools that write to both streams at
+        // once, which made it look like an occasional bad tool rather than a bug here.
         var output = new StringBuilder();
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) output.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) output.AppendLine(e.Data); };
+        var gate = new object();
+
+        void Capture(string? line)
+        {
+            if (line is null)
+                return;
+
+            lock (gate)
+            {
+                if (output.Length >= MaxCapturedCharacters)
+                    return;
+
+                output.AppendLine(line);
+            }
+        }
+
+        process.OutputDataReceived += (_, e) => Capture(e.Data);
+        process.ErrorDataReceived += (_, e) => Capture(e.Data);
         process.Start();
         process.StandardInput.Close();
         process.BeginOutputReadLine();
@@ -267,9 +296,9 @@ internal static class ProcessRunner
         if (!finished)
         {
             try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-            return (-1, output.ToString());
+            lock (gate) return (-1, output.ToString());
         }
         await waitTask.ConfigureAwait(false);
-        return (process.ExitCode, output.ToString());
+        lock (gate) return (process.ExitCode, output.ToString());
     }
 }
