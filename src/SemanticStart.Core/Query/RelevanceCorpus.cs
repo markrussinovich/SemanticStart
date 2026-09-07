@@ -485,6 +485,19 @@ public static class RelevanceCorpus
         },
         new()
         {
+            Query = "save a note",
+            AcceptableResults = ["Sticky Notes", "Sticky Notes (new)", "OneNote", "Notepad"],
+            ForbiddenResults = ["DirectX Diagnostic Tool"],
+            Rationale = "Reported. DxDiag's harvested text says it 'can save text files with the scan results', "
+                + "which ties it with the lexical leader at 96% on a cosine of 0.015 - three per cent of the "
+                + "leader, the noise band MiniLM assigns to unrelated text. A shared word cannot outweigh the "
+                + "vector arm saying the two are unrelated, and the lexical-only path was reading a cosine that "
+                + "low as no opinion rather than as disagreement. No StableTrailingCharacters: 'not' is a "
+                + "negation, not a prefix of 'note' that stemming folds together, and it collapses the query's "
+                + "best cosine from 0.546 to 0.161 on its own.",
+        },
+        new()
+        {
             Query = "asdfghjkl",
             ExpectNoResults = true,
             Rationale = "A nonsense query should produce the empty-state path, not MiniLM noise.",

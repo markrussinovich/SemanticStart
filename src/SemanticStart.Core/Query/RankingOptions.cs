@@ -169,6 +169,22 @@ public sealed record RankingOptions
     public double MinLexicalOnlyLeaderRatio { get; init; } = 0.95;
 
     /// <summary>
+    /// Fraction of the query's best cosine below which a recorded cosine is read as the vector arm
+    /// actively disagreeing, rather than as the arm having no opinion.
+    ///
+    /// Cosines this far down are the noise band MiniLM assigns to unrelated text, so a candidate
+    /// sitting here has been *scored* and found unrelated. "save a note" ties DxDiag with the
+    /// lexical leader at 96% - its harvested text says the tool "can save text files with the scan
+    /// results" - on a cosine of 0.015, three per cent of a 0.546 leader.
+    ///
+    /// Deliberately far below <see cref="MinVectorScore"/> rather than level with it. Treating
+    /// every below-floor cosine as disagreement was measured and cost two cases: a cosine under
+    /// the retrieval floor is routinely a real but unranked reading, and only the noise band is
+    /// evidence of the opposite.
+    /// </summary>
+    public double SemanticContradictionLeaderRatio { get; init; } = 0.15;
+
+    /// <summary>
     /// Minimum literal-name strength that counts as independent evidence for surfacing. Exact,
     /// name-prefix, word-prefix, and acronym matches meet this; loose subsequence matches do not
     /// and are only allowed to break ties among candidates with other retrieval evidence.

@@ -520,9 +520,16 @@ public sealed class HybridSearchEngine : ISearchEngine
             // whether a cosine exists for it. Every candidate now carries a cosine - see Fuse -
             // and reading those as disagreement would turn recording evidence into a penalty,
             // which measured as two lost cases including the "edit" query this comment is about.
+            //
+            // The exception is the noise band. A cosine at a few per cent of the leader is not an
+            // unranked reading, it is the model reporting no relation at all, and a word the two
+            // texts happen to share cannot outweigh that. "save a note" ties DxDiag with the
+            // lexical leader because its documentation mentions saving text files, on a cosine of
+            // three per cent. See RankingOptions.SemanticContradictionLeaderRatio.
             && (!candidate.VectorRanked
                 || candidate.VectorScore is not { } tieVector
-                || tieVector >= vectorFloor))
+                || tieVector >= vectorFloor)
+            && !ContradictedBySemantics(candidate, topVector))
             return true;
 
         var relativeScore = topScore <= 0
@@ -601,6 +608,16 @@ public sealed class HybridSearchEngine : ISearchEngine
 
         return false;
     }
+
+    /// <summary>
+    /// Whether the vector arm scored this candidate down in the noise band, which is the arm
+    /// stating the candidate is unrelated rather than the arm having formed no view.
+    /// See <see cref="RankingOptions.SemanticContradictionLeaderRatio"/>.
+    /// </summary>
+    private bool ContradictedBySemantics(Candidate candidate, double topVector) =>
+        topVector > 0
+        && candidate.VectorScore is { } vector
+        && vector < topVector * _options.SemanticContradictionLeaderRatio;
 
     /// <summary>
     /// The bare command name an entity is launched by - "msinfo32" for System Information,
