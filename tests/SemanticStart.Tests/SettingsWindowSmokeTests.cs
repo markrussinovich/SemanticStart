@@ -83,8 +83,9 @@ public class SettingsWindowSmokeTests
             "The hotkey field was blank after rendering, so the active chord is invisible to the user.");
         Assert.Equal(new AppSettings().HotKey, hotKeyText);
 
-        // Six categories, six lines, and a bold value on every one of them. The counts are the
-        // reason to read this block, so a run-on line or an unbolded number is a regression.
+        // Six categories, six rows, and on every one a bold value in its own right-aligned column.
+        // The counts are the reason to read this block, so a run-on line, an unbolded number, or a
+        // count that starts wherever its label happened to end is a regression.
         Assert.Equal((6, 6), statsShape);
     }
 }

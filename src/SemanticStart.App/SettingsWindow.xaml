@@ -164,6 +164,14 @@
                         <TextBlock Text="Index" />
                         <TextBlock x:Name="IndexStatsText" Style="{StaticResource Caption}" Text="Reading index..."
                                    LineHeight="18" LineStackingStrategy="BlockLineHeight" />
+                        <!-- Counts live in their own right-aligned column so digits line up and can
+                             be compared down the list rather than read one line at a time. -->
+                        <Grid x:Name="IndexStatsGrid" Visibility="Collapsed" HorizontalAlignment="Left">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                        </Grid>
                         <TextBlock x:Name="ProgressText" Style="{StaticResource Caption}" Text="Ready" />
                         <ProgressBar x:Name="ProgressBar" Height="4" Minimum="0" Maximum="1" Margin="0,10,0,10"
                                      Background="{DynamicResource ItemHoverBrush}" Foreground="{DynamicResource AccentBrush}"

@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using SemanticStart.Core.Indexing;
 
@@ -198,20 +199,27 @@ public partial class SettingsWindow : Window
 
     /// <summary>
     /// What the stats block ended up showing, as (line count, bolded value count). Exposed so a
-    /// test can confirm the counts really are on separate lines and really are bold, which is the
-    /// whole point of building this as inlines instead of a formatted string.
+    /// test can confirm the counts really are on separate lines, really are bold, and really are
+    /// right-aligned in a column of their own, which is the whole point of building this as a grid
+    /// instead of a formatted string.
     /// </summary>
     internal (int Lines, int BoldValues) IndexStatsShape
     {
         get
         {
-            var inlines = IndexStatsText.Inlines.ToList();
-            if (inlines.Count == 0)
+            if (IndexStatsGrid.Visibility != Visibility.Visible)
                 return (IndexStatsText.Text.Length > 0 ? 1 : 0, 0);
 
-            var breaks = inlines.Count(i => i is LineBreak);
-            var bold = inlines.Count(i => i is Run run && run.FontWeight == FontWeights.SemiBold);
-            return (breaks + 1, bold);
+            var values = IndexStatsGrid.Children
+                .OfType<TextBlock>()
+                .Where(t => Grid.GetColumn(t) == 1)
+                .ToList();
+
+            var bold = values.Count(t =>
+                t.FontWeight == FontWeights.SemiBold
+                && t.HorizontalAlignment == System.Windows.HorizontalAlignment.Right);
+
+            return (IndexStatsGrid.RowDefinitions.Count, bold);
         }
     }
 
@@ -225,6 +233,11 @@ public partial class SettingsWindow : Window
         catch (Exception ex)
         {
             Log.Error(ex, "Failed to read index stats");
+            IndexStatsGrid.Children.Clear();
+            IndexStatsGrid.RowDefinitions.Clear();
+            IndexStatsGrid.Visibility = Visibility.Collapsed;
+            IndexStatsText.Visibility = Visibility.Visible;
+            IndexStatsText.Inlines.Clear();
             IndexStatsText.Text = "Index statistics unavailable.";
         }
     }
@@ -232,18 +245,27 @@ public partial class SettingsWindow : Window
     /// <summary>
     /// Lists what the index holds, one category per line with the count in bold.
     ///
-    /// Built as inlines rather than a formatted string because the counts are the part worth
-    /// scanning for, and a single run-on line hid them: the whole point of this block is to answer
-    /// "how much of my machine did it actually find" at a glance.
+    /// Laid out as a two-column grid rather than as lines of text because the counts are the part
+    /// worth scanning for. Labels vary in width, so counts set as "Label: 238" start at a
+    /// different horizontal position on every row and cannot be compared without reading each one;
+    /// giving them their own right-aligned column lines the digits up, which is what makes the
+    /// block answer "how much of my machine did it actually find" at a glance.
+    ///
+    /// The single-line states - empty index, read failure - stay in the TextBlock above, since
+    /// they are a sentence rather than a table.
     ///
     /// Separated from the read above so it can be exercised with known numbers.
     /// </summary>
     internal void RenderIndexStats(IndexStats stats)
     {
         IndexStatsText.Inlines.Clear();
+        IndexStatsGrid.Children.Clear();
+        IndexStatsGrid.RowDefinitions.Clear();
 
         if (stats.Total == 0)
         {
+            IndexStatsGrid.Visibility = Visibility.Collapsed;
+            IndexStatsText.Visibility = Visibility.Visible;
             IndexStatsText.Text = "Index is empty. Rebuild to populate it.";
             return;
         }
@@ -261,13 +283,37 @@ public partial class SettingsWindow : Window
         rows.Add(("Total entries", stats.Total.ToString("N0")));
         rows.Add(("Size on disk", stats.SizeDisplay));
 
+        IndexStatsText.Visibility = Visibility.Collapsed;
+        IndexStatsGrid.Visibility = Visibility.Visible;
+
+        var caption = (Style)FindResource("Caption");
+
         for (var i = 0; i < rows.Count; i++)
         {
-            if (i > 0)
-                IndexStatsText.Inlines.Add(new LineBreak());
+            IndexStatsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            IndexStatsText.Inlines.Add(new Run($"{rows[i].Label}: "));
-            IndexStatsText.Inlines.Add(new Run(rows[i].Value) { FontWeight = FontWeights.SemiBold });
+            var label = new TextBlock
+            {
+                Style = caption,
+                Text = rows[i].Label,
+                Margin = new Thickness(0, 0, 12, 0),
+            };
+
+            var value = new TextBlock
+            {
+                Style = caption,
+                Text = rows[i].Value,
+                FontWeight = FontWeights.SemiBold,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+            };
+
+            Grid.SetRow(label, i);
+            Grid.SetColumn(label, 0);
+            Grid.SetRow(value, i);
+            Grid.SetColumn(value, 1);
+
+            IndexStatsGrid.Children.Add(label);
+            IndexStatsGrid.Children.Add(value);
         }
     }
 
