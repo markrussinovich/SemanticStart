@@ -45,6 +45,13 @@ public interface IIndexStore : IDisposable
     Task<IReadOnlyList<IndexedEntity>> GetAllAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Every stored enrichment document, grouped by entity. Lets a rebuild carry forward the
+    /// providers it is not refreshing instead of collecting their text a second time.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, IReadOnlyList<EnrichmentDocument>>> GetDocumentsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The full embedding matrix, laid out row-major as [count x dimensions], with each row
     /// L2-normalized. Row i corresponds to the entity whose VectorOrdinal is i.
     /// </summary>

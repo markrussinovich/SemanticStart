@@ -47,6 +47,24 @@ public sealed record IndexOptions
     /// <summary>Ignore stored content hashes and reprocess everything.</summary>
     public bool ForceFullRebuild { get; init; }
 
+    /// <summary>
+    /// Providers whose documents are stale and must be gathered again. Everything else is read
+    /// back from the index instead of being collected a second time.
+    ///
+    /// A change to one enricher previously cost a full rebuild - six and a half minutes of
+    /// running every other enricher, most of them over the network, to arrive at the same text
+    /// they produced last time. What actually went stale is the output of one provider, and the
+    /// index already stores documents keyed by provider, so that is the unit that can be thrown
+    /// away and remade. Empty means the ordinary content-hash pass.
+    /// </summary>
+    public IReadOnlySet<string> RefreshProviders { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Rebuild profiles and lexical rows from documents already stored, running no enricher at
+    /// all. This is the pass for a change to synthesis or to the shape of the indexed text.
+    /// </summary>
+    public bool ReuseStoredDocuments { get; init; }
+
     /// <summary>Concurrency for the enrich/synthesize stage, which is I/O and process bound.</summary>
     public int EnrichmentConcurrency { get; init; } = Math.Max(2, Environment.ProcessorCount / 2);
 
@@ -67,4 +85,21 @@ public interface IEntityProfiler
         Entity entity,
         bool allowNetwork,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Profiles an entity while collecting as little as possible: documents already held are
+    /// reused, and an enricher only runs when its provider is named in
+    /// <paramref name="refreshProviders"/> or when nothing is held for it.
+    ///
+    /// Defaulted so that a profiler with nothing to reuse - a test fake, or one that does its own
+    /// caching - is unaffected.
+    /// </summary>
+    Task<(IReadOnlyList<EnrichmentDocument> Documents, SynthesizedProfile Profile)> ProfileAsync(
+        Entity entity,
+        bool allowNetwork,
+        IReadOnlyList<EnrichmentDocument> storedDocuments,
+        IReadOnlySet<string> refreshProviders,
+        bool reuseAll,
+        CancellationToken cancellationToken = default)
+        => ProfileAsync(entity, allowNetwork, cancellationToken);
 }

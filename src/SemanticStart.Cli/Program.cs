@@ -46,7 +46,9 @@ internal static class Program
         Console.WriteLine("""
             SemanticStart - semantic search over installed apps and Windows features
 
-              index [--online] [--force]              Build or refresh the index
+              index [--online] [--force]   Build or refresh the index
+              index --refresh <providers>  Re-run only the named enrichers (comma-separated,
+                                           or 'none'), reusing every other stored document
               search <query> [-n N]        Query the index
               eval                         Run the relevance harness
               stats                        Show index statistics
@@ -250,6 +252,36 @@ internal static class Program
         var allowNetwork = args.Contains("--online");
         var force = args.Contains("--force");
 
+        // --refresh <providers>  re-runs only the named enrichers, reusing every stored document
+        // for the rest. --refresh none reuses all of them, which is the pass for a synthesis or
+        // ranking-text change. Either way nothing is re-embedded unless its text actually moved.
+        var refresh = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var reuseAll = false;
+        for (var i = 1; i < args.Length - 1; i++)
+        {
+            if (args[i] is not "--refresh")
+                continue;
+
+            reuseAll = true;
+            foreach (var provider in args[i + 1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (!provider.Equals("none", StringComparison.OrdinalIgnoreCase))
+                    refresh.Add(provider);
+            }
+        }
+
+        if (reuseAll)
+        {
+            var known = EnricherRegistry.CreateAll().Select(e => e.Provider).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var unknown = refresh.Where(p => !known.Contains(p)).ToArray();
+            if (unknown.Length > 0)
+            {
+                Console.Error.WriteLine($"unknown provider(s): {string.Join(", ", unknown)}");
+                Console.Error.WriteLine($"known providers: {string.Join(", ", known.Order(StringComparer.Ordinal))}");
+                return 1;
+            }
+        }
+
         Console.WriteLine("Preparing embedding model...");
         var embeddings = await CreateEmbeddingModelAsync();
 
@@ -276,7 +308,13 @@ internal static class Program
             });
 
             var result = await builder.BuildAsync(
-                new IndexOptions { AllowNetwork = allowNetwork, ForceFullRebuild = force },
+                new IndexOptions
+                {
+                    AllowNetwork = allowNetwork,
+                    ForceFullRebuild = force,
+                    RefreshProviders = refresh,
+                    ReuseStoredDocuments = reuseAll,
+                },
                 progress);
 
             Console.WriteLine();

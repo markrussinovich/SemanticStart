@@ -232,6 +232,46 @@ public sealed partial class SqliteIndexStore : IIndexStore
         }
     }
 
+    public Task<IReadOnlyDictionary<string, IReadOnlyList<EnrichmentDocument>>> GetDocumentsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT entity_id, provider, is_online, text, source_uri, retrieved_at
+                FROM documents
+                ORDER BY entity_id;
+                """;
+
+            using var reader = cmd.ExecuteReader();
+            var results = new Dictionary<string, List<EnrichmentDocument>>(StringComparer.Ordinal);
+            while (reader.Read())
+            {
+                var entityId = reader.GetString(0);
+                if (!results.TryGetValue(entityId, out var list))
+                    results[entityId] = list = [];
+
+                list.Add(new EnrichmentDocument
+                {
+                    EntityId = entityId,
+                    Provider = reader.GetString(1),
+                    IsOnline = reader.GetInt32(2) != 0,
+                    Text = reader.GetString(3),
+                    SourceUri = GetNullableString(reader, 4),
+                    RetrievedAt = DateTimeOffset.TryParse(
+                        reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at)
+                        ? at
+                        : DateTimeOffset.UtcNow,
+                });
+            }
+
+            return Task.FromResult<IReadOnlyDictionary<string, IReadOnlyList<EnrichmentDocument>>>(
+                results.ToDictionary(p => p.Key, p => (IReadOnlyList<EnrichmentDocument>)p.Value, StringComparer.Ordinal));
+        }
+    }
+
     public Task<float[]> GetVectorMatrixAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();

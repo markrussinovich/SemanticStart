@@ -52,9 +52,19 @@ public sealed class IndexBuilder
         // strand entities that a collector or dedupe change stopped producing.
         var storedHashes = await _store.GetContentHashesAsync(cancellationToken).ConfigureAwait(false);
 
-        var existingHashes = options.ForceFullRebuild
+        // A refresh pass targets stale enrichment, not stale discovery: the content hash of an app
+        // whose menus we now read differently has not changed, so hash skipping would skip every
+        // entity and the pass would do nothing. Every discovered entity is reprocessed, but almost
+        // all of the work is reused.
+        var refreshing = options.ReuseStoredDocuments || options.RefreshProviders.Count > 0;
+
+        var existingHashes = options.ForceFullRebuild || refreshing
             ? new Dictionary<string, string>()
             : storedHashes;
+
+        var reuse = refreshing
+            ? await LoadReusableAsync(cancellationToken).ConfigureAwait(false)
+            : ReusableIndex.Empty;
 
         var added = 0;
         var updated = 0;
@@ -79,7 +89,7 @@ public sealed class IndexBuilder
             toProcess.Add(entity);
         }
 
-        var (failed, firstFailure) = await ProcessAsync(toProcess, options, progress, cancellationToken).ConfigureAwait(false);
+        var (failed, firstFailure) = await ProcessAsync(toProcess, options, reuse, progress, cancellationToken).ConfigureAwait(false);
 
         // Anything previously indexed but no longer discovered has been uninstalled, removed, or
         // collapsed into another entity by deduplication.
@@ -454,9 +464,47 @@ public sealed class IndexBuilder
     /// serialized into batches after profiling rather than done per entity: the ONNX per-call
     /// overhead dominates the actual matrix multiply at this text length.
     /// </summary>
+    /// <summary>
+    /// What a refresh pass can carry forward: the documents already gathered for each entity, and
+    /// the exact text that produced each stored vector.
+    ///
+    /// The second half is what makes a refresh cheap in the arm that a document reuse does not
+    /// help with. An entity whose embedding text comes out byte-identical would embed to the same
+    /// vector, so there is nothing to gain from computing it again - and <c>UpsertAsync</c>
+    /// already leaves the stored vector alone when it is handed none.
+    /// </summary>
+    private sealed record ReusableIndex
+    {
+        public static readonly ReusableIndex Empty = new();
+
+        public IReadOnlyDictionary<string, IReadOnlyList<EnrichmentDocument>> Documents { get; init; }
+            = new Dictionary<string, IReadOnlyList<EnrichmentDocument>>(StringComparer.Ordinal);
+
+        public IReadOnlyDictionary<string, string> EmbeddingTexts { get; init; }
+            = new Dictionary<string, string>(StringComparer.Ordinal);
+    }
+
+    private async Task<ReusableIndex> LoadReusableAsync(CancellationToken cancellationToken)
+    {
+        var documents = await _store.GetDocumentsAsync(cancellationToken).ConfigureAwait(false);
+        var indexed = await _store.GetAllAsync(cancellationToken).ConfigureAwait(false);
+
+        var texts = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var item in indexed)
+        {
+            if (item.Profile is null || item.VectorOrdinal is null)
+                continue;
+
+            texts[item.Entity.Id] = item.Profile.ToEmbeddingText(item.Entity);
+        }
+
+        return new ReusableIndex { Documents = documents, EmbeddingTexts = texts };
+    }
+
     private async Task<(int Failed, string? FirstFailure)> ProcessAsync(
         IReadOnlyList<Entity> entities,
         IndexOptions options,
+        ReusableIndex reuse,
         IProgress<IndexProgress>? progress,
         CancellationToken cancellationToken)
     {
@@ -479,8 +527,16 @@ public sealed class IndexBuilder
             {
                 try
                 {
+                    var stored = reuse.Documents.TryGetValue(entity.Id, out var cached) ? cached : [];
+
                     var (docs, profile) = await _profiler
-                        .ProfileAsync(entity, options.AllowNetwork, ct)
+                        .ProfileAsync(
+                            entity,
+                            options.AllowNetwork,
+                            stored,
+                            options.RefreshProviders,
+                            options.ReuseStoredDocuments,
+                            ct)
                         .ConfigureAwait(false);
 
                     profiled.Add((entity, docs, profile));
@@ -508,14 +564,34 @@ public sealed class IndexBuilder
                 }
             }).ConfigureAwait(false);
 
-        var items = profiled.ToArray();
+        var items = profiled
+            .Select(p => (p.Entity, p.Docs, p.Profile, Text: p.Profile.ToEmbeddingText(p.Entity)))
+            .ToArray();
+
         var persisted = 0;
 
-        foreach (var batch in items.Chunk(options.EmbeddingBatchSize))
+        // An entity whose embedding text is unchanged already has the right vector on disk.
+        // Handing UpsertAsync no embedding leaves it in place, so these skip the model entirely.
+        var unchangedIds = items
+            .Where(i => reuse.EmbeddingTexts.TryGetValue(i.Entity.Id, out var previous)
+                && string.Equals(previous, i.Text, StringComparison.Ordinal))
+            .Select(i => i.Entity.Id)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var item in items.Where(i => unchangedIds.Contains(i.Entity.Id)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await PersistAsync(item.Entity, item.Docs, item.Profile, null).ConfigureAwait(false);
+            persisted++;
+        }
+
+        var needsEmbedding = items.Where(i => !unchangedIds.Contains(i.Entity.Id)).ToArray();
+
+        foreach (var batch in needsEmbedding.Chunk(options.EmbeddingBatchSize))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var texts = batch.Select(b => b.Profile.ToEmbeddingText(b.Entity)).ToArray();
+            var texts = batch.Select(b => b.Text).ToArray();
 
             IReadOnlyList<float[]> vectors;
             try
@@ -535,24 +611,8 @@ public sealed class IndexBuilder
 
             for (var i = 0; i < batch.Length; i++)
             {
-                var (entity, docs, profile) = batch[i];
-                var vector = i < vectors.Count ? vectors[i] : null;
-
-                try
-                {
-                    await _store.UpsertAsync(entity, docs, profile, vector, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    Interlocked.Increment(ref failed);
-                    firstFailure ??= $"persisting {entity.Id}: {ex.Message}";
-                    Debug.WriteLine($"Persist failed for {entity.Id}: {ex}");
-                }
+                await PersistAsync(batch[i].Entity, batch[i].Docs, batch[i].Profile, i < vectors.Count ? vectors[i] : null)
+                    .ConfigureAwait(false);
             }
 
             persisted += batch.Length;
@@ -565,5 +625,23 @@ public sealed class IndexBuilder
         }
 
         return (failed, firstFailure);
+
+        async Task PersistAsync(Entity entity, IReadOnlyList<EnrichmentDocument> docs, SynthesizedProfile profile, float[]? vector)
+        {
+            try
+            {
+                await _store.UpsertAsync(entity, docs, profile, vector, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref failed);
+                firstFailure ??= $"persisting {entity.Id}: {ex.Message}";
+                Debug.WriteLine($"Persist failed for {entity.Id}: {ex}");
+            }
+        }
     }
 }
