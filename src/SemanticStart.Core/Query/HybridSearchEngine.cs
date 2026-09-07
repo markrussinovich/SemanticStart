@@ -111,12 +111,35 @@ public sealed class HybridSearchEngine : ISearchEngine
         var lexicalHits = await lexicalTask.ConfigureAwait(false);
 
         var fused = Fuse(snapshot, query, vectorArm, lexicalHits);
+        var surviving = PruneLowConfidence(fused);
 
-        return [.. PruneLowConfidence(fused)
-            .OrderByDescending(c => c.Score)
+        // Ordered by score band rather than by score, so that a preference for what Windows ships
+        // can break ties without ever overturning a decision the arms made clearly. See
+        // RankingOptions.WindowsComponentTieBand.
+        var best = surviving.Count > 0 ? surviving.Max(c => c.Score) : 0;
+        var tiebreak = _options.WindowsComponentTieBand > 0;
+
+        return [.. surviving
+            .OrderByDescending(c => ScoreBand(c.Score, best))
+            .ThenByDescending(c => tiebreak && IsWindowsComponent(c.Entity.Entity))
+            .ThenByDescending(c => c.Score)
             .ThenBy(c => c.Entity.Entity.DisplayName, StringComparer.OrdinalIgnoreCase)
             .Take(limit)
             .Select(ToHit)];
+    }
+
+    /// <summary>
+    /// Quantizes a score into bands of <see cref="RankingOptions.WindowsComponentTieBand"/> of the
+    /// best score in the result set. Two candidates in the same band are treated as having scored
+    /// the same, which is what lets a tiebreaker apply without producing an inconsistent ordering:
+    /// comparing scores pairwise "within a tolerance" is not transitive and cannot be sorted with.
+    /// </summary>
+    private int ScoreBand(double score, double best)
+    {
+        if (best <= 0 || _options.WindowsComponentTieBand <= 0)
+            return 0;
+
+        return (int)Math.Floor(score / (best * _options.WindowsComponentTieBand));
     }
 
     /// <summary>
@@ -357,6 +380,51 @@ public sealed class HybridSearchEngine : ISearchEngine
         }
 
         return [.. candidates.Values];
+    }
+
+    /// <summary>
+    /// True for entities Windows itself ships, as opposed to anything installed onto it.
+    ///
+    /// Decided structurally, never by naming programs. Five of the seven entity kinds only exist
+    /// because Windows defines them - a Settings page, a Control Panel applet, an MMC snap-in, an
+    /// optional feature and a System32 console tool cannot come from anywhere else - and for the
+    /// two mixed kinds the test is whether the thing being launched lives under the Windows
+    /// directory. Publisher is deliberately not consulted: Word, Edge and Clipchamp all say
+    /// Microsoft and none of them ship with Windows.
+    /// </summary>
+    private static bool IsWindowsComponent(Entity entity)
+    {
+        if (entity.Kind is EntityKind.SettingsPage
+            or EntityKind.ControlPanelApplet
+            or EntityKind.ManagementConsole
+            or EntityKind.OptionalFeature
+            or EntityKind.SystemTool)
+            return true;
+
+        if (entity.LaunchKind == LaunchKind.ControlPanel || entity.LaunchKind == LaunchKind.Mmc)
+            return true;
+
+        if (entity.LaunchKind == LaunchKind.Uri)
+            return entity.LaunchTarget.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase);
+
+        return IsUnderWindowsDirectory(entity.LaunchTarget)
+            || IsUnderWindowsDirectory(entity.IconSource);
+    }
+
+    private static readonly string WindowsDirectory =
+        Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+
+    private static bool IsUnderWindowsDirectory(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || WindowsDirectory.Length == 0)
+            return false;
+
+        // The launch target may be an AppUserModelId or a bare command name rather than a path;
+        // both simply fail this test, which is the intended answer for anything unresolvable.
+        return path.StartsWith(WindowsDirectory, StringComparison.OrdinalIgnoreCase)
+            && path.Length > WindowsDirectory.Length
+            && (path[WindowsDirectory.Length] == Path.DirectorySeparatorChar
+                || path[WindowsDirectory.Length] == Path.AltDirectorySeparatorChar);
     }
 
     /// <summary>

@@ -237,6 +237,40 @@ public sealed record RankingOptions
     /// </summary>
     public double UnlistedCommandPenalty { get; init; } = 0.65;
 
+    /// <summary>
+    /// Width of a score band, as a fraction of the best score in the result set. Candidates
+    /// landing in the same band are treated as having scored equally, and among them one that
+    /// Windows ships is listed first.
+    ///
+    /// The index draws from one machine's installed software, so for any given intent the
+    /// competition is uneven: an ordinary request is answered by one inbox app and by however many
+    /// third-party programs happen to be installed and to mention the same words. "edit doc"
+    /// answered with Python 3.12 Manuals, CMake Documentation and Documentation for Desktop
+    /// Apps - none of which edit anything - because "documentation" stems to "document" and there
+    /// are simply more of them. Being the answer that exists on every Windows machine is a
+    /// property of the entity rather than of the text it matched, so it belongs here rather than
+    /// in either arm, and it is only allowed to speak where the arms did not.
+    ///
+    /// Stated as a tiebreaker because the obvious form does not work. A score multiplier on the
+    /// same structural test was swept at 1.05, 1.10, 1.15, 1.20, 1.30 and 1.50 and lost ground at
+    /// every value, monotonically: 56/61 down to 54, 53, 53, 52, 50 and 48. A third-party app is
+    /// frequently the correct answer - Word for "edit doc", a browser for "search the web" - and
+    /// scaling every score by category overturns those clear wins along with the ties it was meant
+    /// to settle. Banding can only act where the arms were undecided.
+    ///
+    /// Swept at 0.02, 0.05, 0.08, 0.12 and 0.20. 0.05 is the best the corpus has measured -
+    /// 56/61, MRR 0.870, top-1 83% - and wider bands trade cases for average rank as the
+    /// preference starts overruling real differences: 0.08 reaches MRR 0.873 and top-1 85% but
+    /// gives up a case, and by 0.20 it has given up three.
+    ///
+    /// Zero disables the tiebreaker. It has to be handled as a special case rather than falling
+    /// out of the arithmetic: a band of zero width would put every candidate in one band and hand
+    /// the entire ordering to the tiebreaker, which measures 45/61.
+    ///
+    /// Decided structurally by HybridSearchEngine.IsWindowsComponent; publisher is not consulted,
+    /// because Word, Edge and Clipchamp all say Microsoft and none of them ship with Windows.
+    /// </summary>
+    public double WindowsComponentTieBand { get; init; } = 0.05;
 
     /// <summary>
     /// Share of entities that must use a word before a partial-name match on it is fully
