@@ -23,7 +23,13 @@ public sealed class TrayIconService : IDisposable
             Visible = true,
             ContextMenuStrip = menu,
         };
-        _notifyIcon.DoubleClick += (_, _) => overlay.Dispatcher.BeginInvoke(() => overlay.ShowOverlay());
+        // A single left click opens the overlay, which is what a launcher's tray icon is for.
+        // Right click still gets the menu, so nothing is lost.
+        _notifyIcon.MouseClick += (_, e) =>
+        {
+            if (e.Button == Forms.MouseButtons.Left)
+                overlay.Dispatcher.BeginInvoke(() => overlay.ShowOverlay());
+        };
     }
 
     /// <summary>Surfaces a notification through the tray icon.</summary>
