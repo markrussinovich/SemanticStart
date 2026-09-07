@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using SemanticStart.Core.Abstractions;
 using SemanticStart.Core.Model;
 
@@ -143,7 +144,7 @@ public sealed class OverlayViewModel : ObservableObject
     private readonly SemanticSearchService _searchService;
     private readonly IconProvider _iconProvider;
     private readonly AppSettings _settings;
-    private CancellationTokenSource? _debounceCts;
+    private readonly SearchDebouncer _debouncer;
 
     /// <summary>
     /// The query the visible results were produced from. Compared against the current text before
@@ -161,6 +162,9 @@ public sealed class OverlayViewModel : ObservableObject
         _searchService = searchService;
         _iconProvider = iconProvider;
         _settings = settings;
+        _debouncer = new SearchDebouncer(
+            TimeSpan.FromMilliseconds(settings.SearchDebounceMilliseconds),
+            IsEditingKeyHeldAsync);
     }
 
     public ObservableCollection<SearchResultItem> Results { get; } = [];
@@ -259,14 +263,13 @@ public sealed class OverlayViewModel : ObservableObject
         if (string.Equals(_resultsQuery, Query, StringComparison.Ordinal))
             return;
 
-        _debounceCts?.Cancel();
-        _debounceCts = null;
+        _debouncer.Cancel();
         await SearchNowAsync(Query, cancellationToken);
     }
 
     public void Clear()
     {
-        _debounceCts?.Cancel();
+        _debouncer.Cancel();
         _query = string.Empty;
         OnPropertyChanged(nameof(Query));
         Results.Clear();
@@ -276,35 +279,27 @@ public sealed class OverlayViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Ranking is only meaningful for a query the user has finished writing. Every prefix of a
-    /// word is itself a query, and an unfinished one is not a weaker version of the finished one -
-    /// it is a different question, matching different words and depressing every cosine at once.
-    /// Searching on each keystroke put that churn on screen: "edit do" and "edit doc" return two
-    /// results and seven, and watching a list rebuild itself letter by letter reads as broken.
-    ///
     /// Waiting for a pause spends latency the engine does not need - a query costs about 2.5 ms -
     /// to buy the appearance of a settled answer, which is what the user is actually reading. The
     /// wait is dead time only while the user is still typing, and Enter flushes it, so the cost is
-    /// never paid by someone who has finished.
+    /// never paid by someone who has finished. <see cref="SearchDebouncer"/> holds the reasoning
+    /// about when that pause has arrived.
     /// </summary>
-    private void DebounceSearch()
-    {
-        _debounceCts?.Cancel();
-        var cts = new CancellationTokenSource();
-        _debounceCts = cts;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(_settings.SearchDebounceMilliseconds, cts.Token);
-                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                    () => SearchNowAsync(Query, cts.Token)).Task.Unwrap();
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        });
-    }
+    private void DebounceSearch() =>
+        _debouncer.Schedule(token => System.Windows.Application.Current.Dispatcher
+            .InvokeAsync(() => SearchNowAsync(Query, token)).Task.Unwrap());
+
+    /// <summary>
+    /// Whether a key that edits text by repeating is down. Backspace and Delete are the whole set
+    /// in practice - a held character key produces "aaaaaa", which nobody types on purpose. Read
+    /// from the keyboard rather than tracked from key events, so that a key-up lost to a focus
+    /// change cannot leave the search waiting for a release that has already happened.
+    /// </summary>
+    private static async Task<bool> IsEditingKeyHeldAsync(CancellationToken cancellationToken) =>
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+            () => Keyboard.IsKeyDown(Key.Back) || Keyboard.IsKeyDown(Key.Delete),
+            DispatcherPriority.Input,
+            cancellationToken).Task;
 
     private async Task LoadIconsAsync(CancellationToken cancellationToken)
     {
