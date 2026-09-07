@@ -196,7 +196,7 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ScrollBar">
-                        <Border Background="Transparent" Padding="3,4">
+                        <Border x:Name="Root" Background="Transparent" Padding="3,4">
                             <Track x:Name="PART_Track" IsDirectionReversed="True">
                                 <Track.Thumb>
                                     <Thumb>
@@ -219,6 +219,15 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="Orientation" Value="Horizontal">
                                 <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False" />
+                            </Trigger>
+                            <!--
+                                Callers keep the bar permanently visible so it always occupies layout
+                                space and list rows never shift width as results come and go. Maximum
+                                is the scrollable extent, so zero means everything fits: hide the bar
+                                but keep the gap it reserved.
+                            -->
+                            <Trigger Property="Maximum" Value="0">
+                                <Setter TargetName="Root" Property="Opacity" Value="0" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
