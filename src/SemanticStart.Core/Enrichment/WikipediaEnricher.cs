@@ -222,8 +222,13 @@ public sealed class WikipediaEnricher : IEnricher
     /// already appear in the entity's own metadata - its publisher, or the install path that
     /// produced it - so the vendor is established from the machine rather than assumed, and
     /// "Adobe Photoshop" cannot attach itself to an unrelated "Photoshop" entry from someone else.
+    ///
+    /// The evidence is matched as whole words. Matching it as raw text let a two-letter prefix
+    /// corroborate itself out of the middle of an unrelated word: "ES File Explorer" - an Android
+    /// file manager pulled from Google Play for click fraud - was accepted as the article for
+    /// Windows' File Explorer, because "es" occurs inside "files" in its own description.
     /// </summary>
-    private static bool IsVendorPrefixed(string key, string wanted, string title, Entity entity)
+    internal static bool IsVendorPrefixed(string key, string wanted, string title, Entity entity)
     {
         if (!key.EndsWith(wanted, StringComparison.Ordinal) || key.Length == wanted.Length)
             return false;
@@ -232,16 +237,46 @@ public sealed class WikipediaEnricher : IEnricher
         if (prefix.Length is 0 or > 20)
             return false;
 
-        var evidence = string.Join(
+        var evidence = EvidenceWords(entity);
+
+        return prefix
+            .Split([' ', '-'], StringSplitOptions.RemoveEmptyEntries)
+            .All(evidence.Contains);
+    }
+
+    /// <summary>
+    /// Every word the machine itself says about an entity.
+    ///
+    /// Identifiers run words together - the only place Notepad's own metadata says "Windows" is
+    /// inside the package id "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App" - so compound words are
+    /// split at their internal capitals as well as at punctuation. Without that, requiring whole
+    /// words would reject the vendor prefixes this is meant to accept.
+    /// </summary>
+    private static HashSet<string> EvidenceWords(Entity entity)
+    {
+        var words = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var text = string.Join(
             ' ',
             new[] { entity.Publisher, entity.LaunchTarget }
                 .Concat(entity.RawMetadata.Values)
                 .Where(v => !string.IsNullOrWhiteSpace(v)));
 
-        return prefix
-            .Split([' ', '-'], StringSplitOptions.RemoveEmptyEntries)
-            .All(word => evidence.Contains(word, StringComparison.OrdinalIgnoreCase));
+        foreach (Match token in TokenRegex.Matches(text))
+        {
+            words.Add(token.Value);
+            foreach (var part in CamelBoundaryRegex.Split(token.Value))
+            {
+                if (part.Length > 0)
+                    words.Add(part);
+            }
+        }
+
+        return words;
     }
+
+    private static readonly Regex TokenRegex = new(@"[\p{L}\p{N}]+", RegexOptions.Compiled);
+    private static readonly Regex CamelBoundaryRegex = new(@"(?<=[\p{Ll}\p{N}])(?=\p{Lu})", RegexOptions.Compiled);
 
     private static IEnumerable<string> Queries(Entity entity)
     {
