@@ -165,24 +165,6 @@ is either "no arm retrieved it" or "an arm retrieved it and a surfacing floor re
 fixes, indistinguishable from outside. It runs the query twice against one snapshot, once with the
 shipped floors and once with every floor disabled, and diffs the two.
 
-## Why a hotkey, and not the Start key
-
-**Windows exposes no supported API for adding local results to Start search.** The only official
-extension point is the web search provider model, which is web-results-only and EEA-only. Products
-that genuinely replace the Start menu do it by injecting into or patching `explorer.exe`, which
-breaks on feature updates and trips security software. SemanticStart does not do this.
-
-So the overlay is opened by a global hotkey registered with `RegisterHotKey`, and that is the only
-activation path. Your Start menu is untouched and keeps working exactly as it did.
-
-An earlier version also offered, opt-in, to take over a solo Windows key press using a
-`WH_KEYBOARD_LL` hook. **That has been removed.** A low-level keyboard hook sits in the input path of
-every keystroke on the machine, cannot see input while an elevated window has focus, is silently
-dropped by Windows when it exceeds `LowLevelHooksTimeout`, and is the shape of thing security
-software objects to. That is a large, permanently load-bearing risk to the user's keyboard in
-exchange for saving one modifier. `RegisterHotKey` has none of those properties: the shell either
-delivers the message or it does not, and nothing else in the system is affected.
-
 ## Privacy
 
 Queries never leave the machine. The only network traffic is the one-time embedding model download
