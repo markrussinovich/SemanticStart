@@ -16,22 +16,25 @@
         </Style>
         <Style TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
         </Style>
         <Style x:Key="Caption" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
-            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontFamily" Value="{DynamicResource UiFontSmall}" />
+            <Setter Property="FontSize" Value="{DynamicResource CaptionFontSize}" />
             <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="Margin" Value="0,3,0,0" />
         </Style>
         <Style TargetType="CheckBox">
             <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontFamily" Value="{DynamicResource UiFont}" />
+            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style TargetType="RadioButton">
             <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontFamily" Value="{DynamicResource UiFont}" />
+            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="Margin" Value="0,0,0,4" />
         </Style>
@@ -45,7 +48,8 @@
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Margin="0,0,0,14">
-            <TextBlock Text="Set up SemanticStart" FontSize="20" FontWeight="SemiBold"
+            <TextBlock Text="Set up SemanticStart" FontFamily="{DynamicResource UiFontDisplay}"
+                       FontSize="{DynamicResource SubtitleFontSize}" FontWeight="SemiBold"
                        Foreground="{DynamicResource HeaderTextBrush}" />
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
                        Text="SemanticStart builds a searchable index of your apps, settings, and built-in Windows tools so you can find them by describing what you want. These choices affect how good that index is, so they are asked before it is built." />

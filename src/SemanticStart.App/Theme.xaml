@@ -2,37 +2,62 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=System.Runtime">
         <!--
-            Light-theme defaults. ThemeService overwrites every one of these at startup and again
-            whenever the system switches between light and dark, so anything that should follow the
-            system must bind with DynamicResource.
+            Light-theme defaults, taken from the Windows 11 (WinUI) common colour set so the app
+            reads as system UI rather than an approximation of it. The comment after each key names
+            the Windows resource it mirrors. ThemeService overwrites every one of these at startup
+            and again whenever the system switches between light and dark, so anything that should
+            follow the system must bind with DynamicResource.
         -->
-        <SolidColorBrush x:Key="PanelBrush" Color="#F3F3F3" />
-        <SolidColorBrush x:Key="PanelBorderBrush" Color="#14000000" />
-        <SolidColorBrush x:Key="HeaderTextBrush" Color="#E4000000" />
-        <SolidColorBrush x:Key="PrimaryTextBrush" Color="#E4000000" />
-        <SolidColorBrush x:Key="SecondaryTextBrush" Color="#9B000000" />
-        <SolidColorBrush x:Key="SearchBoxBrush" Color="#FBFBFB" />
-        <SolidColorBrush x:Key="SearchBoxBorderBrush" Color="#30000000" />
-        <SolidColorBrush x:Key="ItemHoverBrush" Color="#0A000000" />
-        <SolidColorBrush x:Key="ItemSelectedBrush" Color="#14000000" />
-        <SolidColorBrush x:Key="IconBackplateBrush" Color="#08000000" />
-        <SolidColorBrush x:Key="BadgeBrush" Color="#0C000000" />
-        <SolidColorBrush x:Key="DividerBrush" Color="#0F000000" />
-        <SolidColorBrush x:Key="ScrollBarThumbBrush" Color="#72000000" />
-        <SolidColorBrush x:Key="ScrollBarThumbHoverBrush" Color="#9B000000" />
-        <SolidColorBrush x:Key="ScrollBarButtonHoverBrush" Color="#0A000000" />
-        <SolidColorBrush x:Key="AccentBrush" Color="#005FB8" />
+        <SolidColorBrush x:Key="PanelBrush" Color="#F9F9F9" />                   <!-- AcrylicBackgroundFillColorDefaultFallback -->
+        <SolidColorBrush x:Key="PanelBorderBrush" Color="#0F000000" />           <!-- SurfaceStrokeColorFlyout -->
+        <SolidColorBrush x:Key="HeaderTextBrush" Color="#E4000000" />            <!-- TextFillColorPrimary -->
+        <SolidColorBrush x:Key="PrimaryTextBrush" Color="#E4000000" />           <!-- TextFillColorPrimary -->
+        <SolidColorBrush x:Key="SecondaryTextBrush" Color="#9E000000" />         <!-- TextFillColorSecondary -->
+        <SolidColorBrush x:Key="TertiaryTextBrush" Color="#72000000" />          <!-- TextFillColorTertiary -->
+        <SolidColorBrush x:Key="DisabledTextBrush" Color="#5C000000" />          <!-- TextFillColorDisabled -->
+        <SolidColorBrush x:Key="TextOnAccentBrush" Color="#FFFFFF" />            <!-- TextOnAccentFillColorPrimary -->
+        <SolidColorBrush x:Key="SearchBoxBrush" Color="#B3FFFFFF" />             <!-- ControlFillColorDefault -->
+        <SolidColorBrush x:Key="InputActiveBrush" Color="#FFFFFF" />             <!-- ControlFillColorInputActive -->
+        <SolidColorBrush x:Key="SearchBoxBorderBrush" Color="#0F000000" />       <!-- ControlStrokeColorDefault -->
+        <SolidColorBrush x:Key="ControlStrongStrokeBrush" Color="#72000000" />   <!-- ControlStrongStrokeColorDefault -->
+        <SolidColorBrush x:Key="FocusStrokeBrush" Color="#E4000000" />           <!-- FocusStrokeColorOuter -->
+        <SolidColorBrush x:Key="ItemHoverBrush" Color="#09000000" />             <!-- SubtleFillColorSecondary -->
+        <SolidColorBrush x:Key="ItemSelectedBrush" Color="#0F000000" />          <!-- ListViewItemBackgroundSelected -->
+        <SolidColorBrush x:Key="IconBackplateBrush" Color="#06000000" />         <!-- ControlAltFillColorSecondary -->
+        <SolidColorBrush x:Key="BadgeBrush" Color="#0A000000" />                 <!-- ControlAltFillColorTertiary -->
+        <SolidColorBrush x:Key="DividerBrush" Color="#0F000000" />               <!-- DividerStrokeColorDefault -->
+        <SolidColorBrush x:Key="ScrollBarThumbBrush" Color="#72000000" />        <!-- ControlStrongFillColorDefault -->
+        <SolidColorBrush x:Key="ScrollBarThumbHoverBrush" Color="#9E000000" />   <!-- ScrollBarPanningThumbBackground -->
+        <SolidColorBrush x:Key="ScrollBarButtonHoverBrush" Color="#09000000" />  <!-- SubtleFillColorSecondary -->
+        <SolidColorBrush x:Key="AccentBrush" Color="#0067C0" />                  <!-- AccentFillColorDefault (SystemAccentColorDark1) -->
+        <SolidColorBrush x:Key="AccentHoverBrush" Color="#E60067C0" />           <!-- AccentFillColorSecondary -->
+        <SolidColorBrush x:Key="AccentPressedBrush" Color="#CC0067C0" />         <!-- AccentFillColorTertiary -->
+        <SolidColorBrush x:Key="AccentTextBrush" Color="#003E92" />              <!-- AccentTextFillColorPrimary -->
         <Color x:Key="ShadowColor">#000000</Color>
         <sys:Double x:Key="ShadowOpacity">0.28</sys:Double>
 
+        <!--
+            Windows 11 type ramp. Segoe UI Variable ships three optical sizes and the system picks
+            between them by point size rather than using one face everywhere: Small below 14px,
+            Text for body copy, Display from 18px up. Matching that split is most of what makes
+            text look like it belongs to the shell.
+        -->
+        <FontFamily x:Key="UiFontSmall">Segoe UI Variable Small, Segoe UI</FontFamily>
         <FontFamily x:Key="UiFont">Segoe UI Variable Text, Segoe UI</FontFamily>
+        <FontFamily x:Key="UiFontDisplay">Segoe UI Variable Display, Segoe UI</FontFamily>
+        <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+
+        <sys:Double x:Key="CaptionFontSize">12</sys:Double>
+        <sys:Double x:Key="BodyFontSize">14</sys:Double>
+        <sys:Double x:Key="BodyLargeFontSize">18</sys:Double>
+        <sys:Double x:Key="SubtitleFontSize">20</sys:Double>
 
         <!-- Windows 11 subtle button: transparent until hovered. -->
         <Style x:Key="SubtleButton" TargetType="Button">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
-            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+            <Setter Property="FontFamily" Value="{DynamicResource IconFont}" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -60,7 +85,7 @@
             <Setter Property="BorderBrush" Value="{DynamicResource SearchBoxBorderBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
             <Setter Property="FontFamily" Value="{DynamicResource UiFont}" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
             <Setter Property="Padding" Value="16,7" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
@@ -86,9 +111,36 @@
             </Setter>
         </Style>
 
+        <!--
+            Accent button. Windows dims the accent fill on hover and press instead of tinting it,
+            and the label follows TextOnAccentFillColorPrimary, which is black in dark mode because
+            the accent lightens there.
+        -->
         <Style x:Key="AccentButton" TargetType="Button" BasedOn="{StaticResource FluentButton}">
             <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentPressedBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <!--
@@ -98,7 +150,7 @@
         <Style x:Key="FluentComboBoxItem" TargetType="ComboBoxItem">
             <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
             <Setter Property="FontFamily" Value="{DynamicResource UiFont}" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
             <Setter Property="Padding" Value="10,7" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -125,7 +177,7 @@
             <Setter Property="Background" Value="{DynamicResource SearchBoxBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource SearchBoxBorderBrush}" />
             <Setter Property="FontFamily" Value="{DynamicResource UiFont}" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
             <Setter Property="Padding" Value="11,6" />
             <Setter Property="ItemContainerStyle" Value="{StaticResource FluentComboBoxItem}" />
             <Setter Property="Template">
@@ -146,7 +198,7 @@
                                                 </Grid.ColumnDefinitions>
                                                 <ContentPresenter Grid.Column="0" />
                                                 <TextBlock Grid.Column="1" Text="&#xE70D;" FontSize="10" Margin="8,0,11,0"
-                                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                           FontFamily="{DynamicResource IconFont}"
                                                            VerticalAlignment="Center"
                                                            Foreground="{DynamicResource SecondaryTextBrush}" />
                                             </Grid>

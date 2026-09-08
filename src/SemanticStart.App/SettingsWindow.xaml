@@ -19,23 +19,25 @@
         </Style>
         <Style TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
         </Style>
         <Style x:Key="Caption" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
-            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontFamily" Value="{DynamicResource UiFontSmall}" />
+            <Setter Property="FontSize" Value="{DynamicResource CaptionFontSize}" />
             <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="Margin" Value="0,3,0,0" />
         </Style>
         <Style x:Key="SectionHeader" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource HeaderTextBrush}" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Margin" Value="2,14,0,8" />
         </Style>
         <Style TargetType="CheckBox">
             <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontFamily" Value="{DynamicResource UiFont}" />
+            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style TargetType="TextBox">
@@ -44,7 +46,7 @@
             <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
             <Setter Property="CaretBrush" Value="{DynamicResource PrimaryTextBrush}" />
             <Setter Property="FontFamily" Value="{DynamicResource UiFont}" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
             <Setter Property="Padding" Value="11,7" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Template">
@@ -53,11 +55,25 @@
                         <Border x:Name="Bd" Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="6">
-                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" />
+                            <Grid>
+                                <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" />
+                                <!--
+                                    Windows marks a text field with a stroke along its bottom edge -
+                                    stronger than the surrounding border at rest, and an accent line
+                                    twice as thick once focused - rather than recolouring the whole
+                                    outline.
+                                -->
+                                <Border x:Name="BottomLine" Height="1" VerticalAlignment="Bottom"
+                                        CornerRadius="0,0,6,6" Background="{DynamicResource ControlStrongStrokeBrush}" />
+                                <Border x:Name="FocusLine" Height="2" VerticalAlignment="Bottom"
+                                        CornerRadius="0,0,6,6" Background="{DynamicResource AccentBrush}" Visibility="Collapsed" />
+                            </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource InputActiveBrush}" />
+                                <Setter TargetName="BottomLine" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="FocusLine" Property="Visibility" Value="Visible" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.5" />
@@ -78,10 +94,13 @@
 
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="2,0,0,10">
             <Border Width="22" Height="22" CornerRadius="5" Background="{DynamicResource AccentBrush}">
-                <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
-                           Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                <TextBlock Text="&#xE721;" FontFamily="{DynamicResource IconFont}" FontSize="12"
+                           Foreground="{DynamicResource TextOnAccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
             </Border>
-            <TextBlock Text="SemanticStart" FontSize="20" FontWeight="SemiBold" Margin="10,0,0,0" VerticalAlignment="Center" />
+            <!-- Subtitle sizes use Segoe UI Variable Display, the face Windows switches to at 18px. -->
+            <TextBlock Text="SemanticStart" FontFamily="{DynamicResource UiFontDisplay}"
+                       FontSize="{DynamicResource SubtitleFontSize}" FontWeight="SemiBold" Margin="10,0,0,0"
+                       VerticalAlignment="Center" />
         </StackPanel>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
@@ -190,7 +209,8 @@
         </ScrollViewer>
 
         <Grid Grid.Row="2" Margin="0,14,0,0">
-            <TextBlock x:Name="VersionText" VerticalAlignment="Center" HorizontalAlignment="Left" FontSize="12"
+            <TextBlock x:Name="VersionText" VerticalAlignment="Center" HorizontalAlignment="Left"
+                       FontFamily="{DynamicResource UiFontSmall}" FontSize="{DynamicResource CaptionFontSize}"
                        Foreground="{DynamicResource SecondaryTextBrush}" />
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button x:Name="SaveButton" Content="Save" Width="100" Margin="0,0,8,0" Style="{StaticResource AccentButton}" Click="SaveButton_Click" />

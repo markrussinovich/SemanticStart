@@ -106,49 +106,71 @@ public static class ThemeService
         try
         {
             IsDarkMode = ReadIsDarkMode();
-            var accent = ReadAccentColor(IsDarkMode);
+            var accent = ReadAccentColors(IsDarkMode);
             var resources = _application.Resources;
 
             if (IsDarkMode)
             {
-                Set(resources, "PanelBrush", Rgb(0x2C, 0x2C, 0x2C));
-                Set(resources, "PanelBorderBrush", Argb(0x18, 0xFF, 0xFF, 0xFF));
-                Set(resources, "HeaderTextBrush", Argb(0xFF, 0xFF, 0xFF, 0xFF));
-                Set(resources, "PrimaryTextBrush", Argb(0xFF, 0xFF, 0xFF, 0xFF));
-                Set(resources, "SecondaryTextBrush", Argb(0xC5, 0xFF, 0xFF, 0xFF));
-                Set(resources, "SearchBoxBrush", Argb(0x0F, 0xFF, 0xFF, 0xFF));
-                Set(resources, "SearchBoxBorderBrush", Argb(0x18, 0xFF, 0xFF, 0xFF));
-                Set(resources, "ItemHoverBrush", Argb(0x0F, 0xFF, 0xFF, 0xFF));
-                Set(resources, "ItemSelectedBrush", Argb(0x1A, 0xFF, 0xFF, 0xFF));
-                Set(resources, "IconBackplateBrush", Argb(0x0F, 0xFF, 0xFF, 0xFF));
-                Set(resources, "BadgeBrush", Argb(0x14, 0xFF, 0xFF, 0xFF));
-                Set(resources, "DividerBrush", Argb(0x14, 0xFF, 0xFF, 0xFF));
-                Set(resources, "ScrollBarThumbBrush", Argb(0x8B, 0xFF, 0xFF, 0xFF));
+                // Values mirror the Windows 11 (WinUI) dark common colours; the comments name the
+                // system resource each one stands in for.
+                Set(resources, "PanelBrush", Rgb(0x2C, 0x2C, 0x2C));                     // AcrylicBackgroundFillColorDefaultFallback
+                Set(resources, "PanelBorderBrush", Argb(0x33, 0x00, 0x00, 0x00));        // SurfaceStrokeColorFlyout
+                Set(resources, "HeaderTextBrush", Argb(0xFF, 0xFF, 0xFF, 0xFF));         // TextFillColorPrimary
+                Set(resources, "PrimaryTextBrush", Argb(0xFF, 0xFF, 0xFF, 0xFF));        // TextFillColorPrimary
+                Set(resources, "SecondaryTextBrush", Argb(0xC5, 0xFF, 0xFF, 0xFF));      // TextFillColorSecondary
+                Set(resources, "TertiaryTextBrush", Argb(0x87, 0xFF, 0xFF, 0xFF));       // TextFillColorTertiary
+                Set(resources, "DisabledTextBrush", Argb(0x5D, 0xFF, 0xFF, 0xFF));       // TextFillColorDisabled
+                Set(resources, "SearchBoxBrush", Argb(0x0F, 0xFF, 0xFF, 0xFF));          // ControlFillColorDefault
+                Set(resources, "InputActiveBrush", Argb(0xFF, 0x1F, 0x1F, 0x1F));        // ControlFillColorInputActive
+                Set(resources, "SearchBoxBorderBrush", Argb(0x12, 0xFF, 0xFF, 0xFF));    // ControlStrokeColorDefault
+                Set(resources, "ControlStrongStrokeBrush", Argb(0x8B, 0xFF, 0xFF, 0xFF));// ControlStrongStrokeColorDefault
+                Set(resources, "FocusStrokeBrush", Argb(0xFF, 0xFF, 0xFF, 0xFF));        // FocusStrokeColorOuter
+                Set(resources, "ItemHoverBrush", Argb(0x0F, 0xFF, 0xFF, 0xFF));          // SubtleFillColorSecondary
+                Set(resources, "ItemSelectedBrush", Argb(0x16, 0xFF, 0xFF, 0xFF));       // ListViewItemBackgroundSelected
+                Set(resources, "IconBackplateBrush", Argb(0x0F, 0xFF, 0xFF, 0xFF));      // ControlAltFillColorSecondary
+                Set(resources, "BadgeBrush", Argb(0x12, 0xFF, 0xFF, 0xFF));              // ControlAltFillColorTertiary
+                Set(resources, "DividerBrush", Argb(0x15, 0xFF, 0xFF, 0xFF));            // DividerStrokeColorDefault
+                Set(resources, "ScrollBarThumbBrush", Argb(0x8B, 0xFF, 0xFF, 0xFF));     // ControlStrongFillColorDefault
                 Set(resources, "ScrollBarThumbHoverBrush", Argb(0xC5, 0xFF, 0xFF, 0xFF));
                 Set(resources, "ScrollBarButtonHoverBrush", Argb(0x0F, 0xFF, 0xFF, 0xFF));
                 resources["ShadowOpacity"] = 0.60;
             }
             else
             {
-                Set(resources, "PanelBrush", Rgb(0xF3, 0xF3, 0xF3));
-                Set(resources, "PanelBorderBrush", Argb(0x14, 0x00, 0x00, 0x00));
-                Set(resources, "HeaderTextBrush", Argb(0xE4, 0x00, 0x00, 0x00));
-                Set(resources, "PrimaryTextBrush", Argb(0xE4, 0x00, 0x00, 0x00));
-                Set(resources, "SecondaryTextBrush", Argb(0x9B, 0x00, 0x00, 0x00));
-                Set(resources, "SearchBoxBrush", Rgb(0xFB, 0xFB, 0xFB));
-                Set(resources, "SearchBoxBorderBrush", Argb(0x30, 0x00, 0x00, 0x00));
-                Set(resources, "ItemHoverBrush", Argb(0x0A, 0x00, 0x00, 0x00));
-                Set(resources, "ItemSelectedBrush", Argb(0x14, 0x00, 0x00, 0x00));
-                Set(resources, "IconBackplateBrush", Argb(0x08, 0x00, 0x00, 0x00));
-                Set(resources, "BadgeBrush", Argb(0x0C, 0x00, 0x00, 0x00));
-                Set(resources, "DividerBrush", Argb(0x0F, 0x00, 0x00, 0x00));
-                Set(resources, "ScrollBarThumbBrush", Argb(0x72, 0x00, 0x00, 0x00));
-                Set(resources, "ScrollBarThumbHoverBrush", Argb(0x9B, 0x00, 0x00, 0x00));
-                Set(resources, "ScrollBarButtonHoverBrush", Argb(0x0A, 0x00, 0x00, 0x00));
+                Set(resources, "PanelBrush", Rgb(0xF9, 0xF9, 0xF9));                     // AcrylicBackgroundFillColorDefaultFallback
+                Set(resources, "PanelBorderBrush", Argb(0x0F, 0x00, 0x00, 0x00));        // SurfaceStrokeColorFlyout
+                Set(resources, "HeaderTextBrush", Argb(0xE4, 0x00, 0x00, 0x00));         // TextFillColorPrimary
+                Set(resources, "PrimaryTextBrush", Argb(0xE4, 0x00, 0x00, 0x00));        // TextFillColorPrimary
+                Set(resources, "SecondaryTextBrush", Argb(0x9E, 0x00, 0x00, 0x00));      // TextFillColorSecondary
+                Set(resources, "TertiaryTextBrush", Argb(0x72, 0x00, 0x00, 0x00));       // TextFillColorTertiary
+                Set(resources, "DisabledTextBrush", Argb(0x5C, 0x00, 0x00, 0x00));       // TextFillColorDisabled
+                Set(resources, "SearchBoxBrush", Argb(0xB3, 0xFF, 0xFF, 0xFF));          // ControlFillColorDefault
+                Set(resources, "InputActiveBrush", Argb(0xFF, 0xFF, 0xFF, 0xFF));        // ControlFillColorInputActive
+                Set(resources, "SearchBoxBorderBrush", Argb(0x0F, 0x00, 0x00, 0x00));    // ControlStrokeColorDefault
+                Set(resources, "ControlStrongStrokeBrush", Argb(0x72, 0x00, 0x00, 0x00));// ControlStrongStrokeColorDefault
+                Set(resources, "FocusStrokeBrush", Argb(0xE4, 0x00, 0x00, 0x00));        // FocusStrokeColorOuter
+                Set(resources, "ItemHoverBrush", Argb(0x09, 0x00, 0x00, 0x00));          // SubtleFillColorSecondary
+                Set(resources, "ItemSelectedBrush", Argb(0x0F, 0x00, 0x00, 0x00));       // ListViewItemBackgroundSelected
+                Set(resources, "IconBackplateBrush", Argb(0x06, 0x00, 0x00, 0x00));      // ControlAltFillColorSecondary
+                Set(resources, "BadgeBrush", Argb(0x0A, 0x00, 0x00, 0x00));              // ControlAltFillColorTertiary
+                Set(resources, "DividerBrush", Argb(0x0F, 0x00, 0x00, 0x00));            // DividerStrokeColorDefault
+                Set(resources, "ScrollBarThumbBrush", Argb(0x72, 0x00, 0x00, 0x00));     // ControlStrongFillColorDefault
+                Set(resources, "ScrollBarThumbHoverBrush", Argb(0x9E, 0x00, 0x00, 0x00));
+                Set(resources, "ScrollBarButtonHoverBrush", Argb(0x09, 0x00, 0x00, 0x00));
                 resources["ShadowOpacity"] = 0.28;
             }
 
-            Set(resources, "AccentBrush", accent);
+            Set(resources, "AccentBrush", accent.Fill);
+            // Windows dims the accent fill for hover and press rather than tinting it.
+            Set(resources, "AccentHoverBrush", Argb(0xE6, accent.Fill.R, accent.Fill.G, accent.Fill.B));
+            Set(resources, "AccentPressedBrush", Argb(0xCC, accent.Fill.R, accent.Fill.G, accent.Fill.B));
+            Set(resources, "AccentTextBrush", accent.Text);
+            // The accent lightens in dark mode, so the label on top of it turns black there. That
+            // inversion is what TextOnAccentFillColorPrimary does, and skipping it is one of the
+            // most visible ways an app stops looking like the shell.
+            Set(resources, "TextOnAccentBrush", IsDarkMode
+                ? Argb(0xFF, 0x00, 0x00, 0x00)
+                : Argb(0xFF, 0xFF, 0xFF, 0xFF));
 
             // DropShadowEffect.Color takes a Color, not a Brush, so this one cannot go through
             // the brush helper above.
@@ -182,14 +204,46 @@ public static class ThemeService
     }
 
     /// <summary>
-    /// Reads the user's accent colour and nudges it toward legibility against the panel. The raw
-    /// DWM accent is chosen for window chrome, and on its own it can be too dark to read on a dark
-    /// surface or too light on a light one.
+    /// Reads the accent colours Windows itself uses for UI.
+    ///
+    /// The value under DWM\AccentColor is the window-chrome accent, and it is the wrong one to
+    /// paint controls with: on a dark surface it is often too dark to read, and on a light one too
+    /// light. Windows solves this by shipping a whole ramp - three lighter and three darker shades
+    /// of the same hue - in Explorer\Accent\AccentPalette, and WinUI picks from it by theme. Doing
+    /// the same here gives exactly the accent the rest of the shell shows, rather than an
+    /// approximation of it.
     /// </summary>
-    private static Color ReadAccentColor(bool isDark)
+    private static (Color Fill, Color Text) ReadAccentColors(bool isDark)
     {
-        var accent = isDark ? Color.FromRgb(0x4C, 0xC2, 0xFF) : Color.FromRgb(0x00, 0x5F, 0xB8);
+        // Defaults are the shades of the stock blue accent, for the rare machine with no palette.
+        var fill = isDark ? Color.FromRgb(0x4C, 0xC2, 0xFF) : Color.FromRgb(0x00, 0x67, 0xC0);
+        var text = isDark ? Color.FromRgb(0x99, 0xEB, 0xFF) : Color.FromRgb(0x00, 0x3E, 0x92);
 
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent");
+
+            if (key?.GetValue("AccentPalette") is byte[] palette && palette.Length >= 32)
+            {
+                // Eight RGBA entries, lightest first: light3, light2, light1, accent, dark1,
+                // dark2, dark3, and a complement the shell uses elsewhere.
+                Color Shade(int index) =>
+                    Color.FromRgb(palette[index * 4], palette[(index * 4) + 1], palette[(index * 4) + 2]);
+
+                // AccentFillColorDefault: light2 on dark, dark1 on light.
+                fill = isDark ? Shade(1) : Shade(4);
+                // AccentTextFillColorPrimary: light3 on dark, dark2 on light.
+                text = isDark ? Shade(0) : Shade(5);
+                return (fill, text);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Reading the Windows accent palette failed");
+        }
+
+        // No palette, so derive the ramp from the chrome accent the same way Windows would.
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\DWM");
@@ -199,7 +253,10 @@ public static class ThemeService
                 var r = (byte)(packed & 0xFF);
                 var g = (byte)((packed >> 8) & 0xFF);
                 var b = (byte)((packed >> 16) & 0xFF);
-                accent = Blend(Color.FromRgb(r, g, b), isDark ? Colors.White : Colors.Black, isDark ? 0.35 : 0.15);
+                var baseColor = Color.FromRgb(r, g, b);
+
+                fill = Blend(baseColor, isDark ? Colors.White : Colors.Black, isDark ? 0.35 : 0.15);
+                text = Blend(baseColor, isDark ? Colors.White : Colors.Black, isDark ? 0.60 : 0.35);
             }
         }
         catch (Exception ex)
@@ -207,7 +264,7 @@ public static class ThemeService
             Log.Error(ex, "Reading the system accent colour failed");
         }
 
-        return accent;
+        return (fill, text);
     }
 
     private static Color Blend(Color from, Color to, double amount)

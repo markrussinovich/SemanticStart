@@ -7,7 +7,7 @@
         <DataTemplate x:Key="KeyChipTemplate">
             <Border Background="{DynamicResource AccentBrush}" CornerRadius="4"
                     Padding="9,4" Margin="3,0,0,0" MinWidth="30">
-                <TextBlock Text="{Binding}" Foreground="White" FontSize="13"
+                <TextBlock Text="{Binding}" Foreground="{DynamicResource TextOnAccentBrush}" FontSize="13"
                            FontFamily="{DynamicResource UiFont}"
                            HorizontalAlignment="Center" VerticalAlignment="Center" />
             </Border>

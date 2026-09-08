@@ -27,7 +27,7 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="ToggleButton">
                         <Border x:Name="Bd" Background="Transparent" CornerRadius="4">
-                            <TextBlock x:Name="Glyph" Text="&#xE70D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                            <TextBlock x:Name="Glyph" Text="&#xE70D;" FontFamily="{DynamicResource IconFont}"
                                        FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center"
                                        Foreground="{TemplateBinding Foreground}" />
                         </Border>
@@ -50,15 +50,19 @@
         </Style>
 
         <!--
-            Search field templated by hand so it can carry a Windows 11 corner radius, a focus
-            underline in the accent colour, and inline placeholder text.
+            Search field templated by hand so it can carry a Windows 11 corner radius, the system
+            focus underline, and inline placeholder text. Windows keeps a stronger stroke along the
+            bottom edge of a text field at rest and swaps it for a 2px accent line on focus, while
+            the fill brightens to ControlFillColorInputActive; all three together are what make a
+            box read as a system input.
         -->
         <Style x:Key="SearchTextBox" TargetType="TextBox">
             <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
             <Setter Property="CaretBrush" Value="{DynamicResource PrimaryTextBrush}" />
             <Setter Property="Background" Value="{DynamicResource SearchBoxBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource SearchBoxBorderBrush}" />
-            <Setter Property="FontSize" Value="15" />
+            <Setter Property="FontFamily" Value="{DynamicResource UiFont}" />
+            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
             <Setter Property="Padding" Value="12,9" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -70,7 +74,7 @@
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                <TextBlock Grid.Column="0" Text="&#xE721;" FontFamily="{DynamicResource IconFont}"
                                            FontSize="15" Margin="12,0,0,0" VerticalAlignment="Center"
                                            Foreground="{DynamicResource SecondaryTextBrush}" />
                                 <Grid Grid.Column="1">
@@ -86,6 +90,8 @@
                                     <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
                                                   VerticalAlignment="Center" />
                                 </Grid>
+                                <Border x:Name="BottomLine" Grid.ColumnSpan="2" Height="1" VerticalAlignment="Bottom"
+                                        CornerRadius="0,0,6,6" Background="{DynamicResource ControlStrongStrokeBrush}" />
                                 <Border x:Name="FocusLine" Grid.ColumnSpan="2" Height="2" VerticalAlignment="Bottom"
                                         CornerRadius="0,0,6,6" Background="{DynamicResource AccentBrush}" Visibility="Collapsed" />
                             </Grid>
@@ -96,6 +102,8 @@
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
                                 <Setter TargetName="FocusLine" Property="Visibility" Value="Visible" />
+                                <Setter TargetName="BottomLine" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource InputActiveBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -124,10 +132,10 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Border Width="18" Height="18" CornerRadius="4" Background="{DynamicResource AccentBrush}"
                             VerticalAlignment="Center">
-                        <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="10"
-                                   Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock Text="&#xE721;" FontFamily="{DynamicResource IconFont}" FontSize="10"
+                                   Foreground="{DynamicResource TextOnAccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
-                    <TextBlock Text="SemanticStart" FontSize="14" FontWeight="SemiBold" Margin="9,0,0,0"
+                    <TextBlock Text="SemanticStart" FontSize="{DynamicResource BodyFontSize}" FontWeight="SemiBold" Margin="9,0,0,0"
                                VerticalAlignment="Center" Foreground="{DynamicResource HeaderTextBrush}" />
                 </StackPanel>
             </Grid>
@@ -163,7 +171,7 @@
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
                                             <!-- Fluent selection indicator: an accent pill on the leading edge. -->
-                                            <Border x:Name="Indicator" Width="3" Height="20" CornerRadius="1.5"
+                                            <Border x:Name="Indicator" Width="3" Height="16" CornerRadius="1.5"
                                                     Background="{DynamicResource AccentBrush}" Visibility="Collapsed"
                                                     HorizontalAlignment="Left" VerticalAlignment="Center" Margin="-4,0,0,0" />
                                             <ContentPresenter Grid.Column="1" />
@@ -181,15 +189,17 @@
                                             Down moves the arrows from the query to the list, and on the first press
                                             the highlight is already where it is going. Outlining the row is what
                                             makes that press visible, and afterwards says which of the two the arrow
-                                            keys are steering.
+                                            keys are steering. Windows draws that outline as a keyboard focus stroke
+                                            rather than in the accent colour, and the pill grows to the full-height
+                                            form the shell uses for a focused selection.
                                         -->
                                         <MultiDataTrigger>
                                             <MultiDataTrigger.Conditions>
                                                 <Condition Binding="{Binding IsSelected, RelativeSource={RelativeSource Self}}" Value="True" />
                                                 <Condition Binding="{Binding DataContext.IsResultsActive, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True" />
                                             </MultiDataTrigger.Conditions>
-                                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-                                            <Setter TargetName="Indicator" Property="Height" Value="28" />
+                                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource FocusStrokeBrush}" />
+                                            <Setter TargetName="Indicator" Property="Height" Value="24" />
                                         </MultiDataTrigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -216,20 +226,24 @@
                                             Visibility="{Binding Icon, Converter={StaticResource IconMissing}}" />
                                     <Image Source="{Binding Icon}" Width="26" Height="26" RenderOptions.BitmapScalingMode="HighQuality"
                                            Visibility="{Binding Icon, Converter={StaticResource IconVisible}}" />
-                                    <TextBlock Text="{Binding FallbackGlyph}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                    <TextBlock Text="{Binding FallbackGlyph}" FontFamily="{DynamicResource IconFont}"
                                                FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                Foreground="{DynamicResource SecondaryTextBrush}"
                                                Visibility="{Binding Icon, Converter={StaticResource IconMissing}}" />
                                 </Grid>
                                 <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding DisplayName}" FontSize="14" Foreground="{DynamicResource PrimaryTextBrush}"
+                                    <TextBlock Text="{Binding DisplayName}" FontSize="{DynamicResource BodyFontSize}"
+                                               Foreground="{DynamicResource PrimaryTextBrush}"
                                                TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{Binding Summary}" FontSize="12" Foreground="{DynamicResource SecondaryTextBrush}"
+                                    <TextBlock Text="{Binding Summary}" FontFamily="{DynamicResource UiFontSmall}"
+                                               FontSize="{DynamicResource CaptionFontSize}" Foreground="{DynamicResource SecondaryTextBrush}"
                                                TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="{DynamicResource BadgeBrush}" CornerRadius="4" Padding="7,2"
                                         VerticalAlignment="Center" Margin="8,0,0,0">
-                                    <TextBlock Text="{Binding KindBadge}" FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" />
+                                    <TextBlock Text="{Binding KindBadge}" FontFamily="{DynamicResource UiFontSmall}"
+                                               FontSize="{DynamicResource CaptionFontSize}"
+                                               Foreground="{DynamicResource PrimaryTextBrush}" />
                                 </Border>
                                 <ToggleButton Grid.Column="3" x:Name="DetailsToggle" Style="{StaticResource ChevronToggle}"
                                               IsChecked="{Binding IsExpanded, Mode=TwoWay}"
@@ -242,22 +256,29 @@
                                     Background="{DynamicResource BadgeBrush}"
                                     Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVisible}}">
                                 <StackPanel>
-                                    <TextBlock Text="{Binding DetailSummary}" TextWrapping="Wrap" FontSize="12"
+                                    <TextBlock Text="{Binding DetailSummary}" TextWrapping="Wrap"
+                                               FontFamily="{DynamicResource UiFontSmall}" FontSize="{DynamicResource CaptionFontSize}"
                                                Visibility="{Binding HasDetailSummary, Converter={StaticResource BoolToVisible}}"
                                                Foreground="{DynamicResource PrimaryTextBrush}" />
                                     <ItemsControl ItemsSource="{Binding Tasks}" Margin="0,6,0,0"
                                                   Visibility="{Binding HasTasks, Converter={StaticResource BoolToVisible}}">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <TextBlock Text="{Binding}" FontSize="11" TextWrapping="Wrap" Margin="0,1"
-                                                           Foreground="{DynamicResource SecondaryTextBrush}" />
+                                                <TextBlock Text="{Binding}" FontFamily="{DynamicResource UiFontSmall}"
+                                                           FontSize="{DynamicResource CaptionFontSize}"
+                                                           TextWrapping="Wrap" Margin="0,1"
+                                                           Foreground="{DynamicResource PrimaryTextBrush}" />
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
-                                    <TextBlock Text="{Binding Provenance}" FontSize="11" Margin="0,6,0,0" TextTrimming="CharacterEllipsis"
+                                    <TextBlock Text="{Binding Provenance}" FontFamily="{DynamicResource UiFontSmall}"
+                                               FontSize="{DynamicResource CaptionFontSize}"
+                                               Margin="0,6,0,0" TextTrimming="CharacterEllipsis"
                                                Visibility="{Binding HasProvenance, Converter={StaticResource BoolToVisible}}"
                                                Foreground="{DynamicResource SecondaryTextBrush}" />
-                                    <TextBlock Text="{Binding LaunchTarget}" FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
+                                    <TextBlock Text="{Binding LaunchTarget}" FontFamily="{DynamicResource UiFontSmall}"
+                                               FontSize="{DynamicResource CaptionFontSize}"
+                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
                                                Visibility="{Binding HasLaunchTarget, Converter={StaticResource BoolToVisible}}"
                                                Foreground="{DynamicResource SecondaryTextBrush}" />
                                 </StackPanel>
@@ -273,7 +294,8 @@
                 <Button x:Name="SettingsButton" Style="{StaticResource SubtleButton}" HorizontalAlignment="Left"
                         Width="32" Height="32" FontSize="15" Content="&#xE713;" ToolTip="Settings"
                         Click="SettingsButton_Click" />
-                <TextBlock Text="{Binding Status}" Foreground="{DynamicResource SecondaryTextBrush}" FontSize="12"
+                <TextBlock Text="{Binding Status}" Foreground="{DynamicResource SecondaryTextBrush}"
+                           FontFamily="{DynamicResource UiFontSmall}" FontSize="{DynamicResource CaptionFontSize}"
                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="40,0,4,0" />
             </Grid>
         </Grid>
