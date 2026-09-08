@@ -168,18 +168,19 @@ shipped floors and once with every floor disabled, and diffs the two.
 
 ### Local MCP server
 
-`SemanticStart.Mcp` lets an LLM search and inspect the existing SemanticStart index through the
-[Model Context Protocol](https://modelcontextprotocol.io/). It is a read-only stdio server: the MCP
-client launches it as a child process, and it never opens a TCP port or modifies the index.
+`SemanticStart.App.exe --mcp` lets an LLM search and inspect the existing SemanticStart index
+through the [Model Context Protocol](https://modelcontextprotocol.io/). The same process starts the
+normal SemanticStart tray app, hotkey, and overlay while serving a read-only stdio MCP connection.
+It never opens a TCP port or modifies the index through MCP.
 
 #### Prerequisites
 
-1. Run the SemanticStart desktop app and let its first index build finish. This creates
+1. Run SemanticStart once and let its first index build finish. This creates
    `%LOCALAPPDATA%\SemanticStart\index.sqlite`, `vectors.bin`, and the local embedding model.
-2. Build the MCP server:
+2. Build the app:
 
 ```powershell
-dotnet build src\SemanticStart.Mcp\SemanticStart.Mcp.csproj -c Release
+dotnet build src\SemanticStart.App\SemanticStart.App.csproj -c Release
 ```
 
 Configure an MCP client to launch the built DLL. The surrounding configuration property varies by
@@ -188,16 +189,19 @@ client, but the server entry itself has this shape:
 ```json
 {
   "semanticstart": {
-    "command": "dotnet",
-    "args": [
-      "C:\\path\\to\\SemanticStart\\src\\SemanticStart.Mcp\\bin\\Release\\net10.0-windows\\SemanticStart.Mcp.dll"
-    ]
+    "command": "C:\\path\\to\\SemanticStart\\src\\SemanticStart.App\\bin\\Release\\net10.0-windows\\SemanticStart.App.exe",
+    "args": ["--mcp"]
   }
 }
 ```
 
-For development, the command can instead be `dotnet` with arguments
-`["run", "--project", "C:\\path\\to\\SemanticStart\\src\\SemanticStart.Mcp"]`.
+For development, use `dotnet` with arguments
+`["run", "--project", "C:\\path\\to\\SemanticStart\\src\\SemanticStart.App", "--", "--mcp"]`.
+
+If the tray app is not running, the MCP-launched process starts both the tray app and server. If a
+tray instance already owns the hotkey, the new process serves only that client's stdio connection
+and leaves the existing app in place. Closing the MCP connection ends the process it launched;
+multiple clients can therefore use independent sessions without creating duplicate tray icons.
 
 #### Tools
 
@@ -218,9 +222,9 @@ Launch targets, icon paths, source URIs, and raw collector metadata can reveal m
 paths. They are excluded by default and returned only when the caller opts in through
 `includeLaunchInfo`, `includeSourceUri`, or `includeRawMetadata`.
 
-The MCP process reads the index with SQLite's read-only mode and shares it safely with the desktop
-app's WAL-backed indexer. It keeps a search snapshot in memory; call `refresh_index` after a rebuild
-to make a running MCP process see the new contents. If the index or model is missing or incompatible,
+The MCP side reads the index with SQLite's read-only mode and shares it safely with the app's
+WAL-backed indexer. It keeps a search snapshot in memory; call `refresh_index` after a rebuild to
+make the MCP tools see the new contents. If the index or model is missing or incompatible,
 `get_index_status` reports it as unavailable rather than creating or replacing anything.
 
 The server itself performs no network requests. The MCP client may still send tool results to its
@@ -242,8 +246,7 @@ data: it lives in `%LOCALAPPDATA%\SemanticStart` and is ignored by source contro
 |---|---|
 | `src/SemanticStart.Core` | Collectors, enrichment, synthesis, embeddings, storage, retrieval |
 | `src/SemanticStart.Cli` | Diagnostic CLI (`index`, `search`, `eval`, `stats`, `enrich`, `diagnose`) |
-| `src/SemanticStart.Mcp` | Read-only local stdio MCP server over the index |
-| `src/SemanticStart.App` | WPF overlay, activation, tray icon, settings |
+| `src/SemanticStart.App` | WPF overlay, activation, tray icon, settings, and `--mcp` stdio server mode |
 | `tests/SemanticStart.Tests` | Unit and regression tests |
 | `tools/make-icon.ps1` | Redraws the app icon (`src/SemanticStart.App/Assets/SemanticStart.ico`) |
 

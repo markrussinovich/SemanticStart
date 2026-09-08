@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ModelContextProtocol.Server;
@@ -6,7 +7,7 @@ using SemanticStart.Core.Abstractions;
 using SemanticStart.Core.Model;
 using SemanticStart.Core.Query;
 
-namespace SemanticStart.Mcp;
+namespace SemanticStart.App;
 
 [McpServerToolType]
 public static class SemanticStartTools

@@ -15,6 +15,8 @@ public partial class App : System.Windows.Application
     private SettingsWindow? _settingsWindow;
     private Mutex? _instanceMutex;
     private EventWaitHandle? _activateSignal;
+    private CancellationTokenSource? _mcpCancellation;
+    private Task? _mcpTask;
     private volatile bool _shuttingDown;
 
     private const string ActivateSignalName = @"Local\SemanticStart.Activate";
@@ -26,19 +28,28 @@ public partial class App : System.Windows.Application
         Log.Initialize();
         InstallCrashLogging();
         ThemeService.Initialize(this);
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+        var mcpMode = e.Args.Any(a => string.Equals(a, "--mcp", StringComparison.OrdinalIgnoreCase));
+        if (mcpMode)
+        {
+            _mcpCancellation = new CancellationTokenSource();
+            _mcpTask = RunMcpServerAsync(e.Args, _mcpCancellation.Token);
+            _ = ShutdownWhenMcpEndsAsync(_mcpTask);
+        }
 
         if (e.Args.Any(a => string.Equals(a, "--selftest", StringComparison.OrdinalIgnoreCase)))
         {
-            ShutdownMode = ShutdownMode.OnExplicitShutdown;
             var code = await RunSelfTestAsync();
             Shutdown(code);
             return;
         }
 
-        ShutdownMode = ShutdownMode.OnExplicitShutdown;
-
-        if (!TryAcquireSingleInstance())
+        if (!TryAcquireSingleInstance(activateExisting: !mcpMode))
         {
+            if (mcpMode)
+                return;
+
             // Another copy owns the hotkey; hand the activation over to it and get out of the way.
             Shutdown();
             return;
@@ -111,7 +122,7 @@ public partial class App : System.Windows.Application
     /// while appearing to be running. Instead the second instance asks the first to show itself
     /// and then exits, which also gives "run it again" the behaviour users expect from a launcher.
     /// </summary>
-    private bool TryAcquireSingleInstance()
+    private bool TryAcquireSingleInstance(bool activateExisting)
     {
         try
         {
@@ -119,7 +130,7 @@ public partial class App : System.Windows.Application
 
             if (!createdNew)
             {
-                if (EventWaitHandle.TryOpenExisting(ActivateSignalName, out var existing))
+                if (activateExisting && EventWaitHandle.TryOpenExisting(ActivateSignalName, out var existing))
                 {
                     existing.Set();
                     existing.Dispose();
@@ -168,6 +179,7 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _mcpCancellation?.Cancel();
         _trayIconService?.Dispose();
         _rebuilds?.Dispose();
         _activationManager?.Dispose();
@@ -175,8 +187,31 @@ public partial class App : System.Windows.Application
         _shuttingDown = true;
         _activateSignal?.Dispose();
         _instanceMutex?.Dispose();
+        _mcpCancellation?.Dispose();
         ThemeService.Shutdown();
         base.OnExit(e);
+    }
+
+    private static async Task RunMcpServerAsync(string[] args, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await McpServerHost.RunAsync(args, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "MCP server failed");
+            Console.Error.WriteLine($"SemanticStart MCP server failed: {ex.Message}");
+        }
+    }
+
+    private async Task ShutdownWhenMcpEndsAsync(Task mcpTask)
+    {
+        await mcpTask;
+        await Dispatcher.InvokeAsync(Shutdown);
     }
 
     private async Task WarmStartAsync(AppSettings settings)
