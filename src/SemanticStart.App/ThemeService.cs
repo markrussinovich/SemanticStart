@@ -123,6 +123,9 @@ public static class ThemeService
                 Set(resources, "IconBackplateBrush", Argb(0x0F, 0xFF, 0xFF, 0xFF));
                 Set(resources, "BadgeBrush", Argb(0x14, 0xFF, 0xFF, 0xFF));
                 Set(resources, "DividerBrush", Argb(0x14, 0xFF, 0xFF, 0xFF));
+                Set(resources, "ScrollBarThumbBrush", Argb(0x8B, 0xFF, 0xFF, 0xFF));
+                Set(resources, "ScrollBarThumbHoverBrush", Argb(0xC5, 0xFF, 0xFF, 0xFF));
+                Set(resources, "ScrollBarButtonHoverBrush", Argb(0x0F, 0xFF, 0xFF, 0xFF));
                 resources["ShadowOpacity"] = 0.60;
             }
             else
@@ -139,6 +142,9 @@ public static class ThemeService
                 Set(resources, "IconBackplateBrush", Argb(0x08, 0x00, 0x00, 0x00));
                 Set(resources, "BadgeBrush", Argb(0x0C, 0x00, 0x00, 0x00));
                 Set(resources, "DividerBrush", Argb(0x0F, 0x00, 0x00, 0x00));
+                Set(resources, "ScrollBarThumbBrush", Argb(0x72, 0x00, 0x00, 0x00));
+                Set(resources, "ScrollBarThumbHoverBrush", Argb(0x9B, 0x00, 0x00, 0x00));
+                Set(resources, "ScrollBarButtonHoverBrush", Argb(0x0A, 0x00, 0x00, 0x00));
                 resources["ShadowOpacity"] = 0.28;
             }
 

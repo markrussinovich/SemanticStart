@@ -18,6 +18,9 @@
         <SolidColorBrush x:Key="IconBackplateBrush" Color="#08000000" />
         <SolidColorBrush x:Key="BadgeBrush" Color="#0C000000" />
         <SolidColorBrush x:Key="DividerBrush" Color="#0F000000" />
+        <SolidColorBrush x:Key="ScrollBarThumbBrush" Color="#72000000" />
+        <SolidColorBrush x:Key="ScrollBarThumbHoverBrush" Color="#9B000000" />
+        <SolidColorBrush x:Key="ScrollBarButtonHoverBrush" Color="#0A000000" />
         <SolidColorBrush x:Key="AccentBrush" Color="#005FB8" />
         <Color x:Key="ShadowColor">#000000</Color>
         <sys:Double x:Key="ShadowOpacity">0.28</sys:Double>
@@ -185,36 +188,115 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <!--
-            WPF's stock ScrollBar is also hard-coded light. Windows 11 uses a thin, subtle thumb.
-        -->
-        <Style TargetType="ScrollBar">
-            <Setter Property="Width" Value="10" />
+        <!-- Windows 11 overlay scrollbar: thin at rest, full-width with line buttons on hover. -->
+        <Style x:Key="WindowsVerticalScrollBar" TargetType="ScrollBar">
+            <Setter Property="Width" Value="12" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ScrollBar">
-                        <Border x:Name="Root" Background="Transparent" Padding="3,4">
-                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                        <Grid x:Name="Root" Background="Transparent">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="12" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="12" />
+                            </Grid.RowDefinitions>
+
+                            <RepeatButton x:Name="LineUp" Grid.Row="0" Command="ScrollBar.LineUpCommand"
+                                          Focusable="False" Opacity="0">
+                                <RepeatButton.Template>
+                                    <ControlTemplate TargetType="RepeatButton">
+                                        <Border x:Name="Bd" Background="Transparent" CornerRadius="3">
+                                            <Path Data="M 0,4 L 4,0 L 8,4 Z" Width="8" Height="4"
+                                                  Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                  Fill="{DynamicResource SecondaryTextBrush}" />
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="Background"
+                                                        Value="{DynamicResource ScrollBarButtonHoverBrush}" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </RepeatButton.Template>
+                            </RepeatButton>
+
+                            <Track x:Name="PART_Track" Grid.Row="1" IsDirectionReversed="True">
                                 <Track.Thumb>
-                                    <Thumb>
+                                    <Thumb MinHeight="18">
                                         <Thumb.Template>
                                             <ControlTemplate TargetType="Thumb">
-                                                <Border Background="{DynamicResource SecondaryTextBrush}"
-                                                        CornerRadius="2" Opacity="0.5" />
+                                                <Grid Background="Transparent">
+                                                    <Border x:Name="ThumbBar" Width="2"
+                                                            Background="{DynamicResource ScrollBarThumbBrush}"
+                                                            CornerRadius="3" HorizontalAlignment="Center" />
+                                                </Grid>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="ThumbBar" Property="Width" Value="6" />
+                                                        <Setter TargetName="ThumbBar" Property="Background"
+                                                                Value="{DynamicResource ScrollBarThumbHoverBrush}" />
+                                                    </Trigger>
+                                                    <Trigger Property="IsDragging" Value="True">
+                                                        <Setter TargetName="ThumbBar" Property="Width" Value="6" />
+                                                        <Setter TargetName="ThumbBar" Property="Background"
+                                                                Value="{DynamicResource ScrollBarThumbHoverBrush}" />
+                                                    </Trigger>
+                                                    <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ScrollBar}}"
+                                                                 Value="True">
+                                                        <Setter TargetName="ThumbBar" Property="Width" Value="6" />
+                                                        <Setter TargetName="ThumbBar" Property="Background"
+                                                                Value="{DynamicResource ScrollBarThumbHoverBrush}" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding IsMouseCaptureWithin, RelativeSource={RelativeSource AncestorType=ScrollBar}}"
+                                                                 Value="True">
+                                                        <Setter TargetName="ThumbBar" Property="Width" Value="6" />
+                                                        <Setter TargetName="ThumbBar" Property="Background"
+                                                                Value="{DynamicResource ScrollBarThumbHoverBrush}" />
+                                                    </DataTrigger>
+                                                </ControlTemplate.Triggers>
                                             </ControlTemplate>
                                         </Thumb.Template>
                                     </Thumb>
                                 </Track.Thumb>
                                 <Track.IncreaseRepeatButton>
-                                    <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Background="Transparent" />
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Focusable="False"
+                                                  Opacity="0" Background="Transparent" />
                                 </Track.IncreaseRepeatButton>
                                 <Track.DecreaseRepeatButton>
-                                    <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Background="Transparent" />
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Focusable="False"
+                                                  Opacity="0" Background="Transparent" />
                                 </Track.DecreaseRepeatButton>
                             </Track>
-                        </Border>
+
+                            <RepeatButton x:Name="LineDown" Grid.Row="2" Command="ScrollBar.LineDownCommand"
+                                          Focusable="False" Opacity="0">
+                                <RepeatButton.Template>
+                                    <ControlTemplate TargetType="RepeatButton">
+                                        <Border x:Name="Bd" Background="Transparent" CornerRadius="3">
+                                            <Path Data="M 0,0 L 4,4 L 8,0 Z" Width="8" Height="4"
+                                                  Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                  Fill="{DynamicResource SecondaryTextBrush}" />
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="Background"
+                                                        Value="{DynamicResource ScrollBarButtonHoverBrush}" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </RepeatButton.Template>
+                            </RepeatButton>
+                        </Grid>
                         <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="LineUp" Property="Opacity" Value="1" />
+                                <Setter TargetName="LineDown" Property="Opacity" Value="1" />
+                            </Trigger>
+                            <Trigger Property="IsMouseCaptureWithin" Value="True">
+                                <Setter TargetName="LineUp" Property="Opacity" Value="1" />
+                                <Setter TargetName="LineDown" Property="Opacity" Value="1" />
+                            </Trigger>
                             <Trigger Property="Orientation" Value="Horizontal">
                                 <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False" />
                             </Trigger>

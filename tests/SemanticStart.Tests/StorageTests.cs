@@ -97,6 +97,57 @@ public sealed class StorageTests : IDisposable
         Assert.Equal(2, usage["test:entity-17"].LaunchCount);
     }
 
+    [Fact]
+    public async Task SqliteIndexStore_ReadOnlyOpenSupportsTargetedReadsWithoutRebuilding()
+    {
+        var dbPath = Path.Combine(_directory, "readonly.sqlite");
+        var vectorPath = Path.Combine(_directory, "readonly-vectors.bin");
+        var entity = CreateEntity("test:readonly", "Read Only App", "hash");
+
+        using (var writer = new SqliteIndexStore(dbPath, vectorPath))
+        {
+            await writer.InitializeAsync("model-a", 3);
+            await writer.UpsertAsync(
+                entity,
+                [
+                    new EnrichmentDocument
+                    {
+                        EntityId = entity.Id,
+                        Provider = "local-test",
+                        IsOnline = false,
+                        Text = "Read-only document."
+                    }
+                ],
+                new SynthesizedProfile
+                {
+                    EntityId = entity.Id,
+                    Summary = "Tests read-only access.",
+                    Generator = "test"
+                },
+                [1, 0, 0]);
+        }
+
+        using (var incompatible = new SqliteIndexStore(dbPath, vectorPath))
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => incompatible.OpenReadOnlyAsync("model-b", 3));
+        }
+
+        using var reader = new SqliteIndexStore(dbPath, vectorPath);
+        await reader.OpenReadOnlyAsync("model-a", 3);
+
+        var loaded = await reader.GetByIdAsync(entity.Id);
+        Assert.NotNull(loaded);
+        Assert.Equal("Read Only App", loaded.Entity.DisplayName);
+        Assert.Equal("Tests read-only access.", loaded.Profile?.Summary);
+
+        var documents = await reader.GetDocumentsForEntityAsync(entity.Id);
+        var document = Assert.Single(documents);
+        Assert.Equal("local-test", document.Provider);
+        Assert.Equal("Read-only document.", document.Text);
+        Assert.Equal(1, await reader.CountAsync());
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

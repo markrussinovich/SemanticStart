@@ -22,6 +22,7 @@
             <Setter Property="Height" Value="26" />
             <Setter Property="Focusable" Value="False" />
             <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
+            <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ToggleButton">
@@ -32,7 +33,12 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemHoverBrush}" />
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemSelectedBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SearchBoxBorderBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="Glyph" Property="Text" Value="&#xE70E;" />
@@ -137,6 +143,9 @@
                      VirtualizingPanel.ScrollUnit="Pixel"
                      local:SmoothScroll.Enabled="True"
                      Foreground="{DynamicResource PrimaryTextBrush}">
+                <ListBox.Resources>
+                    <Style TargetType="ScrollBar" BasedOn="{StaticResource WindowsVerticalScrollBar}" />
+                </ListBox.Resources>
                 <ListBox.ItemContainerStyle>
                     <Style TargetType="ListBoxItem">
                         <Setter Property="Padding" Value="0" />
@@ -250,7 +259,7 @@
                                                Foreground="{DynamicResource SecondaryTextBrush}" />
                                     <TextBlock Text="{Binding LaunchTarget}" FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
                                                Visibility="{Binding HasLaunchTarget, Converter={StaticResource BoolToVisible}}"
-                                               Foreground="{DynamicResource SecondaryTextBrush}" Opacity="0.8" />
+                                               Foreground="{DynamicResource SecondaryTextBrush}" />
                                 </StackPanel>
                             </Border>
                         </Grid>

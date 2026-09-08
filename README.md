@@ -9,11 +9,12 @@ tool is called, you can't find it. SemanticStart builds a local semantic index o
 applications **and** built-in Windows features, then serves it from a Start-like overlay. All
 inference runs locally; no query ever leaves the machine.
 
-![The overlay answering "create a todo list"](docs/overlay-todo.png)
+![The overlay answering "diagnose slow process" with Process Explorer details open](docs/overlay-diagnose.png)
 
-Nothing in that query matches the name of the app that answers it. "Todo" is not a word in
-"Microsoft To Do", and the two tools below it are there because a *list* is something they make.
-Outlook is last because its tasks are real but secondary. That ordering is the whole product.
+The query describes an investigation rather than naming a utility. Process Monitor and Process
+Explorer rise to the top because their indexed descriptions and capabilities match process
+diagnosis; expanding Process Explorer shows the synthesized description, publisher, provenance,
+and launch path available behind every result. That intent-based ordering is the whole product.
 
 On the Windows 11 machine these numbers were taken from:
 
@@ -165,6 +166,67 @@ is either "no arm retrieved it" or "an arm retrieved it and a surfacing floor re
 fixes, indistinguishable from outside. It runs the query twice against one snapshot, once with the
 shipped floors and once with every floor disabled, and diffs the two.
 
+### Local MCP server
+
+`SemanticStart.Mcp` lets an LLM search and inspect the existing SemanticStart index through the
+[Model Context Protocol](https://modelcontextprotocol.io/). It is a read-only stdio server: the MCP
+client launches it as a child process, and it never opens a TCP port or modifies the index.
+
+#### Prerequisites
+
+1. Run the SemanticStart desktop app and let its first index build finish. This creates
+   `%LOCALAPPDATA%\SemanticStart\index.sqlite`, `vectors.bin`, and the local embedding model.
+2. Build the MCP server:
+
+```powershell
+dotnet build src\SemanticStart.Mcp\SemanticStart.Mcp.csproj -c Release
+```
+
+Configure an MCP client to launch the built DLL. The surrounding configuration property varies by
+client, but the server entry itself has this shape:
+
+```json
+{
+  "semanticstart": {
+    "command": "dotnet",
+    "args": [
+      "C:\\path\\to\\SemanticStart\\src\\SemanticStart.Mcp\\bin\\Release\\net10.0-windows\\SemanticStart.Mcp.dll"
+    ]
+  }
+}
+```
+
+For development, the command can instead be `dotnet` with arguments
+`["run", "--project", "C:\\path\\to\\SemanticStart\\src\\SemanticStart.Mcp"]`.
+
+#### Tools
+
+| Tool | Purpose |
+|---|---|
+| `search` | Hybrid semantic and lexical search. Accepts a natural-language query and a result limit from 1 to 50. |
+| `get_entity` | Returns the full synthesized profile for an exact stable entity ID returned by another tool. |
+| `list_entities` | Browses by name, kind, publisher, collector source, or category, with stable-ID pagination. |
+| `get_documents` | Returns bounded enrichment text and provenance for one entity, optionally filtered by provider. |
+| `get_index_status` | Reports index availability, entity count, embedding model, transport, and read-only status. |
+| `refresh_index` | Reloads the in-memory search snapshot after the desktop app rebuilds the index. |
+
+A typical agent workflow is to call `search`, use `get_entity` on promising IDs, and request
+`get_documents` only when it needs the underlying source material. `get_documents` returns at most
+12,000 characters by default and accepts an explicit cap up to 50,000 characters.
+
+Launch targets, icon paths, source URIs, and raw collector metadata can reveal machine-specific
+paths. They are excluded by default and returned only when the caller opts in through
+`includeLaunchInfo`, `includeSourceUri`, or `includeRawMetadata`.
+
+The MCP process reads the index with SQLite's read-only mode and shares it safely with the desktop
+app's WAL-backed indexer. It keeps a search snapshot in memory; call `refresh_index` after a rebuild
+to make a running MCP process see the new contents. If the index or model is missing or incompatible,
+`get_index_status` reports it as unavailable rather than creating or replacing anything.
+
+The server itself performs no network requests. The MCP client may still send tool results to its
+configured model, so treat the returned list of installed software and any explicitly requested
+paths or documents according to that model provider's privacy policy.
+
 ## Privacy
 
 Queries never leave the machine. The only network traffic is the one-time embedding model download
@@ -180,6 +242,7 @@ data: it lives in `%LOCALAPPDATA%\SemanticStart` and is ignored by source contro
 |---|---|
 | `src/SemanticStart.Core` | Collectors, enrichment, synthesis, embeddings, storage, retrieval |
 | `src/SemanticStart.Cli` | Diagnostic CLI (`index`, `search`, `eval`, `stats`, `enrich`, `diagnose`) |
+| `src/SemanticStart.Mcp` | Read-only local stdio MCP server over the index |
 | `src/SemanticStart.App` | WPF overlay, activation, tray icon, settings |
 | `tests/SemanticStart.Tests` | Unit and regression tests |
 | `tools/make-icon.ps1` | Redraws the app icon (`src/SemanticStart.App/Assets/SemanticStart.ico`) |

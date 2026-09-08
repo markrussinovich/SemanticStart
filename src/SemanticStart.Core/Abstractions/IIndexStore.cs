@@ -44,11 +44,19 @@ public interface IIndexStore : IDisposable
     /// <summary>Loads every entity and profile into memory. The index is small enough that this is cheap.</summary>
     Task<IReadOnlyList<IndexedEntity>> GetAllAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Loads one entity and profile by its stable id.</summary>
+    Task<IndexedEntity?> GetByIdAsync(string entityId, CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Every stored enrichment document, grouped by entity. Lets a rebuild carry forward the
     /// providers it is not refreshing instead of collecting their text a second time.
     /// </summary>
     Task<IReadOnlyDictionary<string, IReadOnlyList<EnrichmentDocument>>> GetDocumentsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Loads the enrichment documents for one entity.</summary>
+    Task<IReadOnlyList<EnrichmentDocument>> GetDocumentsForEntityAsync(
+        string entityId,
         CancellationToken cancellationToken = default);
 
     /// <summary>

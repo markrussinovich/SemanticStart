@@ -91,6 +91,54 @@ public sealed partial class SqliteIndexStore : IIndexStore
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Opens an existing compatible index without creating, migrating, or modifying it. This is
+    /// used by read-only consumers such as the local MCP server.
+    /// </summary>
+    public Task OpenReadOnlyAsync(string embeddingModelId, int dimensions, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(embeddingModelId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(dimensions);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+
+            if (!File.Exists(_databasePath))
+                throw new FileNotFoundException("The SemanticStart index has not been created yet.", _databasePath);
+            if (!File.Exists(_vectorPath))
+                throw new FileNotFoundException("The SemanticStart vector index has not been created yet.", _vectorPath);
+
+            _connection?.Dispose();
+            SQLitePCL.Batteries_V2.Init();
+            _connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = _databasePath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Cache = SqliteCacheMode.Shared
+            }.ToString());
+            _connection.Open();
+
+            if (!IndexSchema.IsCompatible(_connection, embeddingModelId))
+                throw new InvalidOperationException("The SemanticStart index is incompatible with this server. Rebuild it with the desktop app.");
+
+            var storedDimensions = IndexSchema.GetMeta(_connection, "embedding_dimensions");
+            if (!int.TryParse(storedDimensions, CultureInfo.InvariantCulture, out var actualDimensions) ||
+                actualDimensions != dimensions)
+            {
+                throw new InvalidOperationException(
+                    $"The SemanticStart index uses {storedDimensions ?? "unknown"} embedding dimensions; expected {dimensions}.");
+            }
+
+            _vectors = new VectorFile(_vectorPath, dimensions);
+            _dimensions = dimensions;
+            _nextOrdinal = 0;
+        }
+
+        return Task.CompletedTask;
+    }
+
     public Task<IReadOnlyDictionary<string, string>> GetContentHashesAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -188,47 +236,33 @@ public sealed partial class SqliteIndexStore : IIndexStore
             using var reader = cmd.ExecuteReader();
             var results = new List<IndexedEntity>();
             while (reader.Read())
-            {
-                var entity = new Entity
-                {
-                    Id = reader.GetString(0),
-                    Kind = (EntityKind)reader.GetInt32(1),
-                    DisplayName = reader.GetString(2),
-                    LaunchKind = (LaunchKind)reader.GetInt32(3),
-                    LaunchTarget = reader.GetString(4),
-                    LaunchArguments = GetNullableString(reader, 5),
-                    IconSource = GetNullableString(reader, 6),
-                    Publisher = GetNullableString(reader, 7),
-                    Source = reader.GetString(8),
-                    RawMetadata = DeserializeDictionary(reader.GetString(9)),
-                    ContentHash = GetNullableString(reader, 10)
-                };
-
-                SynthesizedProfile? profile = null;
-                if (!reader.IsDBNull(12))
-                {
-                    profile = new SynthesizedProfile
-                    {
-                        EntityId = entity.Id,
-                        Summary = reader.GetString(12),
-                        Tasks = DeserializeList(reader.GetString(13)),
-                        Synonyms = DeserializeList(reader.GetString(14)),
-                        Category = GetNullableString(reader, 15),
-                        Generator = reader.GetString(16),
-                        Details = GetNullableString(reader, 17),
-                        Features = GetNullableString(reader, 18)
-                    };
-                }
-
-                results.Add(new IndexedEntity
-                {
-                    Entity = entity,
-                    Profile = profile,
-                    VectorOrdinal = reader.IsDBNull(11) ? null : reader.GetInt32(11)
-                });
-            }
+                results.Add(ReadIndexedEntity(reader));
 
             return Task.FromResult<IReadOnlyList<IndexedEntity>>(results);
+        }
+    }
+
+    public Task<IndexedEntity?> GetByIdAsync(string entityId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(entityId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT e.id, e.kind, e.display_name, e.launch_kind, e.launch_target,
+                       e.launch_arguments, e.icon_source, e.publisher, e.source,
+                       e.raw_metadata, e.content_hash, e.vector_ordinal,
+                       p.summary, p.tasks, p.synonyms, p.category, p.generator, p.details, p.features
+                FROM entities e
+                LEFT JOIN profiles p ON p.entity_id = e.id
+                WHERE e.id = $id;
+                """;
+            cmd.Parameters.AddWithValue("$id", entityId);
+
+            using var reader = cmd.ExecuteReader();
+            return Task.FromResult(reader.Read() ? ReadIndexedEntity(reader) : null);
         }
     }
 
@@ -269,6 +303,33 @@ public sealed partial class SqliteIndexStore : IIndexStore
 
             return Task.FromResult<IReadOnlyDictionary<string, IReadOnlyList<EnrichmentDocument>>>(
                 results.ToDictionary(p => p.Key, p => (IReadOnlyList<EnrichmentDocument>)p.Value, StringComparer.Ordinal));
+        }
+    }
+
+    public Task<IReadOnlyList<EnrichmentDocument>> GetDocumentsForEntityAsync(
+        string entityId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(entityId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT entity_id, provider, is_online, text, source_uri, retrieved_at
+                FROM documents
+                WHERE entity_id = $entity_id
+                ORDER BY provider, id;
+                """;
+            cmd.Parameters.AddWithValue("$entity_id", entityId);
+
+            using var reader = cmd.ExecuteReader();
+            var results = new List<EnrichmentDocument>();
+            while (reader.Read())
+                results.Add(ReadDocument(reader));
+
+            return Task.FromResult<IReadOnlyList<EnrichmentDocument>>(results);
         }
     }
 
@@ -480,6 +541,60 @@ public sealed partial class SqliteIndexStore : IIndexStore
     }
 
     private VectorFile Vectors => _vectors ?? throw new InvalidOperationException("The store has not been initialized.");
+
+    private static IndexedEntity ReadIndexedEntity(SqliteDataReader reader)
+    {
+        var entity = new Entity
+        {
+            Id = reader.GetString(0),
+            Kind = (EntityKind)reader.GetInt32(1),
+            DisplayName = reader.GetString(2),
+            LaunchKind = (LaunchKind)reader.GetInt32(3),
+            LaunchTarget = reader.GetString(4),
+            LaunchArguments = GetNullableString(reader, 5),
+            IconSource = GetNullableString(reader, 6),
+            Publisher = GetNullableString(reader, 7),
+            Source = reader.GetString(8),
+            RawMetadata = DeserializeDictionary(reader.GetString(9)),
+            ContentHash = GetNullableString(reader, 10)
+        };
+
+        SynthesizedProfile? profile = null;
+        if (!reader.IsDBNull(12))
+        {
+            profile = new SynthesizedProfile
+            {
+                EntityId = entity.Id,
+                Summary = reader.GetString(12),
+                Tasks = DeserializeList(reader.GetString(13)),
+                Synonyms = DeserializeList(reader.GetString(14)),
+                Category = GetNullableString(reader, 15),
+                Generator = reader.GetString(16),
+                Details = GetNullableString(reader, 17),
+                Features = GetNullableString(reader, 18)
+            };
+        }
+
+        return new IndexedEntity
+        {
+            Entity = entity,
+            Profile = profile,
+            VectorOrdinal = reader.IsDBNull(11) ? null : reader.GetInt32(11)
+        };
+    }
+
+    private static EnrichmentDocument ReadDocument(SqliteDataReader reader) => new()
+    {
+        EntityId = reader.GetString(0),
+        Provider = reader.GetString(1),
+        IsOnline = reader.GetInt32(2) != 0,
+        Text = reader.GetString(3),
+        SourceUri = GetNullableString(reader, 4),
+        RetrievedAt = DateTimeOffset.TryParse(
+            reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at)
+            ? at
+            : DateTimeOffset.UtcNow,
+    };
 
     private static void CreateParentDirectory(string path)
     {

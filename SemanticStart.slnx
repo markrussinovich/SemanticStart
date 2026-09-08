@@ -3,6 +3,7 @@
     <Project Path="src/SemanticStart.App/SemanticStart.App.csproj" />
     <Project Path="src/SemanticStart.Cli/SemanticStart.Cli.csproj" />
     <Project Path="src/SemanticStart.Core/SemanticStart.Core.csproj" />
+    <Project Path="src/SemanticStart.Mcp/SemanticStart.Mcp.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SemanticStart.Tests/SemanticStart.Tests.csproj" />
