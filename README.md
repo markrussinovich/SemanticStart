@@ -92,6 +92,8 @@ Run `SemanticStart.App.exe`. It lives in the tray, builds its index on first run
 |---|---|
 | `Win+Alt+.` | Open the overlay (configurable) |
 | `Enter` | Launch |
+| `Down` / `Up` | Move into the results and back to the search box |
+| `Right` / `Left` | Show / hide the selected result's description (`Ctrl+D` toggles) |
 | `Ctrl+Enter` | Launch as administrator |
 | `Ctrl+Shift+Enter` | Open file location |
 | `Esc` | Dismiss |

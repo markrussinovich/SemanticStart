@@ -235,6 +235,7 @@ public sealed class OverlayViewModel : ObservableObject
     private string _status = IdleStatus;
     private int _selectedIndex = -1;
     private bool _isSearching;
+    private bool _isResultsActive;
 
     public OverlayViewModel(SemanticSearchService searchService, IconProvider iconProvider, AppSettings settings)
     {
@@ -277,6 +278,20 @@ public sealed class OverlayViewModel : ObservableObject
 
     public SearchResultItem? SelectedItem => SelectedIndex >= 0 && SelectedIndex < Results.Count ? Results[SelectedIndex] : null;
 
+    /// <summary>
+    /// Whether the arrow keys are steering the result list rather than the caret in the query.
+    /// <para>
+    /// The keyboard focus never leaves the search box - the query has to stay typeable at every
+    /// moment - so this is what tells the two modes apart, and what the list uses to show that the
+    /// highlighted row is the one the arrows are moving.
+    /// </para>
+    /// </summary>
+    public bool IsResultsActive
+    {
+        get => _isResultsActive;
+        set => SetProperty(ref _isResultsActive, value);
+    }
+
     public bool IsSearching
     {
         get => _isSearching;
@@ -298,6 +313,7 @@ public sealed class OverlayViewModel : ObservableObject
 
             _resultsQuery = query;
             SelectedIndex = Results.Count > 0 ? 0 : -1;
+            IsResultsActive = false;
             Status = Results.Count == 0 ? (string.IsNullOrWhiteSpace(query) ? IdleStatus : NoMatchStatus) : string.Empty;
             _ = LoadIconsAsync(cancellationToken);
         }
@@ -354,6 +370,7 @@ public sealed class OverlayViewModel : ObservableObject
         Results.Clear();
         _resultsQuery = string.Empty;
         SelectedIndex = -1;
+        IsResultsActive = false;
         Status = IdleStatus;
     }
 

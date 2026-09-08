@@ -33,11 +33,20 @@ public class SettingsWindowSmokeTests
         {
             try
             {
-                // The window's styles live in App.xaml, and only an Application registers them.
-                // InitializeComponent loads them without running OnStartup, so this exercises the
-                // real resource lookups rather than a stripped-down window.
-                var app = new SemanticStart.App.App();
-                app.InitializeComponent();
+                // The window's styles live in Theme.xaml, and only an Application registers them
+                // process-wide. Loading the dictionary into a bare Application exercises the real
+                // resource lookups without constructing SemanticStart's own App: WPF runs
+                // OnStartup on the first Show even though nobody called Run, and that sequence
+                // registers a global hotkey and a tray icon and - because the app is
+                // single-instance - hands over and shuts down whenever a copy is already running.
+                // This test used to pass or fail depending on whether the developer had
+                // SemanticStart open, because that shutdown closed the window under test and took
+                // every application resource with it.
+                var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+                app.Resources.MergedDictionaries.Add(new ResourceDictionary
+                {
+                    Source = new Uri("pack://application:,,,/SemanticStart.App;component/Theme.xaml"),
+                });
 
                 var settings = new AppSettings();
                 var settingsService = new AppSettingsService();

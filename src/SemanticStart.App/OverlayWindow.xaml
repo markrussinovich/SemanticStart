@@ -6,7 +6,7 @@
         AllowsTransparency="True" Background="Transparent" ShowInTaskbar="False" Topmost="True"
         FontFamily="{DynamicResource UiFont}" UseLayoutRounding="True" SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Ideal" TextOptions.TextRenderingMode="ClearType"
-        Deactivated="Window_Deactivated" KeyDown="Window_KeyDown">
+        Deactivated="Window_Deactivated" KeyDown="Window_KeyDown" PreviewKeyDown="Window_PreviewKeyDown">
     <Window.Resources>
         <local:NullToVisibilityConverter x:Key="IconVisible" />
         <local:NullToVisibilityConverter x:Key="IconMissing" Invert="True" />
@@ -127,6 +127,7 @@
             </Grid>
 
             <TextBox x:Name="SearchBox" Grid.Row="1" Style="{StaticResource SearchTextBox}"
+                     TextChanged="SearchBox_TextChanged"
                      Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}" />
 
             <ListBox x:Name="ResultsList" Grid.Row="2" Margin="0,12,0,4" ItemsSource="{Binding Results}"
@@ -145,7 +146,8 @@
                         <Setter Property="Template">
                             <Setter.Value>
                                 <ControlTemplate TargetType="ListBoxItem">
-                                    <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="5" Padding="8,7">
+                                    <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="5" Padding="8,7"
+                                            BorderBrush="Transparent" BorderThickness="1">
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
@@ -166,6 +168,20 @@
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemHoverBrush}" />
                                         </Trigger>
+                                        <!--
+                                            Down moves the arrows from the query to the list, and on the first press
+                                            the highlight is already where it is going. Outlining the row is what
+                                            makes that press visible, and afterwards says which of the two the arrow
+                                            keys are steering.
+                                        -->
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding IsSelected, RelativeSource={RelativeSource Self}}" Value="True" />
+                                                <Condition Binding="{Binding DataContext.IsResultsActive, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True" />
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                            <Setter TargetName="Indicator" Property="Height" Value="28" />
+                                        </MultiDataTrigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
                             </Setter.Value>
@@ -208,7 +224,7 @@
                                 </Border>
                                 <ToggleButton Grid.Column="3" x:Name="DetailsToggle" Style="{StaticResource ChevronToggle}"
                                               IsChecked="{Binding IsExpanded, Mode=TwoWay}"
-                                              ToolTip="Show details"
+                                              ToolTip="Show details (Ctrl+D)"
                                               AutomationProperties.Name="Show details"
                                               VerticalAlignment="Center" Margin="4,0,2,0" />
                             </Grid>

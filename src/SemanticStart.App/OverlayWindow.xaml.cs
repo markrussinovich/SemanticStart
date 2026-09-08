@@ -165,18 +165,8 @@ public partial class OverlayWindow : Window
                 return;
             }
 
-            if (e.Key == Key.Down || (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.J))
+            if (TryToggleDetails(e.Key))
             {
-                _viewModel.MoveSelection(1);
-                ResultsList.ScrollIntoView(_viewModel.SelectedItem);
-                e.Handled = true;
-                return;
-            }
-
-            if (e.Key == Key.Up || (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.K))
-            {
-                _viewModel.MoveSelection(-1);
-                ResultsList.ScrollIntoView(_viewModel.SelectedItem);
                 e.Handled = true;
                 return;
             }
@@ -198,6 +188,124 @@ public partial class OverlayWindow : Window
         {
             Log.Error(ex, "Overlay key handling failed");
         }
+    }
+
+    /// <summary>
+    /// All navigation keys are taken here, on the way down, because the text box claims Left and
+    /// Right for the caret and the list claims Up and Down for its own navigation. Nothing ever
+    /// moves the keyboard focus out of the search box: the query stays typeable at every moment,
+    /// and which of the two the arrows are steering is tracked by
+    /// <see cref="OverlayViewModel.IsResultsActive"/> instead of by where the focus happens to be.
+    /// </summary>
+    private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        try
+        {
+            var control = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+
+            if (e.Key == Key.Down || (control && e.Key == Key.J))
+            {
+                // Down out of the query lands on the first result rather than skipping past it.
+                if (!_viewModel.IsResultsActive)
+                    EnterResults();
+                else
+                    MoveSelection(1);
+
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.Up || (control && e.Key == Key.K))
+            {
+                // Up walks back out the way Down walked in: past the first result is the query.
+                if (!_viewModel.IsResultsActive)
+                    return;
+
+                if (_viewModel.SelectedIndex <= 0)
+                    _viewModel.IsResultsActive = false;
+                else
+                    MoveSelection(-1);
+
+                e.Handled = true;
+                return;
+            }
+
+            if ((e.Key == Key.Right || e.Key == Key.Left) && TryToggleDetails(e.Key))
+                e.Handled = true;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Overlay navigation key handling failed");
+        }
+    }
+
+    /// <summary>Hands the arrow keys to the results, starting at the first one.</summary>
+    private void EnterResults()
+    {
+        if (_viewModel.Results.Count == 0)
+            return;
+
+        _viewModel.SelectedIndex = 0;
+        _viewModel.IsResultsActive = true;
+        ResultsList.ScrollIntoView(_viewModel.SelectedItem);
+    }
+
+    private void MoveSelection(int delta)
+    {
+        _viewModel.MoveSelection(delta);
+        ResultsList.ScrollIntoView(_viewModel.SelectedItem);
+    }
+
+    /// <summary>
+    /// Every new query re-ranks the list, so the highlight the arrows were steering no longer means
+    /// anything: hand them back to the text.
+    /// </summary>
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        // TextChanged fires while the binding is applied, before the constructor has finished.
+        if (_viewModel is null)
+            return;
+
+        _viewModel.IsResultsActive = false;
+    }
+
+    /// <summary>
+    /// Opens or closes the selected result's description: Ctrl+D toggles, Right opens and Left
+    /// closes. While the arrows still belong to the query they only act once the caret has run out
+    /// of text to move through, so editing comes first.
+    /// </summary>
+    private bool TryToggleDetails(Key key)
+    {
+        if (_viewModel.SelectedItem is not { } item)
+            return false;
+
+        bool? requested = key switch
+        {
+            Key.D when Keyboard.Modifiers.HasFlag(ModifierKeys.Control) => !item.IsExpanded,
+            Key.Right when IsCaretPastQuery(atEnd: true) => true,
+            Key.Left when IsCaretPastQuery(atEnd: false) => false,
+            _ => null
+        };
+
+        // Leaving a no-op unhandled matters for the arrows: pressing Left on a collapsed result
+        // while editing should still be an ordinary caret move.
+        if (requested is not { } expand || expand == item.IsExpanded)
+            return false;
+
+        // The toggle button's Checked handler scrolls the newly revealed panel into view.
+        item.IsExpanded = expand;
+        return true;
+    }
+
+    private bool IsCaretPastQuery(bool atEnd)
+    {
+        if (_viewModel.IsResultsActive)
+            return true;
+
+        if (SearchBox.SelectionLength > 0)
+            return false;
+
+        return atEnd ? SearchBox.CaretIndex >= SearchBox.Text.Length : SearchBox.CaretIndex == 0;
     }
 
     private async void Result_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
