@@ -27,23 +27,30 @@ public sealed class IconProvider : IDisposable
     /// display scaling up to 350% without resampling artefacts.
     /// </summary>
     private const int IconPixelSize = 96;
+    private const int WorkerCount = 4;
 
     private readonly Dictionary<string, ImageSource?> _memoryCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly BlockingCollection<Action> _work = new();
-    private readonly Thread _worker;
+    private readonly Thread[] _workers;
 
     public IconProvider()
     {
-        // Shell imaging handlers are apartment-sensitive, so all extraction runs on one dedicated
-        // STA thread rather than on arbitrary thread-pool threads.
-        _worker = new Thread(WorkerLoop)
+        // Shell imaging handlers are apartment-sensitive, so extraction cannot use arbitrary
+        // thread-pool threads. A small set of dedicated STA workers lets the visible result icons
+        // resolve concurrently without overwhelming shell extensions.
+        _workers = new Thread[WorkerCount];
+        for (var i = 0; i < _workers.Length; i++)
         {
-            IsBackground = true,
-            Name = "SemanticStart.IconExtraction",
-            Priority = ThreadPriority.BelowNormal,
-        };
-        _worker.SetApartmentState(ApartmentState.STA);
-        _worker.Start();
+            var worker = new Thread(WorkerLoop)
+            {
+                IsBackground = true,
+                Name = $"SemanticStart.IconExtraction.{i + 1}",
+                Priority = ThreadPriority.BelowNormal,
+            };
+            worker.SetApartmentState(ApartmentState.STA);
+            worker.Start();
+            _workers[i] = worker;
+        }
     }
 
     public Task<ImageSource?> GetIconAsync(Entity entity, CancellationToken cancellationToken)

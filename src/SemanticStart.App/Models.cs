@@ -399,18 +399,21 @@ public sealed class OverlayViewModel : ObservableObject
 
     private async Task LoadIconsAsync(CancellationToken cancellationToken)
     {
-        foreach (var item in Results.ToArray())
+        var loads = Results.ToArray().Select(item => LoadIconAsync(item, cancellationToken));
+        await Task.WhenAll(loads);
+    }
+
+    private async Task LoadIconAsync(SearchResultItem item, CancellationToken cancellationToken)
+    {
+        try
         {
-            try
-            {
-                var icon = await _iconProvider.GetIconAsync(item.Entity, cancellationToken);
-                if (!cancellationToken.IsCancellationRequested)
-                    item.Icon = icon;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                Log.Error(ex, $"Icon load failed for {item.Entity.Id}");
-            }
+            var icon = await _iconProvider.GetIconAsync(item.Entity, cancellationToken);
+            if (!cancellationToken.IsCancellationRequested)
+                item.Icon = icon;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Error(ex, $"Icon load failed for {item.Entity.Id}");
         }
     }
 }
