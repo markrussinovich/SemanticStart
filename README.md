@@ -101,50 +101,6 @@ Run `SemanticStart.App.exe`. It lives in the tray, builds its index on first run
 The overlay follows the system light/dark theme and accent color live, and shows each entry's real
 Shell icon (including MSIX/UWP assets) via `IShellItemImageFactory` — the same source Start uses.
 
-**Hotkey fallback.** If `Win+Alt+.` is already claimed by another app (`RegisterHotKey` fails with
-`ERROR_HOTKEY_ALREADY_REGISTERED`), SemanticStart walks a candidate list — `Win+Alt+,`,
-`Win+Alt+;`, `Win+Ctrl+G`, `Win+Alt+X`, `Ctrl+Alt+.`, `Ctrl+Shift+.` — and registers
-the first one that is free. The hotkey that actually won is reported by a tray balloon at startup
-and shown under **Hotkey** in Settings (the gear in the lower left of the overlay).
-
-**Changing it.** The hotkey field in Settings records rather than reads: click it and press the
-combination you want, and each key appears as its own chip. Escape keeps the current chord. There is
-nothing to spell, which matters because key names are not guessable (`PrintScreen`, `Prior`,
-`OemQuestion`), and the field cannot display a chord it would refuse to store.
-
-While the field is listening, the global hotkey is released and restored afterwards. Windows delivers
-a registered hotkey to the owning application as an activation rather than as key input, so without
-this the chord most likely to be pressed while editing — the one already assigned — would open the
-overlay instead of being recorded.
-
-A chord is rejected, with the reason shown inline, if it has no modifier (Windows would register it
-globally and swallow that key everywhere, including inside text boxes), if `Shift` is its only
-modifier (that is ordinary typing), or if the shell claims it before any application sees it
-(`Win+L`, `Win+G`, `Win+Tab`, `Ctrl+Alt+Delete`) — accepting one of those would appear to work and
-then never fire.
-
-**Why this combination.** Bare `Win+<letter>` is impossible: the shell registers every one of them,
-so `RegisterHotKey` fails for `Win+S`, `Win+Q` and `Win+F` alike. That leaves `Win+<modifier>+<key>`,
-where much of the `Win+Alt+<letter>` family (`D`, `F`, `G`, `R`, `T`, `W`) belongs to Xbox Game Bar on
-a stock Windows 11 install, `Win+Shift+S` is Screen Snip, and `Win+Ctrl+S` is Speech Recognition.
-
-`Win+Alt+Space` is the launcher idiom (Spotlight, Alfred, Raycast) and was the original default, but
-PowerToys' Command Palette ships with exactly that chord. A hotkey belongs to whichever process
-registers it first, so on any machine with PowerToys installed the two race and SemanticStart
-frequently loses — which looks, from the outside, like the app simply not opening. `Win+Alt+.` keeps
-the same one-handed bottom-row shape without the collision, and anyone still carrying the old default
-in their settings is migrated to it on the next launch.
-
-**Single instance.** A named mutex ensures only one copy runs. Launching the executable again does
-not start a second instance; it signals the running one to show its overlay and exits.
-
-**Typing.** The overlay waits for typing to stop before searching (500 ms, adjustable in Settings).
-Every prefix of a word is a different question, not a weaker version of the finished one — "edit do"
-and "edit doc" match different words and score every candidate differently — so searching on each
-keystroke put that churn on screen. A query costs ~2.4 ms; the wait buys a settled answer, and Enter
-skips it. Holding Backspace extends the wait, because the first gap a held key produces is the
-keyboard's auto-repeat delay rather than a pause for thought.
-
 ### Where descriptions come from
 
 Description quality is what makes intent search work. Every description, task phrase, and synonym is
@@ -169,7 +125,7 @@ memory; its View menu offers "Physical Memory History". Reading resources struct
 reading the right ones — Resource Monitor launches `perfmon.exe`, so its menus describe Performance
 Monitor, and the labels that actually belong to it live in the module its icon names.
 
-Nothing is hand-written per program, so a tool this project has never heard of is described as well
+Nothing is hard-coded, so a tool this project has never heard of is described as well
 as a tool it has.
 
 An earlier build handed synthesis to a small local language model (Foundry Local, Ollama, LM Studio).
@@ -185,21 +141,6 @@ Rebuilding belongs to the app, not to the Settings window: you can close Setting
 runs in the background, and a tray notification tells you when it finishes. Reopening Settings
 rejoins the build already in progress. (It used to be the other way round, so closing the window
 silently threw away the first index build and left the app finding nothing.)
-
-### Relevance
-
-Every query ever reported as wrong is a permanent case in the built-in corpus, including the ones
-that still fail. Each case is judged against the **eight rows the overlay actually shows** rather
-than against a longer list the user never sees. That distinction is not academic: a required result
-sitting at rank 10 passed the harness twice while being invisible on screen, which is exactly how a
-real defect gets reported as fixed.
-
-Four cases fail. They are left failing rather than papered over by lowering an evidence floor or
-hand-writing knowledge about a specific program, because both would trade a general engine for a
-demo. The most instructive is *"check access"*, which wants AccessChk and gets AccessEnum: both are
-Sysinternals tools, both are documented in nearly the same words, and nothing on the machine says
-that one enumerates share permissions while the other reports effective ones. No amount of ranking
-fixes a distinction the source material never draws.
 
 ### The CLI
 
