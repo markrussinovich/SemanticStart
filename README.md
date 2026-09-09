@@ -81,7 +81,7 @@ dotnet test tests\SemanticStart.Tests
 Portable, self-contained build (no .NET runtime needed on the target machine):
 
 ```powershell
-dotnet publish src\SemanticStart.App -c Release -r win-x64 --self-contained true -o artifacts\portable
+dotnet publish src\SemanticStart.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts\portable
 ```
 
 ## Usage

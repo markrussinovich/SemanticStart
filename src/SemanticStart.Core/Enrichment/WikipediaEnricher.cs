@@ -179,8 +179,9 @@ public sealed class WikipediaEnricher : IEnricher
                 var bare = StripQualifier(title);
                 var key = Normalize(bare);
                 var vendorPrefixed = IsVendorPrefixed(key, wanted, bare, entity);
+                var exactName = key == wanted && HasCompatibleTitleCasing(entity.DisplayName, bare);
 
-                if (key == wanted || (qualified is not null && key == qualified) || vendorPrefixed)
+                if (exactName || (qualified is not null && key == qualified) || vendorPrefixed)
                     matches.Add((title, TitleScore(title, entity, vendorPrefixed)));
             }
         }
@@ -242,6 +243,40 @@ public sealed class WikipediaEnricher : IEnricher
         return prefix
             .Split([' ', '-'], StringSplitOptions.RemoveEmptyEntries)
             .All(evidence.Contains);
+    }
+
+    /// <summary>
+    /// Keeps meaningful capitalization from being erased by title normalization. Product names
+    /// commonly differ by one internal capital ("Github" versus "GitHub"), and Start entries are
+    /// sometimes rendered in all caps, so those remain acceptable. Multiple internal conflicts in
+    /// mixed-case names indicate a different identity: "News" and Sun's "NeWS" normalize to the
+    /// same key but are not the same product.
+    /// </summary>
+    internal static bool HasCompatibleTitleCasing(string requested, string candidate)
+    {
+        var left = requested.Where(char.IsLetterOrDigit).ToArray();
+        var right = candidate.Where(char.IsLetterOrDigit).ToArray();
+
+        if (left.Length != right.Length
+            || !left.SequenceEqual(right, CharComparer.OrdinalIgnoreCase))
+            return false;
+
+        var leftLetters = left.Where(char.IsLetter).ToArray();
+        var rightLetters = right.Where(char.IsLetter).ToArray();
+        if (leftLetters.All(char.IsUpper) || rightLetters.All(char.IsUpper))
+            return true;
+
+        var conflicts = 0;
+        for (var i = 1; i < left.Length; i++)
+        {
+            if (char.IsLetter(left[i])
+                && char.IsLetter(right[i])
+                && char.IsUpper(left[i]) != char.IsUpper(right[i])
+                && ++conflicts >= 2)
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -317,4 +352,15 @@ public sealed class WikipediaEnricher : IEnricher
 
     private static string Normalize(string value)
         => new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
+    private sealed class CharComparer : IEqualityComparer<char>
+    {
+        public static readonly CharComparer OrdinalIgnoreCase = new();
+
+        public bool Equals(char x, char y)
+            => char.ToUpperInvariant(x) == char.ToUpperInvariant(y);
+
+        public int GetHashCode(char obj)
+            => char.ToUpperInvariant(obj).GetHashCode();
+    }
 }

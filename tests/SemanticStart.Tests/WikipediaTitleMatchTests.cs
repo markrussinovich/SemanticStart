@@ -81,6 +81,21 @@ public sealed class WikipediaTitleMatchTests
             entity: photoshop));
     }
 
+    [Fact]
+    public void MultipleInternalCaseConflictsRejectADifferentProduct()
+    {
+        Assert.False(WikipediaEnricher.HasCompatibleTitleCasing("News", "NeWS"));
+    }
+
+    [Theory]
+    [InlineData("GitHub", "Github")]
+    [InlineData("NEWS", "News")]
+    [InlineData("PowerShell", "Powershell")]
+    public void OrdinaryDisplayNameCasingRemainsCompatible(string displayName, string title)
+    {
+        Assert.True(WikipediaEnricher.HasCompatibleTitleCasing(displayName, title));
+    }
+
     private static Entity Entity(
         string displayName,
         string? publisher = null,
