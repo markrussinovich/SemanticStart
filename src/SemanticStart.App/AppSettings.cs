@@ -49,6 +49,7 @@ public sealed record AppSettings
 public sealed class AppSettingsService
 {
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string StartupApprovedKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
     private const string RunValueName = "SemanticStart";
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -114,7 +115,27 @@ public sealed class AppSettingsService
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
-            return !string.IsNullOrWhiteSpace(key?.GetValue(RunValueName) as string);
+            var registered = key?.GetValue(RunValueName) as string;
+            var executable = CurrentExecutablePath();
+            if (string.IsNullOrWhiteSpace(registered) || string.IsNullOrWhiteSpace(executable))
+                return false;
+
+            using var approved = Registry.CurrentUser.OpenSubKey(StartupApprovedKeyPath, writable: false);
+            if (!IsStartupApproved(approved?.GetValue(RunValueName)))
+                return false;
+
+            var expected = BuildStartupCommand(executable);
+            if (string.Equals(registered, expected, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Migrate registrations written before startup launches carried an explicit marker.
+            if (string.Equals(registered, QuoteArgument(executable), StringComparison.OrdinalIgnoreCase))
+            {
+                SetLaunchAtLogin(enabled: true);
+                return true;
+            }
+
+            return false;
         }
         catch (Exception ex)
         {
@@ -130,9 +151,16 @@ public sealed class AppSettingsService
             using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true);
             if (enabled)
             {
-                var exe = Environment.ProcessPath ?? System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                var exe = CurrentExecutablePath();
                 if (!string.IsNullOrWhiteSpace(exe))
-                    key.SetValue(RunValueName, $"\"{exe}\"");
+                {
+                    key.SetValue(RunValueName, BuildStartupCommand(exe));
+
+                    // Task Manager records disabled startup entries separately from the Run key.
+                    // Re-enabling the checkbox is an explicit request to clear that veto.
+                    using var approved = Registry.CurrentUser.OpenSubKey(StartupApprovedKeyPath, writable: true);
+                    approved?.DeleteValue(RunValueName, throwOnMissingValue: false);
+                }
             }
             else
             {
@@ -144,4 +172,16 @@ public sealed class AppSettingsService
             Log.Error(ex, "Failed to update startup registration");
         }
     }
+
+    internal static string BuildStartupCommand(string executablePath)
+        => $"{QuoteArgument(executablePath)} --startup";
+
+    internal static bool IsStartupApproved(object? value)
+        => value is not byte[] { Length: > 0 } bytes || bytes[0] != 3;
+
+    private static string? CurrentExecutablePath()
+        => Environment.ProcessPath ?? System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+
+    private static string QuoteArgument(string value)
+        => $"\"{value.Replace("\"", "\\\"")}\"";
 }

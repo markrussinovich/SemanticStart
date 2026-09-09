@@ -27,6 +27,8 @@ public partial class App : System.Windows.Application
         AppPaths.EnsureCreated();
         Log.Initialize();
         InstallCrashLogging();
+        if (e.Args.Any(a => string.Equals(a, "--startup", StringComparison.OrdinalIgnoreCase)))
+            Log.Info("Started from the Windows login registration.");
         ThemeService.Initialize(this);
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
