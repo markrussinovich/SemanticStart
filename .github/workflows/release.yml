@@ -142,8 +142,8 @@ jobs:
 
           # A single-quoted here-string, because the notes are markdown full of backticks and the
           # backtick is PowerShell's escape character - the double-quoted form silently eats them.
-          # GitHub substitutes ${{ }} into the script text before pwsh ever sees it, so the
-          # expression below is still interpolated despite the quoting.
+          # Workflow expressions are substituted into the script text before pwsh ever sees it, so
+          # the SHA below is still interpolated despite the quoting.
           $notes = @'
           Portable, self-contained Windows x64 build. No .NET runtime required.
 
