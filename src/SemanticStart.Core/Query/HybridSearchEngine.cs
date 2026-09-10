@@ -569,6 +569,31 @@ public sealed class HybridSearchEngine : ISearchEngine
 
         if (!candidate.LexicalScore.HasValue)
         {
+            // Name-only semantics disqualify a vector-only hit at any query length, unlike the
+            // hybrid path below which exempts single-word queries. The exemption there reasons
+            // that a one-word query is a name being typed, so name similarity is the right
+            // reading - but that argument needs the name to actually resemble the query, and
+            // arriving here means the lexical arm found no token in common at all. A cosine
+            // between a query and a bare name that share no word is the model's noise band, not a
+            // reading of a name being typed.
+            //
+            // Reported for "bing": Meta Horizon Link (0.406) and Scan (0.354) followed the two
+            // correct answers, which are correct lexically - the package identities are
+            // microsoft.bingweather and microsoft.bingnews. Neither stray has anything enriched
+            // behind it; their whole profile is "Open {name}.", which ToEmbeddingText suppresses,
+            // so the vector they matched on is their own name.
+            //
+            // The two floors below cannot reject them and no setting of them can. The absolute
+            // floor would have to exceed 0.406, and the correct answer for "why is my internet
+            // not working" is Network Connections, vector-only at 0.395 - the good answer and the
+            // noise are in the same cosine band, so the two are not separable by cosine. The
+            // leader ratio fails for the reason this query exists to show: when nothing in the
+            // index answers the query, the leader is itself noise (0.428 here), and 95% of noise
+            // is noise. What separates them is not the score but whether there is anything behind
+            // it, which is what this tests.
+            if (candidate.HasNameOnlySemantics)
+                return false;
+
             return vectorScore >= _options.MinVectorOnlySurfaceScore
                 && (topVector <= 0 || vectorScore >= topVector * _options.MinVectorOnlyLeaderRatio);
         }

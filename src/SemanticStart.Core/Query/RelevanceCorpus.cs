@@ -511,6 +511,26 @@ public static class RelevanceCorpus
         },
         new()
         {
+            Query = "bing",
+            AcceptableResults = ["Weather", "News", "Bing", "Microsoft Bing", "Microsoft Edge", "Edge"],
+            ForbiddenResults = ["Meta Horizon Link", "Scan"],
+            WithinTopN = 1,
+            Rationale = "Reported. Weather and News are correct and are not a semantic result at all - their "
+                + "package identities are microsoft.bingweather and microsoft.bingnews, so 'bing' is a literal "
+                + "token in their indexed text and the lexical arm leads with it. What was wrong is what "
+                + "followed: Meta Horizon Link at cosine 0.406 and Scan at 0.354, both vector-only, both with "
+                + "nothing enriched behind them - their entire profile is 'Open {name}.', which "
+                + "ToEmbeddingText suppresses, so the vector they matched on is their own name. Neither cosine "
+                + "floor can reject them. MinVectorOnlyLeaderRatio fails for the reason this case exists to "
+                + "show - when nothing in the index answers the query the leader is itself noise (0.428), and "
+                + "95% of noise is noise - and MinVectorOnlySurfaceScore fails because the right answer to "
+                + "'why is my internet not working' is Network Connections, vector-only at 0.395, so the "
+                + "signal and the noise share a band and every value that fixes this query breaks that one. "
+                + "The fix is that a vector-only hit with nothing behind its name does not surface at all. "
+                + "Not asserting ExpectNoResults: two of these results are genuinely right.",
+        },
+        new()
+        {
             Query = "asdfghjkl",
             ExpectNoResults = true,
             Rationale = "A nonsense query should produce the empty-state path, not MiniLM noise.",

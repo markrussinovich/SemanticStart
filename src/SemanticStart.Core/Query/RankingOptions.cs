@@ -49,6 +49,21 @@ public sealed record RankingOptions
     /// Minimum cosine for a result that has only vector evidence. In this index, unrelated short
     /// strings routinely cluster around 0.23-0.28, so vector-only hits below this are treated as
     /// embedding noise rather than padded UI results.
+    ///
+    /// Raising it was tried against the "bing" case and rejected, which is worth recording because
+    /// the failure looks exactly like something this floor should fix. That query surfaced Meta
+    /// Horizon Link at 0.406 and Scan at 0.354 on the vector arm alone, both of them entities with
+    /// nothing enriched behind them. But the correct answer for "why is my internet not working"
+    /// is Network Connections, also vector-only, at 0.395 - the noise and the signal are in the
+    /// same cosine band, so no setting of this separates them. Swept at 0.36, 0.38, 0.40, 0.42 and
+    /// 0.50: below 0.40 the strays remain, at 0.40 and above the internet case breaks, and 0.45 is
+    /// past that query's entire vector leader of 0.395, deleting its semantic arm outright. Every
+    /// value that fixes one case costs the other and 0.008 MRR.
+    ///
+    /// What the two share is a score; what separates them is that Network Connections has a real
+    /// description and the strays have only their own names. That is a property of the evidence
+    /// rather than of the number, so it is tested as one - see the name-only clause in
+    /// HybridSearchEngine.ShouldSurface, which fixes the case with no cost anywhere.
     /// </summary>
     public double MinVectorOnlySurfaceScore { get; init; } = 0.35;
 
