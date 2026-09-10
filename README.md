@@ -70,8 +70,9 @@ It is self-contained, so nothing else has to be installed — not even the .NET 
    ```
 3. Extract anywhere and run `SemanticStart.App.exe`.
 
-The build is unsigned, so SmartScreen will warn on first run; *More info* → *Run anyway*. Each
+Current builds are unsigned, so SmartScreen will warn on first run; *More info* → *Run anyway*. Each
 release publishes the zip's SHA256 next to it if you would rather verify the download first.
+(Releases are signed automatically once the pipeline is [configured for it](#code-signing).)
 
 First launch builds the index and downloads the embedding model once — see [Usage](#usage).
 
@@ -119,6 +120,26 @@ git push origin v1.0.1
 
 It can also be run from the Actions tab against a version you name, which drafts the release
 instead of publishing it — useful for rehearsing a release, or reissuing one after a bad build.
+
+#### Code signing
+
+The workflow signs `SemanticStart.App.exe` with [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/)
+when the repository is configured for it, and builds unsigned when it is not — so the release path
+works either way. Signing runs before packaging, so the published SHA256 is the hash of the signed
+binary. Configure it with three secrets and two variables:
+
+| Setting | Kind | Value |
+|---|---|---|
+| `AZURE_TENANT_ID` | secret | Service principal tenant |
+| `AZURE_CLIENT_ID` | secret | Service principal app ID |
+| `AZURE_CLIENT_SECRET` | secret | Service principal password |
+| `AZURE_SIGNING_ACCOUNT` | variable | Trusted Signing account name |
+| `AZURE_CERTIFICATE_PROFILE` | variable | Certificate profile name |
+| `AZURE_SIGNING_ENDPOINT` | variable | Region endpoint, if not `wus2` |
+
+Setting some but not all of them fails the build rather than silently shipping unsigned. The
+service principal needs the **Trusted Signing Certificate Profile Signer** role, and the profile
+must be **Public Trust** for the signature to affect SmartScreen.
 
 ## Usage
 

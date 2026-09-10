@@ -34,7 +34,34 @@ jobs:
     # WPF, and the app is Windows-only. There is no cross-compilation route for this target.
     runs-on: windows-latest
 
+    # Signing identity is repository configuration, never hardcoded here: a certificate says who
+    # vouches for the binary, so the account and profile belong to whoever publishes this build.
+    # Secrets carry the credential; variables carry the non-secret names. Absent both, the build
+    # still runs and ships unsigned, which keeps the release path working before signing exists.
+    env:
+      HAS_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && secrets.AZURE_TENANT_ID != '' && vars.AZURE_SIGNING_ACCOUNT != '' && vars.AZURE_CERTIFICATE_PROFILE != '' }}
+      ANY_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' || secrets.AZURE_CLIENT_SECRET != '' || secrets.AZURE_TENANT_ID != '' || vars.AZURE_SIGNING_ACCOUNT != '' || vars.AZURE_CERTIFICATE_PROFILE != '' }}
+      # Region-specific, and a mismatch fails with an unhelpful authorization error rather than a
+      # wrong-endpoint one. Defaulted only because a default is harmless when the account is unset.
+      SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT || 'https://wus2.codesigning.azure.net/' }}
+      SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      SIGNING_PROFILE: ${{ vars.AZURE_CERTIFICATE_PROFILE }}
+
     steps:
+      # Half-configured signing is a mistake rather than a choice: it means someone set the
+      # secrets and forgot the variables, or rotated one of three credentials. Shipping unsigned
+      # in that state would look identical to shipping unsigned deliberately, so it fails instead.
+      - name: Check signing configuration
+        if: env.HAS_SIGNING != 'true' && env.ANY_SIGNING == 'true'
+        shell: pwsh
+        run: |
+          throw @"
+          Azure Trusted Signing is partially configured. All five are required:
+            secrets:   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+            variables: AZURE_SIGNING_ACCOUNT, AZURE_CERTIFICATE_PROFILE
+          Clear all five to build unsigned on purpose.
+          "@
+
       - uses: actions/checkout@v4
 
       - name: Set up .NET
@@ -102,6 +129,61 @@ jobs:
           | Where-Object { $_.Extension -in '.pdb', '.lib' }
           | Remove-Item -Force
 
+      # Signing happens here, after trimming and before packaging, so the zip contains the signed
+      # exe and the published SHA256 is the hash of what people actually run. Signing after the
+      # zip would leave the checksum describing a different binary.
+      #
+      # Only SemanticStart.App.exe needs a signature. The native dependencies beside it -
+      # onnxruntime, the SQLite engine, WPF's unmanaged bits - already ship signed by Microsoft.
+      #
+      # No azure/login step: the action authenticates from the credentials passed to it directly,
+      # so nothing else needs to join the supply chain of a binary people download and run.
+      - name: Sign the executable
+        if: env.HAS_SIGNING == 'true'
+        uses: azure/trusted-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ env.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ env.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ env.SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\artifacts\portable
+          files-folder-filter: exe
+          file-digest: SHA256
+          # Countersigns the signature with a trusted timestamp, so the binary stays valid after
+          # the signing certificate expires. Trusted Signing certificates are short-lived by
+          # design - days, not years - which makes this mandatory rather than merely advisable.
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # The signing step can succeed without producing a usable signature, so the claim is checked
+      # against the file rather than trusted. Reading back the subject also puts the publisher
+      # identity in the log, which is the thing worth noticing if it is ever wrong.
+      - name: Verify the signature
+        if: env.HAS_SIGNING == 'true'
+        shell: pwsh
+        run: |
+          $exe = "artifacts/portable/SemanticStart.App.exe"
+          $sig = Get-AuthenticodeSignature $exe
+
+          if ($sig.Status -ne 'Valid') {
+            throw "Signature on $exe is '$($sig.Status)': $($sig.StatusMessage)"
+          }
+
+          Write-Host "Signed by: $($sig.SignerCertificate.Subject)"
+          Write-Host "Timestamp: $($sig.TimeStamperCertificate.Subject)"
+
+          if (-not $sig.TimeStamperCertificate) {
+            throw "Signature is not timestamped; it would stop validating when the certificate expires."
+          }
+
+      - name: Warn that the build is unsigned
+        if: env.HAS_SIGNING != 'true'
+        shell: pwsh
+        run: |
+          Write-Host "::warning title=Unsigned build::Azure Trusted Signing is not configured, so this build ships unsigned and SmartScreen will warn on download."
+
       - name: Package
         id: package
         shell: pwsh
@@ -140,6 +222,14 @@ jobs:
         run: |
           $tag = '${{ steps.version.outputs.tag }}'
 
+          # Whether the download is signed changes what someone sees when they run it, so the
+          # notes say which it is rather than leaving them to find out from a SmartScreen dialog.
+          if ('${{ env.HAS_SIGNING }}' -eq 'true') {
+            $signing = 'This build is code-signed, so Windows shows the publisher name rather than "Unknown publisher". SmartScreen may still warn until the download builds reputation.'
+          } else {
+            $signing = 'This build is **not** code-signed. SmartScreen will warn when you run it; choose **More info -> Run anyway** if you trust the source. Verify the SHA256 below first.'
+          }
+
           # A single-quoted here-string, because the notes are markdown full of backticks and the
           # backtick is PowerShell's escape character - the double-quoted form silently eats them.
           # Workflow expressions are substituted into the script text before pwsh ever sees it, so
@@ -155,6 +245,8 @@ jobs:
           ${{ steps.package.outputs.sha256 }}
           ```
           '@
+
+          $notes = $notes + "`n`n" + $signing
 
           # Not $args, which is an automatic variable in PowerShell.
           $releaseArgs = @(
