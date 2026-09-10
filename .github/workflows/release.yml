@@ -1,0 +1,184 @@
+# Builds the portable, self-contained app and publishes it as a downloadable GitHub Release.
+#
+# The artifact is ~180 MB, which is why it is a release asset rather than something committed:
+# artifacts/ is gitignored on purpose, and a repository that carries its own build output pays
+# that cost on every clone forever.
+#
+# Two ways in. Pushing a v* tag releases that version, which is the normal path. Running it by
+# hand builds the same thing for a version you name, so a release can be rehearsed - or reissued
+# after a bad one - without inventing a throwaway tag.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build and release, without the leading v (e.g. 1.0.0)"
+        required: true
+        type: string
+      draft:
+        description: "Create the release as a draft"
+        required: false
+        type: boolean
+        default: true
+
+# The job creates a release, which is a write to the repository.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # WPF, and the app is Windows-only. There is no cross-compilation route for this target.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # The repo pins no global.json, so the SDK feature band is chosen here instead. Kept as
+          # a wildcard within the major version so patch updates are picked up without edits.
+          dotnet-version: "10.0.x"
+
+      # A tag is the source of truth when there is one; the manual input is the fallback. Failing
+      # loudly on an empty result matters because every later step would otherwise succeed and
+      # produce an asset named after nothing.
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $version = $env:GITHUB_REF -replace '^refs/tags/v', ''
+          } else {
+            $version = '${{ inputs.version }}'
+          }
+
+          $version = $version.Trim()
+          if (-not ($version -match '^\d+\.\d+\.\d+(\.\d+)?(-[0-9A-Za-z.-]+)?$')) {
+            throw "Version '$version' is not a valid semantic version."
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Building version $version"
+
+      - name: Restore
+        run: dotnet restore SemanticStart.slnx
+
+      - name: Build
+        run: dotnet build SemanticStart.slnx -c Release --no-restore -p:Version=${{ steps.version.outputs.version }}
+
+      # Gating the release on the suite is the point of building it here rather than uploading
+      # whatever happened to be on someone's machine. The relevance harness is deliberately not
+      # run: it scores against an index of the software installed on the machine that built it,
+      # so on a bare runner it would be measuring the runner.
+      - name: Test
+        run: dotnet test tests/SemanticStart.Tests -c Release --no-build --verbosity normal
+
+      # Matches the command the README documents, so what ships is what a contributor building
+      # locally gets. PublishSingleFile still leaves the native dependencies - onnxruntime, the
+      # SQLite engine, WPF's unmanaged bits - beside the exe, which is why the download is a zip
+      # of a folder rather than a bare exe.
+      - name: Publish portable build
+        run: >
+          dotnet publish src/SemanticStart.App
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:Version=${{ steps.version.outputs.version }}
+          -o artifacts/portable
+
+      # Debug symbols and import libraries are build by-products. They are of no use to someone
+      # running the app and add tens of megabytes to a download that is already large.
+      - name: Trim build by-products
+        shell: pwsh
+        run: >
+          Get-ChildItem artifacts/portable -Recurse -File
+          | Where-Object { $_.Extension -in '.pdb', '.lib' }
+          | Remove-Item -Force
+
+      - name: Package
+        id: package
+        shell: pwsh
+        run: |
+          $name = "SemanticStart-${{ steps.version.outputs.version }}-win-x64"
+          New-Item -ItemType Directory -Force -Path artifacts/upload | Out-Null
+
+          $zip = "artifacts/upload/$name.zip"
+          Compress-Archive -Path artifacts/portable/* -DestinationPath $zip -CompressionLevel Optimal
+
+          # Published so a download can be verified; a self-contained runtime is exactly the kind
+          # of payload worth checking before running.
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
+          "$hash  $name.zip" | Set-Content "artifacts/upload/$name.zip.sha256"
+
+          "zip=$zip" >> $env:GITHUB_OUTPUT
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+          Write-Host "Packaged $zip ($([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB)"
+
+      # Uploaded separately from the release so the build is still downloadable from the run when
+      # a release is a draft, or when the release step fails.
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SemanticStart-${{ steps.version.outputs.version }}-win-x64
+          path: artifacts/upload/
+          retention-days: 30
+
+      # The GitHub CLI is preinstalled on the runner and authenticates from GITHUB_TOKEN, so this
+      # needs no third-party action in the supply chain of a binary people download and run.
+      # --generate-notes writes the commit log since the previous release.
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+
+          # A single-quoted here-string, because the notes are markdown full of backticks and the
+          # backtick is PowerShell's escape character - the double-quoted form silently eats them.
+          # GitHub substitutes ${{ }} into the script text before pwsh ever sees it, so the
+          # expression below is still interpolated despite the quoting.
+          $notes = @'
+          Portable, self-contained Windows x64 build. No .NET runtime required.
+
+          **Install:** download the zip, unblock it (Properties -> Unblock, or `Unblock-File`), extract anywhere, and run `SemanticStart.App.exe`. It lives in the tray and builds its index on first run, downloading the embedding model once.
+
+          SHA256 of the zip:
+
+          ```
+          ${{ steps.package.outputs.sha256 }}
+          ```
+          '@
+
+          # Not $args, which is an automatic variable in PowerShell.
+          $releaseArgs = @(
+            $tag
+            '--title', "SemanticStart $tag"
+            '--notes', $notes
+            '--generate-notes'
+          )
+
+          if ('${{ inputs.draft }}' -eq 'true') { $releaseArgs += '--draft' }
+
+          # A manual run has no tag behind it, so gh is told which commit to tag.
+          if ($env:GITHUB_REF -notlike 'refs/tags/*') { $releaseArgs += @('--target', $env:GITHUB_SHA) }
+
+          # Exit code rather than output: gh prints to stderr when a release is missing, and an
+          # empty-string result would be indistinguishable from a genuine failure to reach it.
+          gh release view $tag *> $null
+          $exists = $LASTEXITCODE -eq 0
+
+          if ($exists) {
+            Write-Host "Release $tag already exists; replacing its assets."
+            gh release upload $tag (Get-Item artifacts/upload/*).FullName --clobber
+          } else {
+            gh release create @releaseArgs (Get-Item artifacts/upload/*).FullName
+          }
+
+          if ($LASTEXITCODE -ne 0) { throw "gh failed with exit code $LASTEXITCODE." }

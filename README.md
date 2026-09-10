@@ -22,7 +22,7 @@ On the Windows 11 machine these numbers were taken from:
 |---|---|
 | Entities indexed | 521 |
 | Query latency | 2.4 ms median, 3.2 ms p95 |
-| Relevance corpus | 57/61, MRR 0.874, correct answer first 83% of the time |
+| Relevance corpus | 59/64, MRR 0.885, correct answer first 86% of the time |
 | Full rebuild | ~7 minutes, once |
 | Re-running one enricher | 2.5 seconds |
 
@@ -56,6 +56,25 @@ page of near-misses.
 - No administrator rights, no service, no driver, and **no modification of `explorer.exe`**
 - CPU-only: no NPU or GPU required
 
+## Download
+
+Grab the latest portable build from the [Releases page](https://github.com/markrussinovich/SemanticStart/releases/latest).
+It is self-contained, so nothing else has to be installed — not even the .NET runtime.
+
+1. Download `SemanticStart-<version>-win-x64.zip`.
+2. Unblock it before extracting — Windows marks downloaded archives and the mark is inherited by
+   every file inside, which surfaces later as a SmartScreen prompt on launch rather than as
+   anything mentioning the zip:
+   ```powershell
+   Unblock-File .\SemanticStart-<version>-win-x64.zip
+   ```
+3. Extract anywhere and run `SemanticStart.App.exe`.
+
+The build is unsigned, so SmartScreen will warn on first run; *More info* → *Run anyway*. Each
+release publishes the zip's SHA256 next to it if you would rather verify the download first.
+
+First launch builds the index and downloads the embedding model once — see [Usage](#usage).
+
 ## Building
 
 ```powershell
@@ -83,6 +102,23 @@ Portable, self-contained build (no .NET runtime needed on the target machine):
 ```powershell
 dotnet publish src\SemanticStart.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts\portable
 ```
+
+`PublishSingleFile` folds the managed assemblies into the exe but leaves the native dependencies —
+ONNX Runtime, the SQLite engine, WPF's unmanaged libraries — beside it, so the whole folder is the
+unit that ships, not just the exe.
+
+### Releasing
+
+`.github/workflows/release.yml` builds that same command on a clean runner, runs the tests, and
+attaches the zip and its SHA256 to a GitHub Release. Pushing a `v*` tag releases that version:
+
+```powershell
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+It can also be run from the Actions tab against a version you name, which drafts the release
+instead of publishing it — useful for rehearsing a release, or reissuing one after a bad build.
 
 ## Usage
 
