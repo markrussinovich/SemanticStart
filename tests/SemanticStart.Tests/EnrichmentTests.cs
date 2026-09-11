@@ -14,17 +14,62 @@ public sealed class EnrichmentTests
     /// </summary>
     [Theory]
     // Rejections: one line, and short.
-    [InlineData(@"C:\tools\node.exe: bad option: -?", false)]
-    [InlineData("Unknown option '-?'", false)]
-    [InlineData("", false)]
+    [InlineData(@"C:\tools\node.exe: bad option: -?", 9, false)]
+    [InlineData("Unknown option '-?'", 1, false)]
+    [InlineData("", 0, false)]
     // Long, but still a single line - a tool echoing a path and a complaint.
-    [InlineData(@"C:\Program Files\Some Vendor\With A Long Installation Path\thetool.exe: unrecognized option '-?'. Try --help.", false)]
+    [InlineData(@"C:\Program Files\Some Vendor\With A Long Installation Path\thetool.exe: unrecognized option '-?'. Try --help.", 1, false)]
     // Multi-line, but with nothing in it.
-    [InlineData("error\nbad option", false)]
-    // Real usage text: many lines, hundreds of characters.
-    [InlineData("Usage: robocopy source destination [file [file]...] [options]\n\n  source :: Source Directory (drive:\\path or \\\\server\\share\\path).\n  destination :: Destination Dir (drive:\\path or \\\\server\\share\\path).\n  /S :: copy Subdirectories, but not empty ones.\n  /E :: copy subdirectories, including Empty ones.", true)]
-    public void CliHelp_StoresUsageTextButNotSwitchRejections(string output, bool expected) =>
-        Assert.Equal(expected, CliHelpEnricher.LooksLikeHelp(output));
+    [InlineData("error\nbad option", 1, false)]
+    // Real usage text: many lines, hundreds of characters. Robocopy prints this and exits 16.
+    [InlineData("Usage: robocopy source destination [file [file]...] [options]\n\n  source :: Source Directory (drive:\\path or \\\\server\\share\\path).\n  destination :: Destination Dir (drive:\\path or \\\\server\\share\\path).\n  /S :: copy Subdirectories, but not empty ones.\n  /E :: copy subdirectories, including Empty ones.", 16, true)]
+    public void CliHelp_StoresUsageTextButNotSwitchRejections(string output, int exitCode, bool expected) =>
+        Assert.Equal(expected, CliHelpEnricher.LooksLikeHelp(output, exitCode));
+
+    /// <summary>
+    /// A crash is not documentation however long it is. The pip console shims on PATH answer "-?"
+    /// with a stack trace, which clears every length bar and then matches queries by way of
+    /// interpreter paths and generic runtime vocabulary.
+    /// </summary>
+    [Theory]
+    [InlineData("Error:Unknown Usage: tqdm [ help | options]\nTraceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"runpy.py\", line 88, in _run_code\nKeyError: '?'\nDuring handling of the above exception, another exception occurred:\n  more interpreter frames here to pad the length out past the bar")]
+    [InlineData("Unhandled exception. System.ArgumentException: the argument was not recognised\n   at Some.Namespace.Program.Main(String[] args)\n   at Some.Namespace.Runner.Invoke()\n   more frames follow here to pad this comfortably past three hundred characters so that only the crash rule is able to reject it, and never the length rule on its own")]
+    public void CliHelp_RejectsACrashDumpHoweverLongItIs(string output)
+    {
+        Assert.True(output.Length >= 300, "the case must clear the length bar so it tests the crash rule");
+        Assert.False(CliHelpEnricher.LooksLikeHelp(output, 1));
+        Assert.False(CliHelpEnricher.LooksLikeHelp(output, 0));
+    }
+
+    /// <summary>
+    /// The exit code moves the bar rather than deciding the outcome. The same argument-parser
+    /// complaint - several lines and about 200 characters, which is more than a terse rejection
+    /// but far less than a usage screen - is believed from a tool that exited cleanly and
+    /// disbelieved from one that failed.
+    /// </summary>
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(2, false)]
+    public void CliHelp_DemandsMoreEvidenceFromAToolThatFailed(int exitCode, bool expected)
+    {
+        var borderline = "usage: idna [-h] [--version] name\n" + new string('x', 80) + "\nidna: error: unrecognized arguments: -?";
+        Assert.InRange(borderline.Length, 120, 299);
+        Assert.Equal(expected, CliHelpEnricher.LooksLikeHelp(borderline, exitCode));
+    }
+
+    /// <summary>
+    /// A failing tool is not silenced, only held to a higher bar: a full usage screen is still
+    /// stored. This is the case that matters most, because most console tools that print help do
+    /// exit non-zero afterwards.
+    /// </summary>
+    [Fact]
+    public void CliHelp_StillStoresAFullUsageScreenFromAToolThatFailed()
+    {
+        var usage = "Usage: accesschk [-s][-e][-u][-r][-w] [[-a]|[-k]|[-p [-f]]|[-o]|[-c]|[-d]] [username] objectname\n"
+            + string.Join("\n", Enumerable.Range(0, 12).Select(i => $"  -{(char)('a' + i)}  Option number {i} described at some length here."));
+        Assert.True(usage.Length >= 300);
+        Assert.True(CliHelpEnricher.LooksLikeHelp(usage, -1));
+    }
 
     [Fact]
     public async Task Pipeline_StripsHtmlBeforeSynthesis()

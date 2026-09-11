@@ -185,8 +185,17 @@ public sealed class CliHelpEnricher : IEnricher
     {
         ["ipconfig.exe"] = ["/?"], ["ping.exe"] = ["/?"], ["tracert.exe"] = ["/?"], ["netstat.exe"] = ["/?"], ["nslookup.exe"] = ["/?"], ["route.exe"] = ["/?"], ["arp.exe"] = ["/?"], ["netsh.exe"] = ["/?"], ["sfc.exe"] = ["/?"], ["dism.exe"] = ["/?"], ["chkdsk.exe"] = ["/?"], ["diskpart.exe"] = ["/?"], ["tasklist.exe"] = ["/?"], ["taskkill.exe"] = ["/?"], ["systeminfo.exe"] = ["/?"], ["whoami.exe"] = ["/?"], ["gpupdate.exe"] = ["/?"], ["gpresult.exe"] = ["/?"], ["robocopy.exe"] = ["/?"], ["xcopy.exe"] = ["/?"], ["schtasks.exe"] = ["/?"], ["sc.exe"] = ["/?"], ["reg.exe"] = ["/?"], ["bcdedit.exe"] = ["/?"], ["powercfg.exe"] = ["/?"], ["driverquery.exe"] = ["/?"], ["pathping.exe"] = ["/?"], ["certutil.exe"] = ["/?"], ["cipher.exe"] = ["/?"], ["compact.exe"] = ["/?"], ["fsutil.exe"] = ["/?"], ["icacls.exe"] = ["/?"], ["takeown.exe"] = ["/?"], ["shutdown.exe"] = ["/?"]
     };
-    public string Provider => "cli-help";
-    public bool RequiresNetwork => false;
+    /// <summary>Characters of output a tool must produce before its reply counts as documentation.</summary>
+    private const int SucceededMinimum = 120;
+
+    /// <summary>
+    /// The same bar for a tool that exited non-zero. Set from measurement: on a real machine every
+    /// short non-zero reply was a complaint ("idna" 123 chars, "py.test" 160, "httpx" 167) while
+    /// the substantial ones were genuine usage screens that merely exit non-zero out of habit.
+    /// </summary>
+    private const int FailedMinimum = 300;
+
+    public string Provider => "cli-help";    public bool RequiresNetwork => false;
     public bool CanEnrich(Entity entity) => ResolveTarget(entity) is not null;
 
     public async Task<IReadOnlyList<EnrichmentDocument>> EnrichAsync(Entity entity, CancellationToken cancellationToken = default)
@@ -198,7 +207,7 @@ public sealed class CliHelpEnricher : IEnricher
             var result = await ProcessRunner.RunAsync(target.Path, target.Arguments, TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
             var text = result.Output.Trim();
             if (text.Length > 4096) text = text[..4096];
-            if (!LooksLikeHelp(text)) return [];
+            if (!LooksLikeHelp(text, result.ExitCode)) return [];
             return [new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = false, Text = text, SourceUri = target.Path }];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) { return []; }
@@ -215,12 +224,29 @@ public sealed class CliHelpEnricher : IEnricher
     ///
     /// The test is structural rather than a list of error phrases, because the phrasing is the
     /// tool author's choice and is localized, while the shape is not: usage text is many lines and
-    /// hundreds of characters, and a rejection is one line and a few dozen. Exit codes cannot
-    /// decide it - plenty of tools print correct usage and then exit non-zero.
+    /// hundreds of characters, and a rejection is one line and a few dozen.
+    ///
+    /// The exit code raises that bar rather than deciding it. A non-zero exit is weak evidence of
+    /// a rejection and cannot be an outright veto: measured across the console tools on a real
+    /// machine, 81 of the 112 that produce usable help exit non-zero after printing it - the whole
+    /// Sysinternals suite exits -1, robocopy exits 16, sc exits 1639, and ipconfig, netstat,
+    /// route, cipher and shutdown all exit 1. Rejecting those would discard most of what this
+    /// enricher exists to collect. What the exit code does predict is that a *short* reply is a
+    /// complaint rather than terse documentation, so a failing tool has to produce substantially
+    /// more text to be believed.
+    ///
+    /// Length alone cannot catch every failure, because some tools answer "-?" by crashing, and a
+    /// crash dump is long and multi-line. Those are rejected by recognising the dump format, which
+    /// is not the same as guessing at error phrasing: a Python traceback header and a .NET
+    /// unhandled-exception banner are emitted verbatim by the runtime, are never localized, and
+    /// are chosen by nobody. The pip-installed console shims on PATH are the population that
+    /// matters here - asking one for help raises KeyError and stores a stack trace full of
+    /// interpreter paths, which then matches queries it has nothing to do with.
     /// </summary>
-    internal static bool LooksLikeHelp(string text)
+    internal static bool LooksLikeHelp(string text, int exitCode)
     {
-        if (text.Length < 120) return false;
+        if (text.Length < (exitCode == 0 ? SucceededMinimum : FailedMinimum)) return false;
+        if (IsCrashOutput(text)) return false;
 
         var lines = 0;
         foreach (var line in text.AsSpan().EnumerateLines())
@@ -231,6 +257,15 @@ public sealed class CliHelpEnricher : IEnricher
 
         return false;
     }
+
+    /// <summary>
+    /// Whether the output is a runtime crash dump rather than anything the tool meant to say.
+    /// These markers are runtime-generated and unlocalized, so matching them is format detection
+    /// rather than a guess at how an author worded an error.
+    /// </summary>
+    private static bool IsCrashOutput(string text) =>
+        text.Contains("Traceback (most recent call last)", StringComparison.Ordinal)
+        || text.Contains("Unhandled exception", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Decides whether this entity is a command-line tool that can be asked to describe itself,
