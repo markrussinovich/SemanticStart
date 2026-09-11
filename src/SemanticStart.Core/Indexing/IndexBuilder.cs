@@ -44,6 +44,12 @@ public sealed class IndexBuilder
         await _store.InitializeAsync(_embeddings.ModelId, _embeddings.Dimensions, cancellationToken)
             .ConfigureAwait(false);
 
+        // Discovery always runs every collector, even when the build is scoped to one of them.
+        // Deduplication is decided across sources and in registration order, so a partial
+        // discovery would change its outcome: with only the PATH collector running, a tool that
+        // normally loses to its AppsFolder entry has nothing to lose to, and would be indexed a
+        // second time under its bare file name. Discovery is also the cheap phase - the cost this
+        // option saves is enrichment and embedding, not collection.
         var discovered = await DiscoverAsync(progress, cancellationToken).ConfigureAwait(false);
 
         // Always read the stored hashes, even for a forced rebuild. They serve two distinct
@@ -58,7 +64,13 @@ public sealed class IndexBuilder
         // all of the work is reused.
         var refreshing = options.ReuseStoredDocuments || options.RefreshProviders.Count > 0;
 
-        var existingHashes = options.ForceFullRebuild || refreshing
+        // Scoping is likewise a request to rebuild, not a request to check for changes. Asking for
+        // one source and being told nothing happened because its hashes matched would make the
+        // option useless for its main purpose, which is picking up a change to the collector
+        // itself - the code moved, so the entity it produces did, but no hash records that.
+        var scoped = options.Sources.Count > 0;
+
+        var existingHashes = options.ForceFullRebuild || refreshing || scoped
             ? new Dictionary<string, string>()
             : storedHashes;
 
@@ -73,6 +85,9 @@ public sealed class IndexBuilder
         var toProcess = new List<Entity>(discovered.Count);
         foreach (var entity in discovered.Values)
         {
+            if (scoped && !options.Sources.Contains(entity.Source))
+                continue;
+
             if (existingHashes.TryGetValue(entity.Id, out var storedHash)
                 && storedHash == entity.ContentHash
                 && entity.ContentHash is not null)
@@ -81,7 +96,10 @@ public sealed class IndexBuilder
                 continue;
             }
 
-            if (existingHashes.ContainsKey(entity.Id))
+            // Whether this is an addition or an update is a question about what is stored, not
+            // about which hashes this pass chose to honour. Asking the filtered map meant every
+            // forced, refreshed, or scoped rebuild reported its entire index as newly added.
+            if (storedHashes.ContainsKey(entity.Id))
                 updated++;
             else
                 added++;
@@ -93,7 +111,16 @@ public sealed class IndexBuilder
 
         // Anything previously indexed but no longer discovered has been uninstalled, removed, or
         // collapsed into another entity by deduplication.
-        var stale = storedHashes.Keys.Except(discovered.Keys, StringComparer.Ordinal).ToArray();
+        //
+        // A scoped build may only retire rows belonging to the sources it rebuilt. Discovery did
+        // run everything, so the full set would be accurate here - but acting on it would make a
+        // scoped pass capable of deleting from sources the caller did not ask it to touch, and a
+        // collector that silently failed mid-enumeration would take its whole source with it.
+        var staleIds = storedHashes.Keys.Except(discovered.Keys, StringComparer.Ordinal);
+        if (scoped)
+            staleIds = staleIds.Where(id => EntityId.SourceOf(id) is { } source && options.Sources.Contains(source));
+
+        var stale = staleIds.ToArray();
         if (stale.Length > 0)
             await _store.RemoveAsync(stale, cancellationToken).ConfigureAwait(false);
 
@@ -101,7 +128,9 @@ public sealed class IndexBuilder
 
         return new IndexResult
         {
-            Discovered = discovered.Count,
+            Discovered = scoped
+                ? discovered.Values.Count(e => options.Sources.Contains(e.Source))
+                : discovered.Count,
             Added = added,
             Updated = updated,
             Unchanged = unchanged,

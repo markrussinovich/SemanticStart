@@ -60,6 +60,21 @@ public sealed record IndexOptions
     public IReadOnlySet<string> RefreshProviders { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Collectors whose entities should be rebuilt, named by <see cref="Abstractions.IEntityCollector.Source"/>.
+    /// Empty means all of them, which is the ordinary pass.
+    ///
+    /// This is the discovery-side counterpart to <see cref="RefreshProviders"/>: that one re-runs
+    /// an enricher over every entity, this one re-runs every enricher over one source. It exists
+    /// because a source can go stale on its own - PATH gains a directory when a tool is installed,
+    /// and rescanning it should not cost a pass over the AppsFolder, the Start Menu, the uninstall
+    /// registry, and the network enrichers behind them.
+    ///
+    /// Entities from other sources are left exactly as they are: not reprocessed, and not removed
+    /// even though a scoped pass cannot confirm they still exist.
+    /// </summary>
+    public IReadOnlySet<string> Sources { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Rebuild profiles and lexical rows from documents already stored, running no enricher at
     /// all. This is the pass for a change to synthesis or to the shape of the indexed text.
     /// </summary>

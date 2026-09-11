@@ -121,4 +121,16 @@ public static class EntityId
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         return $"{source.Trim().ToLowerInvariant()}:{key.Trim().ToLowerInvariant()}";
     }
+
+    /// <summary>
+    /// The collector that produced an id, recovered from the id itself. Stored rows carry their
+    /// source only here, so this is what lets a build scoped to one collector decide which of the
+    /// previously indexed rows it is entitled to delete. Keys may contain colons - a path does
+    /// not, but a URI does - so only the first separator is significant.
+    /// </summary>
+    public static string? SourceOf(string id)
+    {
+        var separator = id?.IndexOf(':') ?? -1;
+        return separator > 0 ? id![..separator] : null;
+    }
 }

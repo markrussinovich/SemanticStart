@@ -50,6 +50,8 @@ internal static class Program
               index [--online] [--force]   Build or refresh the index
               index --refresh <providers>  Re-run only the named enrichers (comma-separated,
                                            or 'none'), reusing every other stored document
+              index --sources <names>      Rebuild only the named collectors (comma-separated),
+                                           leaving every other source in the index untouched
               search <query> [-n N]        Query the index
               eval                         Run the relevance harness
               stats                        Show index statistics
@@ -315,6 +317,30 @@ internal static class Program
             }
         }
 
+        // --sources <names>  rebuilds only the named collectors, leaving every other source in the
+        // index untouched. Scoped to discovery rather than to enrichment, which is what --refresh
+        // scopes; the two compose.
+        var sources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 1; i < args.Length - 1; i++)
+        {
+            if (args[i] is not "--sources")
+                continue;
+
+            foreach (var source in args[i + 1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                sources.Add(source);
+        }
+
+        if (sources.Count > 0)
+        {
+            var known = CollectorRegistry.CreateAll().Select(c => c.Source).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var unknown = sources.Where(s => !known.Contains(s)).ToArray();
+            if (unknown.Length > 0)
+            {
+                Console.Error.WriteLine($"unknown source(s): {string.Join(", ", unknown)}");
+                Console.Error.WriteLine($"known sources: {string.Join(", ", known.Order(StringComparer.Ordinal))}");
+                return 1;
+            }
+        }
         Console.WriteLine("Preparing embedding model...");
         var embeddings = await CreateEmbeddingModelAsync();
 
@@ -347,6 +373,7 @@ internal static class Program
                     ForceFullRebuild = force,
                     RefreshProviders = refresh,
                     ReuseStoredDocuments = reuseAll,
+                    Sources = sources,
                 },
                 progress);
 
