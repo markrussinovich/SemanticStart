@@ -7,6 +7,25 @@ namespace SemanticStart.Tests;
 
 public sealed class EnrichmentTests
 {
+    /// <summary>
+    /// A console tool asked to describe itself either prints usage or complains about the switch.
+    /// The complaint used to be stored as though it were documentation, which both failed to
+    /// document the tool and spent its one piece of evidence on the words of an error message.
+    /// </summary>
+    [Theory]
+    // Rejections: one line, and short.
+    [InlineData(@"C:\tools\node.exe: bad option: -?", false)]
+    [InlineData("Unknown option '-?'", false)]
+    [InlineData("", false)]
+    // Long, but still a single line - a tool echoing a path and a complaint.
+    [InlineData(@"C:\Program Files\Some Vendor\With A Long Installation Path\thetool.exe: unrecognized option '-?'. Try --help.", false)]
+    // Multi-line, but with nothing in it.
+    [InlineData("error\nbad option", false)]
+    // Real usage text: many lines, hundreds of characters.
+    [InlineData("Usage: robocopy source destination [file [file]...] [options]\n\n  source :: Source Directory (drive:\\path or \\\\server\\share\\path).\n  destination :: Destination Dir (drive:\\path or \\\\server\\share\\path).\n  /S :: copy Subdirectories, but not empty ones.\n  /E :: copy subdirectories, including Empty ones.", true)]
+    public void CliHelp_StoresUsageTextButNotSwitchRejections(string output, bool expected) =>
+        Assert.Equal(expected, CliHelpEnricher.LooksLikeHelp(output));
+
     [Fact]
     public async Task Pipeline_StripsHtmlBeforeSynthesis()
     {

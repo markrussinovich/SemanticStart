@@ -198,9 +198,38 @@ public sealed class CliHelpEnricher : IEnricher
             var result = await ProcessRunner.RunAsync(target.Path, target.Arguments, TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
             var text = result.Output.Trim();
             if (text.Length > 4096) text = text[..4096];
-            return string.IsNullOrWhiteSpace(text) ? [] : [new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = false, Text = text, SourceUri = target.Path }];
+            if (!LooksLikeHelp(text)) return [];
+            return [new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = false, Text = text, SourceUri = target.Path }];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) { return []; }
+    }
+
+    /// <summary>
+    /// Whether the captured output is documentation rather than a complaint about the switch.
+    ///
+    /// A tool that does not recognise "-?" answers on one short line - node.exe replies
+    /// "node.exe: bad option: -?" - and storing that was worse than storing nothing. It is indexed
+    /// as though it described the tool, so it both fails to document it and spends the tool's one
+    /// piece of evidence on the words "bad option" and a copy of its own path. Across a whole
+    /// source of console tools that is enough common text to measurably dilute the lexical arm.
+    ///
+    /// The test is structural rather than a list of error phrases, because the phrasing is the
+    /// tool author's choice and is localized, while the shape is not: usage text is many lines and
+    /// hundreds of characters, and a rejection is one line and a few dozen. Exit codes cannot
+    /// decide it - plenty of tools print correct usage and then exit non-zero.
+    /// </summary>
+    internal static bool LooksLikeHelp(string text)
+    {
+        if (text.Length < 120) return false;
+
+        var lines = 0;
+        foreach (var line in text.AsSpan().EnumerateLines())
+        {
+            if (!line.IsWhiteSpace() && ++lines >= 2)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
