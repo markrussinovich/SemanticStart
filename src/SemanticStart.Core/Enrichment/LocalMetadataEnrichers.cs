@@ -205,7 +205,7 @@ public sealed class CliHelpEnricher : IEnricher
         try
         {
             var result = await ProcessRunner.RunAsync(target.Path, target.Arguments, TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
-            var text = result.Output.Trim();
+            var text = RepairWideOutput(result.Output).Trim();
             if (text.Length > 4096) text = text[..4096];
             if (!LooksLikeHelp(text, result.ExitCode)) return [];
             return [new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = false, Text = text, SourceUri = target.Path }];
@@ -259,8 +259,37 @@ public sealed class CliHelpEnricher : IEnricher
     }
 
     /// <summary>
-    /// Whether the output is a runtime crash dump rather than anything the tool meant to say.
-    /// These markers are runtime-generated and unlocalized, so matching them is format detection
+    /// Recovers text from a tool that wrote UTF-16 to a redirected pipe.
+    ///
+    /// Console output is handed over already decoded, using one encoding for every tool, so a tool
+    /// that emits UTF-16 arrives as its real characters interleaved with NULs. That wreckage still
+    /// cleared the length test, and then normalization stripped it back to nothing, so six
+    /// Sysinternals tools - procdump, sdelete, sigcheck, Sysmon, Coreinfo and psping - stored an
+    /// empty document while genuinely having pages of help to give.
+    ///
+    /// Dropping the NULs recovers the text, because these tools write ASCII and the high byte of
+    /// every character is therefore zero. The density test is what keeps this from corrupting
+    /// anything else: correctly decoded output contains no NULs at all, so it is returned
+    /// untouched, and only output that is at least a quarter NUL is treated as mis-decoded.
+    /// </summary>
+    internal static string RepairWideOutput(string text)
+    {
+        var nuls = 0;
+        foreach (var ch in text)
+            if (ch == '\0') nuls++;
+
+        if (nuls == 0 || nuls * 4 < text.Length) return text;
+
+        var buffer = new char[text.Length - nuls];
+        var next = 0;
+        foreach (var ch in text)
+            if (ch != '\0') buffer[next++] = ch;
+
+        return new string(buffer);
+    }
+
+    /// <summary>
+    /// Whether the output is a runtime crash dump rather than anything the tool meant to say.    /// These markers are runtime-generated and unlocalized, so matching them is format detection
     /// rather than a guess at how an author worded an error.
     /// </summary>
     private static bool IsCrashOutput(string text) =>

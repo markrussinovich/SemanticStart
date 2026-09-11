@@ -27,6 +27,32 @@ public sealed class EnrichmentTests
         Assert.Equal(expected, CliHelpEnricher.LooksLikeHelp(output, exitCode));
 
     /// <summary>
+    /// A tool that writes UTF-16 to a redirected pipe arrives as its characters interleaved with
+    /// NULs. Recovering it is what turns six Sysinternals tools from an empty document into their
+    /// real help. Correctly decoded output must pass through untouched.
+    /// </summary>
+    [Fact]
+    public void CliHelp_RecoversTextFromAToolThatWroteUtf16()
+    {
+        var wide = "\0 \0 \0Y\0o\0u\0 \0m\0u\0s\0t\0 \0b\0e\0 \0a\0n\0 \0a\0d\0m\0i\0n";
+        Assert.Equal("  You must be an admin", CliHelpEnricher.RepairWideOutput(wide));
+
+        const string clean = "Usage: tool [options]\n  -a  does a thing\n  -b  does another";
+        Assert.Same(clean, CliHelpEnricher.RepairWideOutput(clean));
+    }
+
+    /// <summary>
+    /// A stray NUL is not evidence of a wide encoding, so output that merely contains one keeps
+    /// every other character. Only output that is substantially NUL is treated as mis-decoded.
+    /// </summary>
+    [Fact]
+    public void CliHelp_LeavesMostlyTextOutputAloneDespiteAStrayNul()
+    {
+        var text = "Usage: tool [options]\0 and a great deal more ordinary help text follows here";
+        Assert.Equal(text, CliHelpEnricher.RepairWideOutput(text));
+    }
+
+    /// <summary>
     /// A crash is not documentation however long it is. The pip console shims on PATH answer "-?"
     /// with a stack trace, which clears every length bar and then matches queries by way of
     /// interpreter paths and generic runtime vocabulary.
