@@ -20,11 +20,12 @@ On the Windows 11 machine these numbers were taken from:
 
 | | |
 |---|---|
-| Entities indexed | 521 |
-| Query latency | 2.4 ms median, 3.2 ms p95 |
-| Relevance corpus | 59/64, MRR 0.885, correct answer first 86% of the time |
+| Entities indexed | 583 |
+| Query latency | 3.1 ms median, 5.0 ms p95 |
+| Relevance corpus | 58/64, MRR 0.888, correct answer first 86% of the time |
 | Full rebuild | ~7 minutes, once |
 | Re-running one enricher | 2.5 seconds |
+| Rescanning one collector | ~10 seconds |
 
 ## How it works
 
@@ -33,11 +34,13 @@ On the Windows 11 machine these numbers were taken from:
   <img alt="Indexing runs offline: collectors, enrichment, synthesis and embeddings build index.sqlite. Querying is local: Win+Alt+. runs a vector arm and a lexical BM25 arm in parallel over that index, fused by RRF into the overlay." src="docs/pipeline-light.svg">
 </picture>
 
-**Indexing (offline).** Eight collectors enumerate AppsFolder/MSIX apps, Start shortcuts, uninstall
+**Indexing (offline).** Nine collectors enumerate AppsFolder/MSIX apps, Start shortcuts, uninstall
 registry entries, `ms-settings:` pages, Control Panel applets and MMC snap-ins, Windows optional
-features, System32 tools, and MSIX command aliases registered under `App Paths` — the last of these
-reaches console tools that ship inside installed suites and that Windows deliberately hides from
-Start. Each entity is enriched from local documentation and, optionally, online sources. Synthesis
+features, System32 tools, MSIX command aliases registered under `App Paths`, and the executables on
+`PATH` — the last two reach console tools that ship inside installed suites and that Windows
+deliberately hides from Start, and developer tooling that installs by unpacking an archive and
+registers nothing at all. Each entity is enriched from local documentation and, optionally, online
+sources. Synthesis
 then distills that documentation into a one-line description, a list of tasks the user might want,
 and synonyms — this is what closes the gap between how people phrase intent and how vendors name
 products. The result is embedded with `all-MiniLM-L6-v2` via ONNX Runtime.
@@ -207,6 +210,7 @@ silently threw away the first index build and left the app finding nothing.)
 ```powershell
 dotnet run --project src\SemanticStart.Cli -- index [--force]   # build or rebuild the index
 dotnet run --project src\SemanticStart.Cli -- index --refresh ui-resources
+dotnet run --project src\SemanticStart.Cli -- index --sources path
 dotnet run --project src\SemanticStart.Cli -- search "<query>"  # query it
 dotnet run --project src\SemanticStart.Cli -- eval              # run the relevance corpus
 dotnet run --project src\SemanticStart.Cli -- stats             # index statistics
@@ -217,6 +221,15 @@ dotnet run --project src\SemanticStart.Cli -- diagnose "<query>" --name "<entity
 `--refresh` re-runs only the named enrichers and reuses every stored document for the rest. Nothing
 is re-embedded unless its text actually changed, which turns the edit-measure loop on a single
 enricher from a seven-minute rebuild into 2.5 seconds.
+
+`--sources` is the same idea aimed at discovery instead of enrichment: it rebuilds only the named
+collectors and leaves every other source in the index untouched, which takes about ten seconds.
+`PATH` is the source that needs it, because it goes stale on its own — installing a tool appends a
+directory, and picking that up should not cost a pass over the network enrichers. Discovery still
+runs every collector even when the build is scoped, since deduplication is decided across sources
+in registration order; only the expensive stages are skipped. Sources are named by their id prefix:
+`appsfolder`, `startmenu`, `uninstall`, `mssettings`, `controlpanel`, `optionalfeature`,
+`systemtool`, `command`, `path`.
 
 `diagnose` answers the question `search` cannot: why something *didn't* come back. A missing result
 is either "no arm retrieved it" or "an arm retrieved it and a surfacing floor rejected it" — opposite
