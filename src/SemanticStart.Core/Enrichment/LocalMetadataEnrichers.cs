@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using SemanticStart.Core.Abstractions;
 using SemanticStart.Core.Model;
@@ -204,11 +205,26 @@ public sealed class CliHelpEnricher : IEnricher
         if (target is null) return [];
         try
         {
-            var result = await ProcessRunner.RunAsync(target.Path, target.Arguments, TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
-            var text = RepairWideOutput(result.Output).Trim();
-            if (text.Length > 4096) text = text[..4096];
-            if (!LooksLikeHelp(text, result.ExitCode)) return [];
-            return [new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = false, Text = text, SourceUri = target.Path }];
+            // A tool that answers one switch with usage and exits non-zero, and another with the
+            // same usage and exits cleanly, is telling us which switch it actually meant. gh is
+            // the clear case: "-?" yields 411 characters led by "unknown shorthand flag" and exits
+            // 1, while "-h" yields 2714 characters of real help and exits 0. So a clean exit ends
+            // the search immediately and a failing one is only held as a fallback.
+            EnrichmentDocument? fallback = null;
+
+            foreach (var switches in target.Candidates)
+            {
+                var result = await ProcessRunner.RunAsync(target.Path, switches, TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+                var text = RepairWideOutput(result.Output).Trim();
+                if (text.Length > 4096) text = text[..4096];
+                if (!LooksLikeHelp(text, result.ExitCode)) continue;
+
+                var document = new EnrichmentDocument { EntityId = entity.Id, Provider = Provider, IsOnline = false, Text = text, SourceUri = target.Path };
+                if (result.ExitCode == 0) return [document];
+                fallback ??= document;
+            }
+
+            return fallback is null ? [] : [fallback];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) { return []; }
     }
@@ -259,18 +275,18 @@ public sealed class CliHelpEnricher : IEnricher
     }
 
     /// <summary>
-    /// Recovers text from a tool that wrote UTF-16 to a redirected pipe.
+    /// Removes NUL characters from captured console output.
     ///
     /// Console output is handed over already decoded, using one encoding for every tool, so a tool
     /// that emits UTF-16 arrives as its real characters interleaved with NULs. That wreckage still
-    /// cleared the length test, and then normalization stripped it back to nothing, so six
-    /// Sysinternals tools - procdump, sdelete, sigcheck, Sysmon, Coreinfo and psping - stored an
-    /// empty document while genuinely having pages of help to give.
+    /// cleared the length test, and then storage truncated at the first NUL, so several
+    /// Sysinternals tools stored an empty document while genuinely having pages of help to give.
     ///
     /// Dropping the NULs recovers the text, because these tools write ASCII and the high byte of
-    /// every character is therefore zero. The density test is what keeps this from corrupting
-    /// anything else: correctly decoded output contains no NULs at all, so it is returned
-    /// untouched, and only output that is at least a quarter NUL is treated as mis-decoded.
+    /// every character is therefore zero. This deliberately does not test how dense the NULs are:
+    /// Sysmon pads only part of its output and came out 13% NUL, under a threshold set for fully
+    /// interleaved text, so it kept its NULs and stored nothing. There is no case where a NUL in
+    /// console output carries meaning, so the safe rule is to drop every one of them.
     /// </summary>
     internal static string RepairWideOutput(string text)
     {
@@ -278,7 +294,7 @@ public sealed class CliHelpEnricher : IEnricher
         foreach (var ch in text)
             if (ch == '\0') nuls++;
 
-        if (nuls == 0 || nuls * 4 < text.Length) return text;
+        if (nuls == 0) return text;
 
         var buffer = new char[text.Length - nuls];
         var next = 0;
@@ -298,19 +314,35 @@ public sealed class CliHelpEnricher : IEnricher
 
     /// <summary>
     /// Decides whether this entity is a command-line tool that can be asked to describe itself,
-    /// and with which switch.
+    /// and with which switches.
     ///
     /// Two populations qualify. The Windows tools in System32 are named explicitly because their
     /// help switches vary and a wrong guess on some of them does real work rather than printing
     /// usage. Everything else must prove it is a console program by its PE subsystem, which is
     /// what makes the capability general: it is how accesschk and pssuspend get documentation on a
     /// machine where they are installed, without anyone having written their names down here.
+    ///
+    /// Those get a ladder of switches rather than one, because there is no single convention and
+    /// assuming one silently lost tools that document themselves perfectly well under a different
+    /// spelling. The first reply that looks like help wins, so the common case still costs a
+    /// single run.
+    ///
+    /// "--help" and "-help" are deliberately absent. The Git family treats "--help" as a request
+    /// to *open the documentation*, so probing git-lfs, scalar, gitk or git-upload-pack with it
+    /// launches a web browser on the user's desktop. A help probe must never perform an action,
+    /// and a switch whose meaning is "show the user something" cannot be made safe by inspecting
+    /// what it returned, because the damage is done by then. The remaining three are inert: "-?"
+    /// and "--?" are requests for usage everywhere they are understood and an unknown-option
+    /// error everywhere else, and "-h" is the short form that tools implement in-process.
     /// </summary>
+    internal static readonly string[][] HelpSwitchLadder =
+        [["-?"], ["--?"], ["-h"]];
+
     private static HelpTarget? ResolveTarget(Entity entity)
     {
         var system32 = ResolveSafeSystem32Path(entity);
         if (entity.Kind == EntityKind.SystemTool && system32 is not null && Arguments.TryGetValue(Path.GetFileName(system32), out var args))
-            return new HelpTarget(system32, args);
+            return new HelpTarget(system32, [args]);
 
         if (entity.Kind != EntityKind.SystemTool || !entity.RawMetadata.ContainsKey("consoleSubsystem"))
             return null;
@@ -319,13 +351,10 @@ public sealed class CliHelpEnricher : IEnricher
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
             return null;
 
-        // "-?" is the convention these tools share, and unlike a bare invocation it cannot be
-        // mistaken for a request to act. Tools that do not recognise it print usage anyway, which
-        // is the text we wanted.
-        return new HelpTarget(path, ["-?"]);
+        return new HelpTarget(path, HelpSwitchLadder);
     }
 
-    private sealed record HelpTarget(string Path, string[] Arguments);
+    private sealed record HelpTarget(string Path, IReadOnlyList<string[]> Candidates);
     private static string? ResolveSafeSystem32Path(Entity entity)
     {
         try
@@ -381,6 +410,17 @@ internal static class ProcessRunner
         process.OutputDataReceived += (_, e) => Capture(e.Data);
         process.ErrorDataReceived += (_, e) => Capture(e.Data);
         process.Start();
+
+        // Contain the probe and everything it starts.
+        //
+        // Some console executables are only launcher stubs: gitk.exe parses nothing, starts the
+        // Tcl/Tk interface as a separate process and exits immediately, so by the time the timeout
+        // fires there is nothing left to kill and the window stays on the user's desktop. Killing
+        // the process tree cannot help, because the survivor is no longer in the tree - its parent
+        // is already gone. A job object is held by the children rather than by the parent, so
+        // closing it takes the orphans with it.
+        using var job = ProcessJob.TryContain(process);
+
         process.StandardInput.Close();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
@@ -394,4 +434,120 @@ internal static class ProcessRunner
         await waitTask.ConfigureAwait(false);
         lock (gate) return (process.ExitCode, output.ToString());
     }
+}
+
+/// <summary>
+/// A Windows job object that kills everything still inside it when it is disposed.
+///
+/// This exists because asking an unknown executable to describe itself can start something that
+/// outlives the answer. It is best-effort by design: if the job cannot be created or the process
+/// cannot be assigned to it, the probe still runs, because losing documentation for every console
+/// tool would be a worse outcome than the occasional stray window this is meant to prevent.
+/// </summary>
+internal sealed class ProcessJob : IDisposable
+{
+    private const int ExtendedLimitInformation = 9;
+    private const int KillOnJobClose = 0x2000;
+
+    private IntPtr handle;
+
+    private ProcessJob(IntPtr handle) => this.handle = handle;
+
+    public static ProcessJob? TryContain(Process process)
+    {
+        var job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero) return null;
+
+        var limits = new ExtendedLimit();
+        limits.BasicLimitInformation.LimitFlags = KillOnJobClose;
+
+        var size = Marshal.SizeOf<ExtendedLimit>();
+        var buffer = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(limits, buffer, false);
+            if (!SetInformationJobObject(job, ExtendedLimitInformation, buffer, (uint)size))
+            {
+                CloseHandle(job);
+                return null;
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+
+        try
+        {
+            if (!AssignProcessToJobObject(job, process.Handle))
+            {
+                CloseHandle(job);
+                return null;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+        {
+            // The process finished before it could be assigned, which is the common case for a
+            // tool that simply printed its usage. There is nothing left to contain.
+            CloseHandle(job);
+            return null;
+        }
+
+        return new ProcessJob(job);
+    }
+
+    public void Dispose()
+    {
+        if (handle == IntPtr.Zero) return;
+        CloseHandle(handle);
+        handle = IntPtr.Zero;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BasicLimit
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public IntPtr MinimumWorkingSetSize;
+        public IntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public IntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoCounters
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ExtendedLimit
+    {
+        public BasicLimit BasicLimitInformation;
+        public IoCounters IoInfo;
+        public IntPtr ProcessMemoryLimit;
+        public IntPtr JobMemoryLimit;
+        public IntPtr PeakProcessMemoryUsed;
+        public IntPtr PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateJobObjectW")]
+    private static extern IntPtr CreateJobObject(IntPtr attributes, string? name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetInformationJobObject(IntPtr job, int infoClass, IntPtr info, uint length);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
 }

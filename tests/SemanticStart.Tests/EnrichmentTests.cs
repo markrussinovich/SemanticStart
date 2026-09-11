@@ -27,6 +27,23 @@ public sealed class EnrichmentTests
         Assert.Equal(expected, CliHelpEnricher.LooksLikeHelp(output, exitCode));
 
     /// <summary>
+    /// A help probe must never perform an action. The Git family reads "--help" as a request to
+    /// open the documentation, so probing git-lfs, scalar or git-receive-pack with it launches a
+    /// web browser onto the user's desktop - which it did, before this was pinned down. No switch
+    /// whose meaning is "show the user something" belongs in the ladder, and inspecting the reply
+    /// cannot undo it, because the browser is already open by then.
+    /// </summary>
+    [Fact]
+    public void CliHelp_NeverProbesWithASwitchThatOpensDocumentation()
+    {
+        var switches = CliHelpEnricher.HelpSwitchLadder.SelectMany(s => s).ToArray();
+
+        Assert.DoesNotContain("--help", switches);
+        Assert.DoesNotContain("-help", switches);
+        Assert.NotEmpty(switches);
+    }
+
+    /// <summary>
     /// A tool that writes UTF-16 to a redirected pipe arrives as its characters interleaved with
     /// NULs. Recovering it is what turns six Sysinternals tools from an empty document into their
     /// real help. Correctly decoded output must pass through untouched.
@@ -42,14 +59,15 @@ public sealed class EnrichmentTests
     }
 
     /// <summary>
-    /// A stray NUL is not evidence of a wide encoding, so output that merely contains one keeps
-    /// every other character. Only output that is substantially NUL is treated as mis-decoded.
+    /// A stray NUL carries no meaning in console output, so it is dropped wherever it appears.
+    /// Sysmon pads only part of its output and came out 13% NUL, which a density threshold set
+    /// for fully interleaved UTF-16 would have missed, leaving it to store nothing at all.
     /// </summary>
     [Fact]
-    public void CliHelp_LeavesMostlyTextOutputAloneDespiteAStrayNul()
+    public void CliHelp_DropsNulsEvenWhenOnlyPartOfTheOutputIsPadded()
     {
         var text = "Usage: tool [options]\0 and a great deal more ordinary help text follows here";
-        Assert.Equal(text, CliHelpEnricher.RepairWideOutput(text));
+        Assert.Equal("Usage: tool [options] and a great deal more ordinary help text follows here", CliHelpEnricher.RepairWideOutput(text));
     }
 
     /// <summary>
