@@ -34,14 +34,29 @@ On the Windows 11 machine these numbers were taken from:
   <img alt="Indexing runs offline: collectors, enrichment, synthesis and embeddings build index.sqlite. Querying is local: Win+Alt+. runs a vector arm and a lexical BM25 arm in parallel over that index, fused by RRF into the overlay." src="docs/pipeline-light.svg">
 </picture>
 
-**Indexing (offline).** Nine collectors enumerate AppsFolder/MSIX apps, Start shortcuts, uninstall
-registry entries, `ms-settings:` pages, Control Panel applets and MMC snap-ins, Windows optional
-features, System32 tools, MSIX command aliases registered under `App Paths`, and the executables on
-`PATH` — the last two reach console tools that ship inside installed suites and that Windows
-deliberately hides from Start, and developer tooling that installs by unpacking an archive and
-registers nothing at all. Each entity is enriched from local documentation and, optionally, online
-sources. Synthesis
-then distills that documentation into a one-line description, a list of tasks the user might want,
+**Indexing (offline).** Nine collectors enumerate what is on the machine, in this order — the order
+is deduplication precedence, so an earlier source wins when the same thing is found twice:
+
+| Collector | Source id | What it finds |
+|---|---|---|
+| `AppsFolderCollector` | `appsfolder` | AppsFolder entries: MSIX/UWP packages and Win32 apps alike |
+| `StartShortcutCollector` | `startmenu` | `.lnk` shortcuts in the per-user and all-users Start Menu |
+| `UninstallRegistryCollector` | `uninstall` | Installed programs registered under the uninstall keys |
+| `SettingsPageCollector` | `mssettings` | `ms-settings:` pages |
+| `ControlPanelCollector` | `controlpanel` | Control Panel applets and MMC snap-ins |
+| `OptionalFeatureCollector` | `optionalfeature` | Windows optional features and capabilities |
+| `SystemToolCollector` | `systemtool` | Curated System32 tools |
+| `CommandAliasCollector` | `command` | Console executables registered under `App Paths` |
+| `PathExecutableCollector` | `path` | Executables on the user's and system `PATH` |
+
+The last two are the ones that reach what Start will not show you: console tools that ship inside
+installed suites and that Windows deliberately hides, and developer tooling that installs by
+unpacking an archive and registers nothing at all. `PathExecutableCollector` runs last on purpose —
+a `PATH` directory holds a binary but knows nothing about it, so when the same executable is also
+found somewhere that carries a real display name, that is the record worth keeping.
+
+Each entity is then enriched from local documentation and, optionally, online sources. Synthesis
+distills that documentation into a one-line description, a list of tasks the user might want,
 and synonyms — this is what closes the gap between how people phrase intent and how vendors name
 products. The result is embedded with `all-MiniLM-L6-v2` via ONNX Runtime.
 
@@ -234,9 +249,8 @@ collectors and leaves every other source in the index untouched, which takes abo
 `PATH` is the source that needs it, because it goes stale on its own — installing a tool appends a
 directory, and picking that up should not cost a pass over the network enrichers. Discovery still
 runs every collector even when the build is scoped, since deduplication is decided across sources
-in registration order; only the expensive stages are skipped. Sources are named by their id prefix:
-`appsfolder`, `startmenu`, `uninstall`, `mssettings`, `controlpanel`, `optionalfeature`,
-`systemtool`, `command`, `path`.
+in registration order; only the expensive stages are skipped. Sources are named by the id prefix in
+the [collector table](#how-it-works) above.
 
 `diagnose` answers the question `search` cannot: why something *didn't* come back. A missing result
 is either "no arm retrieved it" or "an arm retrieved it and a surfacing floor rejected it" — opposite
