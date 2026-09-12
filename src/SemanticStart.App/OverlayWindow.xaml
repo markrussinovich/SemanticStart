@@ -220,6 +220,7 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <Grid Width="32" Height="32" VerticalAlignment="Center" Margin="4,0,0,0">
                                     <Border Background="{DynamicResource IconBackplateBrush}" CornerRadius="5"
@@ -245,7 +246,15 @@
                                                FontSize="{DynamicResource CaptionFontSize}"
                                                Foreground="{DynamicResource PrimaryTextBrush}" />
                                 </Border>
-                                <ToggleButton Grid.Column="3" x:Name="DetailsToggle" Style="{StaticResource ChevronToggle}"
+                                <Button Grid.Column="3" Style="{StaticResource SubtleButton}"
+                                        Width="26" Height="26" FontSize="13" Focusable="False"
+                                        Content="{Binding CopyGlyph}" ToolTip="{Binding CopyToolTip}"
+                                        ToolTipService.ShowDuration="20000"
+                                        AutomationProperties.Name="Copy command line"
+                                        Visibility="{Binding HasCommandLine, Converter={StaticResource BoolToVisible}}"
+                                        Click="CopyCommandLine_Click"
+                                        VerticalAlignment="Center" Margin="6,0,0,0" />
+                                <ToggleButton Grid.Column="4" x:Name="DetailsToggle" Style="{StaticResource ChevronToggle}"
                                               IsChecked="{Binding IsExpanded, Mode=TwoWay}"
                                               ToolTip="Show details (Ctrl+D)"
                                               AutomationProperties.Name="Show details"

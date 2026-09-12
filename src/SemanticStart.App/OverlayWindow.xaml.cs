@@ -89,6 +89,7 @@ public partial class OverlayWindow : Window
     public void HideAndReset()
     {
         Hide();
+        ClearCopiedFlash();
         _viewModel.Clear();
     }
 
@@ -203,6 +204,12 @@ public partial class OverlayWindow : Window
         {
             var control = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
 
+            if (control && e.Key == Key.C && TryCopySelectedCommandLine())
+            {
+                e.Handled = true;
+                return;
+            }
+
             if (e.Key == Key.Down || (control && e.Key == Key.J))
             {
                 // Down out of the query lands on the first result rather than skipping past it.
@@ -297,8 +304,25 @@ public partial class OverlayWindow : Window
         return true;
     }
 
-    private bool IsCaretPastQuery(bool atEnd)
+    /// <summary>
+    /// Ctrl+C copies the selected result's command line, but only when it would otherwise do
+    /// nothing. The keyboard focus never leaves the query box, so Ctrl+C with text selected there
+    /// still has to mean copy that text; this only claims the shortcut when the selection is empty
+    /// and a result is highlighted.
+    /// </summary>
+    private bool TryCopySelectedCommandLine()
     {
+        if (SearchBox.SelectionLength > 0)
+            return false;
+
+        if (_viewModel.SelectedItem is not { HasCommandLine: true } item)
+            return false;
+
+        CopyCommandLine(item);
+        return true;
+    }
+
+    private bool IsCaretPastQuery(bool atEnd)    {
         if (_viewModel.IsResultsActive)
             return true;
 
@@ -326,4 +350,78 @@ public partial class OverlayWindow : Window
     }
 
     private void Window_Deactivated(object sender, EventArgs e) => HideAndReset();
+
+    private void CopyCommandLine_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is SearchResultItem item)
+            CopyCommandLine(item);
+    }
+
+    /// <summary>
+    /// Puts a result's command line on the clipboard.
+    /// <para>
+    /// The clipboard is a shared resource that exactly one process owns at a time, and a process
+    /// that has it open makes every other write fail; the failure arrives as a COM error rather
+    /// than a return value. Nothing about copying is worth interrupting the user for, so a refusal
+    /// is reported in the status line and the button simply does not acknowledge.
+    /// </para>
+    /// </summary>
+    private void CopyCommandLine(SearchResultItem item)
+    {
+        if (item.CommandLine is not { Length: > 0 } command)
+            return;
+
+        try
+        {
+            // Copy=true leaves the text on the clipboard after this process exits, which is the
+            // behaviour a user expects of anything they copied.
+            System.Windows.Clipboard.SetDataObject(command, copy: true);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Copying a command line to the clipboard failed");
+            _viewModel.ReportStatus("Could not write to the clipboard");
+            return;
+        }
+
+        FlashCopied(item);
+    }
+
+    /// <summary>
+    /// Turns the copy glyph into a checkmark for a moment. Writing the clipboard changes nothing
+    /// the user can see, so without an acknowledgement the button looks broken.
+    /// </summary>
+    private void FlashCopied(SearchResultItem item)
+    {
+        // Only one row may be showing the checkmark, or a second copy leaves the first one stuck.
+        if (_copiedItem is { } previous && !ReferenceEquals(previous, item))
+            previous.JustCopied = false;
+
+        _copiedItem = item;
+        item.JustCopied = true;
+
+        _copiedTimer ??= CreateCopiedTimer();
+        _copiedTimer.Stop();
+        _copiedTimer.Start();
+    }
+
+    private DispatcherTimer CreateCopiedTimer()
+    {
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.4) };
+        timer.Tick += (_, _) => ClearCopiedFlash();
+        return timer;
+    }
+
+    private void ClearCopiedFlash()
+    {
+        _copiedTimer?.Stop();
+
+        if (_copiedItem is { } item)
+            item.JustCopied = false;
+
+        _copiedItem = null;
+    }
+
+    private SearchResultItem? _copiedItem;
+    private DispatcherTimer? _copiedTimer;
 }

@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using SemanticStart.Core.Abstractions;
+using SemanticStart.Core.Launching;
 using SemanticStart.Core.Model;
 
 namespace SemanticStart.App;
@@ -154,6 +155,39 @@ public sealed class SearchResultItem : ObservableObject
 
     public bool HasLaunchTarget => LaunchTarget.Length > 0;
 
+    /// <summary>
+    /// What the copy button puts on the clipboard: the command that would start this result. Unlike
+    /// <see cref="LaunchTarget"/>, which is a location to read, this is meant to be pasted and run,
+    /// so it keeps the host program and the arguments the launcher would have supplied.
+    /// </summary>
+    public string CommandLine => LaunchCommandLine.For(Hit.Entity);
+
+    public bool HasCommandLine => CommandLine.Length > 0;
+
+    /// <summary>
+    /// Set for a moment after a successful copy. Nothing else in the window changes when the
+    /// clipboard is written, so without this the button would give no sign it had worked.
+    /// </summary>
+    public bool JustCopied
+    {
+        get => _justCopied;
+        set
+        {
+            if (SetProperty(ref _justCopied, value))
+            {
+                OnPropertyChanged(nameof(CopyGlyph));
+                OnPropertyChanged(nameof(CopyToolTip));
+            }
+        }
+    }
+
+    /// <summary>Copy glyph at rest, checkmark just after a copy.</summary>
+    public string CopyGlyph => JustCopied ? "\uE73E" : "\uE8C8";
+
+    public string CopyToolTip => JustCopied ? "Copied" : $"Copy command line (Ctrl+C)\n{CommandLine}";
+
+    private bool _justCopied;
+
     private const int MaxDisplayedTasks = 5;
 
     private static string FormatLaunchTarget(string target)
@@ -265,6 +299,13 @@ public sealed class OverlayViewModel : ObservableObject
         get => _status;
         private set => SetProperty(ref _status, value);
     }
+
+    /// <summary>
+    /// Shows a notice that did not come from the search, such as a clipboard write being refused.
+    /// A method rather than a public setter so the status line keeps one owner: whatever is written
+    /// here is replaced by the next search, which is the right lifetime for a transient message.
+    /// </summary>
+    public void ReportStatus(string message) => Status = message;
 
     public int SelectedIndex
     {

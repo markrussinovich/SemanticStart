@@ -155,12 +155,19 @@ Run `SemanticStart.App.exe`. It lives in the tray, builds its index on first run
 | `Enter` | Launch |
 | `Down` / `Up` | Move into the results and back to the search box |
 | `Right` / `Left` | Show / hide the selected result's description (`Ctrl+D` toggles) |
+| `Ctrl+C` | Copy the selected result's command line |
 | `Ctrl+Enter` | Launch as administrator |
 | `Ctrl+Shift+Enter` | Open file location |
 | `Esc` | Dismiss |
 
 The overlay follows the system light/dark theme and accent color live, and shows each entry's real
 Shell icon (including MSIX/UWP assets) via `IShellItemImageFactory` — the same source Start uses.
+
+Every result carries a copy button next to its kind badge. It puts the command that would start the
+entry on the clipboard, which for half of them is not the thing the index stores: a Settings page is
+a URI, a Control Panel applet and an MMC snap-in are arguments to a host program, and a packaged
+app's launch target is an AppUserModelId that runs only behind `explorer.exe shell:AppsFolder\`. The
+button copies what you can actually paste and run.
 
 ### Where descriptions come from
 
