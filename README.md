@@ -91,6 +91,11 @@ mean-pooling/normalization stages, so another provider such as Ollama can be sub
 changing indexing or retrieval. The model id and dimensions come from the provider metadata and
 are persisted with the index; changing either requires a rebuild.
 
+`OnnxEmbeddingGenerator` uses BERT tokenization by default and also accepts a compatible
+`Microsoft.ML.Tokenizers.Tokenizer` implementation. The supplied tokenizer must match the
+model's vocabulary and input requirements. Changing effective tokenization requires rebuilding
+the index and using a distinct model id.
+
 **Querying (hot path).** Two arms run per query. The vector arm supplies semantic recall; the
 lexical FTS5/BM25 arm supplies precision on literal names. Neither is sufficient alone — pure vector
 search fails on short prefixes like `wor`, and pure lexical search cannot answer *"free up disk

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Microsoft.ML.Tokenizers;
 
 namespace SemanticStart.Core.Embeddings;
 
@@ -12,29 +13,46 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator<string, Embeddi
     public const string DefaultModelId = "all-MiniLM-L6-v2";
     public const int DefaultDimensions = 384;
 
-    private readonly BertTokenBatcher _tokenizer;
+    private readonly Tokenizer _tokenizer;
     private readonly OnnxTextScorer _scorer;
     private readonly EmbeddingGeneratorMetadata _metadata;
     private readonly string _modelId;
     private readonly int _dimensions;
     private bool _disposed;
 
+    /// <summary>Creates a provider using the default uncased BERT tokenizer and the supplied vocabulary.</summary>
     public OnnxEmbeddingGenerator(
         string modelPath,
         string vocabPath,
         string modelId = DefaultModelId,
         int dimensions = DefaultDimensions)
+        : this(modelPath, CreateDefaultTokenizer(vocabPath), modelId, dimensions)
+    {
+    }
+
+    /// <summary>Creates a provider using a caller-supplied tokenizer compatible with the ONNX model.</summary>
+    /// <remarks>
+    /// Custom tokenizers must return complete model-input sequences, including required special tokens,
+    /// within a 256-token budget. Batches use right padding with ID zero and single-sequence token-type
+    /// IDs of zero. Stock <see cref="BertTokenizer"/> instances retain BERT special-token handling.
+    /// The caller owns the tokenizer and must ensure it is thread-safe for concurrent generation calls.
+    /// Changing tokenization changes embeddings: rebuild existing indexes and use a distinct model ID
+    /// when the effective encoding changes.
+    /// </remarks>
+    public OnnxEmbeddingGenerator(
+        string modelPath,
+        Tokenizer tokenizer,
+        string modelId = DefaultModelId,
+        int dimensions = DefaultDimensions)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelPath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(vocabPath);
+        ArgumentNullException.ThrowIfNull(tokenizer);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(dimensions);
-        if (!File.Exists(vocabPath))
-            throw new FileNotFoundException("Embedding model vocabulary was not found.", vocabPath);
 
         _modelId = modelId;
         _dimensions = dimensions;
-        _tokenizer = new BertTokenBatcher(vocabPath);
+        _tokenizer = tokenizer;
         _scorer = new OnnxTextScorer(modelPath);
 
         _metadata = new EmbeddingGeneratorMetadata(
@@ -70,7 +88,7 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator<string, Embeddi
         IReadOnlyList<string> texts,
         CancellationToken cancellationToken)
     {
-        var tokenized = _tokenizer.Tokenize(texts, _scorer.HasTokenTypeIds, cancellationToken);
+        var tokenized = _tokenizer.CreateOnnxBatch(texts, _scorer.HasTokenTypeIds, cancellationToken);
         var hiddenStates = _scorer.Score(tokenized, cancellationToken);
         var vectors = EmbeddingPooling.MeanPoolAndNormalize(hiddenStates, tokenized);
 
@@ -90,6 +108,28 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator<string, Embeddi
         }
 
         return generated;
+    }
+
+    private static BertTokenizer CreateDefaultTokenizer(string vocabPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(vocabPath);
+        if (!File.Exists(vocabPath))
+            throw new FileNotFoundException("Embedding model vocabulary was not found.", vocabPath);
+
+        return BertTokenizer.Create(
+            vocabPath,
+            new BertOptions
+            {
+                LowerCaseBeforeTokenization = true,
+                ApplyBasicTokenization = true,
+                SplitOnSpecialTokens = true,
+                SeparatorToken = "[SEP]",
+                PaddingToken = "[PAD]",
+                ClassificationToken = "[CLS]",
+                MaskingToken = "[MASK]",
+                IndividuallyTokenizeCjk = true,
+                RemoveNonSpacingMarks = true,
+            });
     }
 
     private void ValidateOptions(EmbeddingGenerationOptions? options)

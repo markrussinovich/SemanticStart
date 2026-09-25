@@ -18,6 +18,9 @@ models/
 .shot/
 *.py
 
+# Tiny offline test model.
+!/tests/SemanticStart.Tests/Fixtures/tokenizer-embedding.onnx
+
 # A generated index is a list of what is installed on the machine that built it,
 # so it is local data rather than source and must never be committed.
 .verify/

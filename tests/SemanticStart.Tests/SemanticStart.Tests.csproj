@@ -30,4 +30,8 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Fixtures\tokenizer-embedding.onnx" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

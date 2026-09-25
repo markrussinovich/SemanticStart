@@ -2,36 +2,17 @@ using Microsoft.ML.Tokenizers;
 
 namespace SemanticStart.Core.Embeddings;
 
-internal sealed class BertTokenBatcher
+internal static class TokenizerExtensions
 {
     private const int MaxSequenceLength = 256;
-    private readonly BertTokenizer _tokenizer;
 
-    public BertTokenBatcher(string vocabPath)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(vocabPath);
-
-        _tokenizer = BertTokenizer.Create(
-            vocabPath,
-            new BertOptions
-            {
-                LowerCaseBeforeTokenization = true,
-                ApplyBasicTokenization = true,
-                SplitOnSpecialTokens = true,
-                SeparatorToken = "[SEP]",
-                PaddingToken = "[PAD]",
-                ClassificationToken = "[CLS]",
-                MaskingToken = "[MASK]",
-                IndividuallyTokenizeCjk = true,
-                RemoveNonSpacingMarks = true,
-            });
-    }
-
-    public TokenizedBatch Tokenize(
+    public static TokenizedBatch CreateOnnxBatch(
+        this Tokenizer tokenizer,
         IReadOnlyList<string> texts,
         bool includeTokenTypeIds,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(tokenizer);
         ArgumentNullException.ThrowIfNull(texts);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -43,7 +24,7 @@ internal sealed class BertTokenBatcher
         for (var i = 0; i < texts.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            encoded[i] = Encode(texts[i] ?? string.Empty);
+            encoded[i] = Encode(tokenizer, texts[i] ?? string.Empty, i);
             sequenceLength = Math.Max(sequenceLength, encoded[i].Length);
         }
 
@@ -69,16 +50,32 @@ internal sealed class BertTokenBatcher
             sequenceLength);
     }
 
-    private long[] Encode(string text)
+    private static long[] Encode(Tokenizer tokenizer, string text, int sequenceIndex)
     {
-        IReadOnlyList<int> ids = _tokenizer.EncodeToIds(
-            text,
-            MaxSequenceLength,
-            addSpecialTokens: true,
-            out _,
-            out _,
-            considerPreTokenization: true,
-            considerNormalization: true);
+        // BERT hides the base encoding methods; its overload reserves space for [CLS] and [SEP].
+        IReadOnlyList<int> ids = tokenizer is BertTokenizer bert
+            ? bert.EncodeToIds(
+                text,
+                MaxSequenceLength,
+                addSpecialTokens: true,
+                out _,
+                out _,
+                considerPreTokenization: true,
+                considerNormalization: true)
+            : tokenizer.EncodeToIds(
+                text,
+                MaxSequenceLength,
+                out _,
+                out _,
+                considerPreTokenization: true,
+                considerNormalization: true);
+
+        if (ids.Count > MaxSequenceLength)
+        {
+            throw new InvalidOperationException(
+                $"Tokenizer returned {ids.Count} tokens for sequence {sequenceIndex}; " +
+                $"the maximum is {MaxSequenceLength}, including special tokens.");
+        }
 
         var result = new long[ids.Count];
         for (var i = 0; i < ids.Count; i++)
