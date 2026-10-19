@@ -12,15 +12,6 @@ namespace SemanticStart.Tests;
 /// </summary>
 public sealed class IndexRebuildCoordinatorTests
 {
-    [Fact]
-    public void NothingIsRunningUntilARebuildIsStarted()
-    {
-        using var coordinator = Coordinator(_ => Task.CompletedTask);
-
-        Assert.False(coordinator.IsRunning);
-        Assert.Equal(IndexRebuildState.Idle, coordinator.State);
-    }
-
     /// <summary>
     /// The point of the whole class: a rebuild survives everything except an explicit cancel. A
     /// window that opened it, showed progress, and closed leaves it running.

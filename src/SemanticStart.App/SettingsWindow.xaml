@@ -2,81 +2,236 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:SemanticStart.App"
-        Title="SemanticStart Settings" Width="620" SizeToContent="Height" WindowStartupLocation="CenterScreen"
+        Title="SemanticStart Settings"
+        Width="620"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterScreen"
         Icon="/SemanticStart.App;component/Assets/SemanticStart.ico"
-        ResizeMode="CanMinimize" FontFamily="{DynamicResource UiFont}"
-        UseLayoutRounding="True" TextOptions.TextFormattingMode="Ideal"
-        Background="{DynamicResource PanelBrush}" Foreground="{DynamicResource PrimaryTextBrush}">
+        ResizeMode="CanMinimize"
+        FontFamily="{DynamicResource UiFont}"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Ideal"
+        Background="{DynamicResource PanelBrush}"
+        Foreground="{DynamicResource PrimaryTextBrush}">
     <Window.Resources>
+        <!-- Stock WPF tab chrome stays light even when the app's theme brushes change. -->
+        <Style x:Key="SettingsTabControl"
+                TargetType="TabControl">
+            <Setter Property="Background"
+                    Value="{DynamicResource PanelBrush}"/>
+            <Setter Property="Foreground"
+                    Value="{DynamicResource PrimaryTextBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabControl">
+                        <Grid KeyboardNavigation.TabNavigation="Local">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <TabPanel IsItemsHost="True"
+                                    Margin="0,0,0,4"
+                                      KeyboardNavigation.TabIndex="1"/>
+                            <Border Grid.Row="1"
+                                    Background="{TemplateBinding Background}">
+                                <ContentPresenter x:Name="PART_SelectedContentHost"
+                                        ContentSource="SelectedContent"
+                                                  KeyboardNavigation.TabIndex="2"
+                                                  KeyboardNavigation.TabNavigation="Local"
+                                                  KeyboardNavigation.DirectionalNavigation="Contained"/>
+                            </Border>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="TabItem">
+            <Setter Property="Background"
+                    Value="Transparent"/>
+            <Setter Property="BorderBrush"
+                    Value="Transparent"/>
+            <Setter Property="Foreground"
+                    Value="{DynamicResource SecondaryTextBrush}"/>
+            <Setter Property="FontFamily"
+                    Value="{DynamicResource UiFont}"/>
+            <Setter Property="FontSize"
+                    Value="{DynamicResource BodyFontSize}"/>
+            <Setter Property="Padding"
+                    Value="16,8"/>
+            <Setter Property="Margin"
+                    Value="0,0,4,0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Grid>
+                            <Border x:Name="HeaderBorder"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter ContentSource="Header"
+                                        RecognizesAccessKey="True"
+                                                  HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"/>
+                            </Border>
+                            <Border x:Name="SelectionIndicator"
+                                    Background="{DynamicResource AccentBrush}"
+                                    Height="2"
+                                    Width="16"
+                                    CornerRadius="1"
+                                    VerticalAlignment="Bottom"
+                                    Visibility="Collapsed"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver"
+                                    Value="True">
+                                <Setter TargetName="HeaderBorder"
+                                        Property="Background"
+                                        Value="{DynamicResource ItemHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected"
+                                    Value="True">
+                                <Setter TargetName="HeaderBorder"
+                                        Property="Background"
+                                        Value="{DynamicResource SearchBoxBrush}"/>
+                                <Setter Property="Foreground"
+                                        Value="{DynamicResource PrimaryTextBrush}"/>
+                                <Setter TargetName="SelectionIndicator"
+                                        Property="Visibility"
+                                        Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused"
+                                    Value="True">
+                                <Setter TargetName="HeaderBorder"
+                                        Property="BorderBrush"
+                                        Value="{DynamicResource FocusStrokeBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <!-- Windows 11 settings "card": a rounded surface holding one setting. -->
-        <Style x:Key="Card" TargetType="Border">
-            <Setter Property="Background" Value="{DynamicResource SearchBoxBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource PanelBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="6" />
-            <Setter Property="Padding" Value="16,12" />
-            <Setter Property="Margin" Value="0,0,0,8" />
+        <Style x:Key="Card"
+                TargetType="Border">
+            <Setter Property="Background"
+                    Value="{DynamicResource SearchBoxBrush}"/>
+            <Setter Property="BorderBrush"
+                    Value="{DynamicResource PanelBorderBrush}"/>
+            <Setter Property="BorderThickness"
+                    Value="1"/>
+            <Setter Property="CornerRadius"
+                    Value="6"/>
+            <Setter Property="Padding"
+                    Value="16,12"/>
+            <Setter Property="Margin"
+                    Value="0,0,0,8"/>
         </Style>
         <Style TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
-            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
+            <Setter Property="Foreground"
+                    Value="{DynamicResource PrimaryTextBrush}"/>
+            <Setter Property="FontSize"
+                    Value="{DynamicResource BodyFontSize}"/>
         </Style>
-        <Style x:Key="Caption" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
-            <Setter Property="FontFamily" Value="{DynamicResource UiFontSmall}" />
-            <Setter Property="FontSize" Value="{DynamicResource CaptionFontSize}" />
-            <Setter Property="TextWrapping" Value="Wrap" />
-            <Setter Property="Margin" Value="0,3,0,0" />
+        <Style x:Key="Caption"
+                TargetType="TextBlock">
+            <Setter Property="Foreground"
+                    Value="{DynamicResource SecondaryTextBrush}"/>
+            <Setter Property="FontFamily"
+                    Value="{DynamicResource UiFontSmall}"/>
+            <Setter Property="FontSize"
+                    Value="{DynamicResource CaptionFontSize}"/>
+            <Setter Property="TextWrapping"
+                    Value="Wrap"/>
+            <Setter Property="Margin"
+                    Value="0,3,0,0"/>
         </Style>
-        <Style x:Key="SectionHeader" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{DynamicResource HeaderTextBrush}" />
-            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Margin" Value="2,14,0,8" />
+        <Style x:Key="SectionHeader"
+                TargetType="TextBlock">
+            <Setter Property="Foreground"
+                    Value="{DynamicResource HeaderTextBrush}"/>
+            <Setter Property="FontSize"
+                    Value="{DynamicResource BodyFontSize}"/>
+            <Setter Property="FontWeight"
+                    Value="SemiBold"/>
+            <Setter Property="Margin"
+                    Value="2,14,0,8"/>
         </Style>
         <Style TargetType="CheckBox">
-            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
-            <Setter Property="FontFamily" Value="{DynamicResource UiFont}" />
-            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Foreground"
+                    Value="{DynamicResource PrimaryTextBrush}"/>
+            <Setter Property="FontFamily"
+                    Value="{DynamicResource UiFont}"/>
+            <Setter Property="FontSize"
+                    Value="{DynamicResource BodyFontSize}"/>
+            <Setter Property="VerticalContentAlignment"
+                    Value="Center"/>
         </Style>
         <Style TargetType="TextBox">
-            <Setter Property="Background" Value="{DynamicResource SearchBoxBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource SearchBoxBorderBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
-            <Setter Property="CaretBrush" Value="{DynamicResource PrimaryTextBrush}" />
-            <Setter Property="FontFamily" Value="{DynamicResource UiFont}" />
-            <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
-            <Setter Property="Padding" Value="11,7" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background"
+                    Value="{DynamicResource SearchBoxBrush}"/>
+            <Setter Property="BorderBrush"
+                    Value="{DynamicResource SearchBoxBorderBrush}"/>
+            <Setter Property="Foreground"
+                    Value="{DynamicResource PrimaryTextBrush}"/>
+            <Setter Property="CaretBrush"
+                    Value="{DynamicResource PrimaryTextBrush}"/>
+            <Setter Property="FontFamily"
+                    Value="{DynamicResource UiFont}"/>
+            <Setter Property="FontSize"
+                    Value="{DynamicResource BodyFontSize}"/>
+            <Setter Property="Padding"
+                    Value="11,7"/>
+            <Setter Property="BorderThickness"
+                    Value="1"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">
-                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="6">
                             <Grid>
-                                <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" />
+                                <ScrollViewer x:Name="PART_ContentHost"
+                                        Margin="{TemplateBinding Padding}"/>
                                 <!--
                                     Windows marks a text field with a stroke along its bottom edge -
                                     stronger than the surrounding border at rest, and an accent line
                                     twice as thick once focused - rather than recolouring the whole
                                     outline.
                                 -->
-                                <Border x:Name="BottomLine" Height="1" VerticalAlignment="Bottom"
-                                        CornerRadius="0,0,6,6" Background="{DynamicResource ControlStrongStrokeBrush}" />
-                                <Border x:Name="FocusLine" Height="2" VerticalAlignment="Bottom"
-                                        CornerRadius="0,0,6,6" Background="{DynamicResource AccentBrush}" Visibility="Collapsed" />
+                                <Border x:Name="BottomLine"
+                                        Height="1"
+                                        VerticalAlignment="Bottom"
+                                        CornerRadius="0,0,6,6"
+                                        Background="{DynamicResource ControlStrongStrokeBrush}"/>
+                                <Border x:Name="FocusLine"
+                                        Height="2"
+                                        VerticalAlignment="Bottom"
+                                        CornerRadius="0,0,6,6"
+                                        Background="{DynamicResource AccentBrush}"
+                                        Visibility="Collapsed"/>
                             </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource InputActiveBrush}" />
-                                <Setter TargetName="BottomLine" Property="Visibility" Value="Collapsed" />
-                                <Setter TargetName="FocusLine" Property="Visibility" Value="Visible" />
+                            <Trigger Property="IsKeyboardFocused"
+                                    Value="True">
+                                <Setter TargetName="Bd"
+                                        Property="Background"
+                                        Value="{DynamicResource InputActiveBrush}"/>
+                                <Setter TargetName="BottomLine"
+                                        Property="Visibility"
+                                        Value="Collapsed"/>
+                                <Setter TargetName="FocusLine"
+                                        Property="Visibility"
+                                        Value="Visible"/>
                             </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.5" />
+                            <Trigger Property="IsEnabled"
+                                    Value="False">
+                                <Setter Property="Opacity"
+                                        Value="0.5"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -87,152 +242,352 @@
 
     <Grid Margin="20,16,20,16">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="2,0,0,10">
-            <Border Width="22" Height="22" CornerRadius="5" Background="{DynamicResource AccentBrush}">
-                <TextBlock Text="&#xE721;" FontFamily="{DynamicResource IconFont}" FontSize="12"
-                           Foreground="{DynamicResource TextOnAccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+        <StackPanel Grid.Row="0"
+                Orientation="Horizontal"
+                Margin="2,0,0,10">
+            <Border Width="22"
+                    Height="22"
+                    CornerRadius="5"
+                    Background="{DynamicResource AccentBrush}">
+                <TextBlock Text="&#xE721;"
+                        FontFamily="{DynamicResource IconFont}"
+                        FontSize="12"
+                           Foreground="{DynamicResource TextOnAccentBrush}"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"/>
             </Border>
             <!-- Subtitle sizes use Segoe UI Variable Display, the face Windows switches to at 18px. -->
-            <TextBlock Text="SemanticStart" FontFamily="{DynamicResource UiFontDisplay}"
-                       FontSize="{DynamicResource SubtitleFontSize}" FontWeight="SemiBold" Margin="10,0,0,0"
-                       VerticalAlignment="Center" />
+            <TextBlock Text="SemanticStart"
+                    FontFamily="{DynamicResource UiFontDisplay}"
+                       FontSize="{DynamicResource SubtitleFontSize}"
+                    FontWeight="SemiBold"
+                    Margin="10,0,0,0"
+                       VerticalAlignment="Center"/>
         </StackPanel>
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
-            <StackPanel>
-                <!-- First run only. The first index is the expensive one, so its choices are shown
+        <TabControl Grid.Row="1"
+                x:Name="SettingsTabs"
+                Style="{StaticResource SettingsTabControl}">
+            <TabItem Header="General">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                        Padding="0,0,8,0">
+                    <StackPanel>
+                        <!-- First run only. The first index is the expensive one, so its choices are shown
                      here before anything is built, and building waits for the button below. -->
-                <Border x:Name="SetupBanner" Style="{StaticResource Card}" Visibility="Collapsed" Margin="0,0,0,4">
-                    <StackPanel>
-                        <TextBlock Text="Welcome to SemanticStart" FontWeight="SemiBold" />
-                        <TextBlock Style="{StaticResource Caption}"
-                                   Text="SemanticStart builds a searchable index of your apps, settings, and built-in Windows tools so you can find them by describing what you want. Review the settings below, then choose Build index. Indexing takes a few minutes and runs in the background. Your Start menu is not modified." />
-                    </StackPanel>
-                </Border>
-
-                <TextBlock Text="Activation" Style="{StaticResource SectionHeader}" />
-
-                <Border Style="{StaticResource Card}">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="Hotkey" />
-                            <TextBlock x:Name="HotKeyStatus" Style="{StaticResource Caption}" />
-                        </StackPanel>
-                        <local:HotKeyRecorder x:Name="HotKeyBox" Grid.Column="1" VerticalAlignment="Center"
-                                              HotKeyChanged="HotKeyBox_HotKeyChanged"
-                                              HotKeyRejected="HotKeyBox_HotKeyRejected"
-                                              RecordingStarted="HotKeyBox_RecordingStarted"
-                                              RecordingStopped="HotKeyBox_RecordingStopped" />
-                    </Grid>
-                </Border>
-
-                <TextBlock Text="Indexing" Style="{StaticResource SectionHeader}" />
-
-                <Border Style="{StaticResource Card}">
-                    <StackPanel>
-                        <CheckBox x:Name="BackgroundRefreshBox" Content="Keep the index up to date automatically" Checked="Setting_Changed" Unchecked="Setting_Changed" />
-                        <TextBlock Style="{StaticResource Caption}"
-                                   Text="Rescans shortly after startup, when the Start Menu changes, and hourly after that. Only new and removed items cost anything — everything unchanged is reused, so a scan of a machine that has not changed takes seconds." />
-                    </StackPanel>
-                </Border>
-
-                <Border Style="{StaticResource Card}">
-                    <StackPanel>
-                        <CheckBox x:Name="OnlineBox" Content="Look up documentation online while indexing" Checked="Setting_Changed" Unchecked="Setting_Changed" />
-                        <TextBlock Style="{StaticResource Caption}"
-                                   Text="Most installed programs describe themselves with nothing but their own name, so without this many tools can only be found if you already know what they are called. Only app and feature names are sent, only while indexing, and results are cached. What you type when searching never leaves this device." />
-                    </StackPanel>
-                </Border>
-
-
-                <Border Style="{StaticResource Card}">
-                    <StackPanel>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="Results shown" VerticalAlignment="Center" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                <Slider x:Name="LimitSlider" Width="180" Minimum="3" Maximum="20" IsSnapToTickEnabled="True" ValueChanged="Setting_ValueChanged"
-                                        TickFrequency="1" VerticalAlignment="Center" />
-                                <TextBlock Text="{Binding ElementName=LimitSlider, Path=Value, StringFormat=F0}" Width="26"
-                                           TextAlignment="Right" Margin="10,0,0,0" VerticalAlignment="Center" />
+                        <Border x:Name="SetupBanner"
+                                Style="{StaticResource Card}"
+                                Visibility="Collapsed"
+                                Margin="0,0,0,4">
+                            <StackPanel>
+                                <TextBlock Text="Welcome to SemanticStart"
+                                        FontWeight="SemiBold"/>
+                                <TextBlock Style="{StaticResource Caption}"
+                                           Text="SemanticStart builds a searchable index of your apps, settings, and built-in Windows tools so you can find them by describing what you want. Review the settings below, then choose Build index. Indexing takes a few minutes and runs in the background. Your Start menu is not modified."/>
                             </StackPanel>
-                        </Grid>
-                        <Grid Margin="0,14,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="Wait for typing to stop" />
-                                <TextBlock Text="Searches only once the query settles, so results stop rebuilding letter by letter. Enter searches immediately."
-                                           Style="{StaticResource Caption}" TextWrapping="Wrap" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Slider x:Name="DebounceSlider" Width="180" Minimum="0" Maximum="1000" IsSnapToTickEnabled="True" ValueChanged="Setting_ValueChanged"
-                                        TickFrequency="50" VerticalAlignment="Center" />
-                                <TextBlock Text="{Binding ElementName=DebounceSlider, Path=Value, StringFormat={}{0:F0} ms}" Width="58"
-                                           TextAlignment="Right" Margin="10,0,0,0" VerticalAlignment="Center" />
-                            </StackPanel>
-                        </Grid>
-                    </StackPanel>
-                </Border>
+                        </Border>
 
-                <Border Style="{StaticResource Card}">
-                    <StackPanel>
-                        <!-- Status sits beside the header rather than under the numbers: it describes
+                        <TextBlock Text="Activation"
+                                Style="{StaticResource SectionHeader}"/>
+
+                        <Border Style="{StaticResource Card}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0"
+                                        VerticalAlignment="Center">
+                                    <TextBlock Text="Hotkey"/>
+                                    <TextBlock x:Name="HotKeyStatus"
+                                            Style="{StaticResource Caption}"/>
+                                </StackPanel>
+                                <local:HotKeyRecorder x:Name="HotKeyBox"
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                                      HotKeyChanged="HotKeyBox_HotKeyChanged"
+                                                      HotKeyRejected="HotKeyBox_HotKeyRejected"
+                                                      RecordingStarted="HotKeyBox_RecordingStarted"
+                                                      RecordingStopped="HotKeyBox_RecordingStopped"/>
+                            </Grid>
+                        </Border>
+
+                        <TextBlock Text="Indexing"
+                                Style="{StaticResource SectionHeader}"/>
+
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <CheckBox x:Name="BackgroundRefreshBox"
+                                        Content="Keep the index up to date automatically"
+                                        Checked="Setting_Changed"
+                                        Unchecked="Setting_Changed"/>
+                                <TextBlock Style="{StaticResource Caption}"
+                                           Text="Rescans shortly after startup, when the Start Menu changes, and hourly after that. Only new and removed items cost anything — everything unchanged is reused, so a scan of a machine that has not changed takes seconds."/>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <CheckBox x:Name="OnlineBox"
+                                        Content="Look up documentation online while indexing"
+                                        Checked="Setting_Changed"
+                                        Unchecked="Setting_Changed"/>
+                                <TextBlock Style="{StaticResource Caption}"
+                                           Text="Most installed programs describe themselves with nothing but their own name, so without this many tools can only be found if you already know what they are called. Only app and feature names are sent, only while indexing, and results are cached. What you type when searching never leaves this device."/>
+                            </StackPanel>
+                        </Border>
+
+
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Results shown"
+                                            VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Column="1"
+                                            Orientation="Horizontal">
+                                        <Slider x:Name="LimitSlider"
+                                                Width="180"
+                                                Minimum="3"
+                                                Maximum="20"
+                                                IsSnapToTickEnabled="True"
+                                                ValueChanged="Setting_ValueChanged"
+                                                TickFrequency="1"
+                                                VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding ElementName=LimitSlider, Path=Value, StringFormat=F0}"
+                                                Width="26"
+                                                   TextAlignment="Right"
+                                                Margin="10,0,0,0"
+                                                VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Grid Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="Wait for typing to stop"/>
+                                        <TextBlock Text="Searches only once the query settles, so results stop rebuilding letter by letter. Enter searches immediately."
+                                                   Style="{StaticResource Caption}"
+                                                TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1"
+                                            Orientation="Horizontal"
+                                            VerticalAlignment="Center">
+                                        <Slider x:Name="DebounceSlider"
+                                                Width="180"
+                                                Minimum="0"
+                                                Maximum="1000"
+                                                IsSnapToTickEnabled="True"
+                                                ValueChanged="Setting_ValueChanged"
+                                                TickFrequency="50"
+                                                VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding ElementName=DebounceSlider, Path=Value, StringFormat={}{0:F0} ms}"
+                                                Width="58"
+                                                   TextAlignment="Right"
+                                                Margin="10,0,0,0"
+                                                VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <!-- Status sits beside the header rather than under the numbers: it describes
                              the index as a whole, and below the list it read like one more statistic. -->
-                        <Grid>
-                            <TextBlock Text="Index" />
-                            <TextBlock x:Name="ProgressText" Style="{StaticResource Caption}" Text="Ready"
-                                       HorizontalAlignment="Right" VerticalAlignment="Center" />
-                        </Grid>
-                        <TextBlock x:Name="IndexStatsText" Style="{StaticResource Caption}" Text="Reading index..."
-                                   LineHeight="18" LineStackingStrategy="BlockLineHeight" />
-                        <!-- Counts live in their own right-aligned column so digits line up and can
+                                <Grid>
+                                    <TextBlock Text="Index"/>
+                                    <TextBlock x:Name="ProgressText"
+                                            Style="{StaticResource Caption}"
+                                            Text="Ready"
+                                               HorizontalAlignment="Right"
+                                            VerticalAlignment="Center"/>
+                                </Grid>
+                                <TextBlock x:Name="IndexStatsText"
+                                        Style="{StaticResource Caption}"
+                                        Text="Reading index..."
+                                           LineHeight="18"
+                                        LineStackingStrategy="BlockLineHeight"/>
+                                <!-- Counts live in their own right-aligned column so digits line up and can
                              be compared down the list rather than read one line at a time. -->
-                        <Grid x:Name="IndexStatsGrid" Visibility="Collapsed" HorizontalAlignment="Left">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                        </Grid>
-                        <TextBlock x:Name="BackgroundNote" Style="{StaticResource Caption}" Visibility="Collapsed"
-                                   Text="You can close this window; indexing runs in the background." />
-                        <ProgressBar x:Name="ProgressBar" Height="4" Minimum="0" Maximum="1" Margin="0,10,0,10"
-                                     Background="{DynamicResource ItemHoverBrush}" Foreground="{DynamicResource AccentBrush}"
-                                     BorderThickness="0" />
-                        <Button x:Name="RebuildButton" Content="Rebuild index" Style="{StaticResource FluentButton}"
-                                HorizontalAlignment="Left" Click="RebuildButton_Click" />
+                                <Grid x:Name="IndexStatsGrid"
+                                        Visibility="Collapsed"
+                                        HorizontalAlignment="Left">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                </Grid>
+                                <TextBlock x:Name="BackgroundNote"
+                                        Style="{StaticResource Caption}"
+                                        Visibility="Collapsed"
+                                           Text="You can close this window; indexing runs in the background."/>
+                                <ProgressBar x:Name="ProgressBar"
+                                        Height="4"
+                                        Minimum="0"
+                                        Maximum="1"
+                                        Margin="0,10,0,10"
+                                             Background="{DynamicResource ItemHoverBrush}"
+                                        Foreground="{DynamicResource AccentBrush}"
+                                             BorderThickness="0"/>
+                                <Button x:Name="RebuildButton"
+                                        Content="Rebuild index"
+                                        Style="{StaticResource FluentButton}"
+                                        HorizontalAlignment="Left"
+                                        Click="RebuildButton_Click"/>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="Startup"
+                                Style="{StaticResource SectionHeader}"/>
+
+                        <Border Style="{StaticResource Card}">
+                            <CheckBox x:Name="LoginBox"
+                                    Content="Start SemanticStart when I sign in"
+                                    Checked="Setting_Changed"
+                                    Unchecked="Setting_Changed"/>
+                        </Border>
                     </StackPanel>
-                </Border>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="Dictation">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                        Padding="0,0,8,0">
+                    <StackPanel>
+                        <TextBlock Text="Dictation"
+                                Style="{StaticResource SectionHeader}"/>
 
-                <TextBlock Text="Startup" Style="{StaticResource SectionHeader}" />
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <CheckBox x:Name="DictationBox"
+                                        Content="Enable dictation"
+                                        Checked="Dictation_Changed"
+                                        Unchecked="Dictation_Changed"/>
+                                <TextBlock Style="{StaticResource Caption}"
+                                           Text="Speech is recognised on this device by a local model. Nothing is recorded and no audio is sent anywhere. Enabling dictation downloads about 665 MB once. The NVIDIA Open Model License agreement and attribution Notice are stored with the model files."/>
+                                <TextBlock x:Name="DictationStatus"
+                                        Style="{StaticResource Caption}"/>
+                                <ProgressBar x:Name="DictationProgress"
+                                        Height="4"
+                                        Margin="0,8,0,0"
+                                        Visibility="Collapsed"
+                                             Minimum="0"
+                                        Maximum="1"/>
 
-                <Border Style="{StaticResource Card}">
-                    <CheckBox x:Name="LoginBox" Content="Start SemanticStart when I sign in" Checked="Setting_Changed" Unchecked="Setting_Changed" />
-                </Border>
-            </StackPanel>
-        </ScrollViewer>
+                                <Grid Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="Dictation hotkey"/>
+                                        <TextBlock x:Name="DictationHotKeyStatus"
+                                                Style="{StaticResource Caption}"
+                                                TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                    <local:HotKeyRecorder x:Name="DictationHotKeyBox"
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                                          HotKeyChanged="DictationHotKeyBox_HotKeyChanged"
+                                                          HotKeyRejected="HotKeyBox_HotKeyRejected"
+                                                          RecordingStarted="HotKeyBox_RecordingStarted"
+                                                          RecordingStopped="DictationHotKeyBox_RecordingStopped"/>
+                                </Grid>
 
-        <Grid Grid.Row="2" Margin="0,14,0,0">
-            <TextBlock x:Name="VersionText" VerticalAlignment="Center" HorizontalAlignment="Left"
-                       FontFamily="{DynamicResource UiFontSmall}" FontSize="{DynamicResource CaptionFontSize}"
-                       Foreground="{DynamicResource SecondaryTextBrush}" />
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button x:Name="SaveButton" Content="Save" Width="100" Margin="0,0,8,0" Style="{StaticResource AccentButton}" Click="SaveButton_Click" />
-                <Button Content="Close" Width="100" Style="{StaticResource FluentButton}" Click="CloseButton_Click" />
+                                <Grid Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="Silence that ends a phrase"/>
+                                        <TextBlock Text="How long a pause has to last before what you said is searched. Shorter is faster; longer survives the pause in the middle of a phrase."
+                                                   Style="{StaticResource Caption}"
+                                                TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1"
+                                            Orientation="Horizontal"
+                                            VerticalAlignment="Center">
+                                        <Slider x:Name="TrailingSilenceSlider"
+                                                Width="180"
+                                                Minimum="100"
+                                                Maximum="1000"
+                                                IsSnapToTickEnabled="True"
+                                                ValueChanged="Setting_ValueChanged"
+                                                TickFrequency="20"
+                                                VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding ElementName=TrailingSilenceSlider, Path=Value, StringFormat={}{0:F0} ms}"
+                                                Width="58"
+                                                   TextAlignment="Right"
+                                                Margin="10,0,0,0"
+                                                VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <CheckBox x:Name="PushToTalkBox"
+                                        Margin="0,14,0,0"
+                                        Content="Hold the hotkey to talk instead of pressing it twice"
+                                          Checked="Setting_Changed"
+                                        Unchecked="Setting_Changed"/>
+                                <TextBlock Style="{StaticResource Caption}"
+                                           Text="Windows reports hotkey presses but not releases, so holding is detected by checking the key a few times a second. Listening therefore stops shortly after you let go rather than at the instant you do."/>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="Speech model"
+                                Style="{StaticResource SectionHeader}"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock x:Name="SpeechModelName"
+                                        FontWeight="SemiBold"/>
+                                <TextBlock x:Name="SpeechModelLocation"
+                                        Style="{StaticResource Caption}"/>
+                                <TextBlock x:Name="SpeechModelReadiness"
+                                        Style="{StaticResource Caption}"/>
+                                <TextBlock x:Name="SpeechModelSize"
+                                        Style="{StaticResource Caption}"/>
+                                <Button x:Name="RemoveSpeechModelButton"
+                                        Content="Remove model files"
+                                        Style="{StaticResource FluentButton}"
+                                        HorizontalAlignment="Left"
+                                        Margin="0,12,0,0"
+                                        Click="RemoveSpeechModelButton_Click"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
+
+        <Grid Grid.Row="2"
+                Margin="0,14,0,0">
+            <TextBlock x:Name="VersionText"
+                    VerticalAlignment="Center"
+                    HorizontalAlignment="Left"
+                       FontFamily="{DynamicResource UiFontSmall}"
+                    FontSize="{DynamicResource CaptionFontSize}"
+                       Foreground="{DynamicResource SecondaryTextBrush}"/>
+            <StackPanel Orientation="Horizontal"
+                    HorizontalAlignment="Right">
+                <Button x:Name="SaveButton"
+                        Content="Save"
+                        Width="100"
+                        Margin="0,0,8,0"
+                        Style="{StaticResource AccentButton}"
+                        Click="SaveButton_Click"/>
+                <Button Content="Close"
+                        Width="100"
+                        Style="{StaticResource FluentButton}"
+                        Click="CloseButton_Click"/>
             </StackPanel>
         </Grid>
     </Grid>

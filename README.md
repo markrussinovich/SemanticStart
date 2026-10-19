@@ -59,6 +59,10 @@ First launch builds the index and downloads the embedding model once — see [Us
   <img alt="Indexing runs offline: collectors, enrichment, synthesis and embeddings build index.sqlite. Querying is local: Win+Alt+. runs a vector arm and a lexical BM25 arm in parallel over that index, fused by RRF into the overlay." src="docs/pipeline-light.svg">
 </picture>
 
+The dictation architecture diagrams are in [`docs/architecture-speech.md`](docs/architecture-speech.md):
+[the system shape](docs/architecture-speech.md#the-shape-of-it), [model startup](docs/architecture-speech.md#startup-once-per-process),
+and [a listening turn](docs/architecture-speech.md#one-listening-turn-per-hotkey-press).
+
 **Indexing (offline).** Ten collectors enumerate what is on the machine, in this order — the order
 is deduplication precedence, so an earlier source wins when the same thing is found twice:
 
@@ -203,6 +207,7 @@ Everything can be changed later in Settings.
 | Key | Action |
 |---|---|
 | `Win+Alt+.` | Open the overlay (configurable) |
+| `Win+Alt+/` | Open the overlay and dictate (configurable, off until enabled) |
 | `Enter` | Launch |
 | `Down` / `Up` | Move into the results and back to the search box |
 | `Right` / `Left` | Show / hide the selected result's description (`Ctrl+D` toggles) |
@@ -219,6 +224,139 @@ entry on the clipboard, which for half of them is not the thing the index stores
 a URI, a Control Panel applet and an MMC snap-in are arguments to a host program, and a packaged
 app's launch target is an AppUserModelId that runs only behind `explorer.exe shell:AppsFolder\`. The
 button copies what you can actually paste and run.
+
+### Dictation
+
+Dictation types into the search box by voice. Press **Win+Alt+/** (or the microphone button in the
+overlay footer) and speak; the words appear in the query as you say them, and the search runs when
+you stop. It is a way of filling the same query box - ranking, launching, and every shortcut above
+behave exactly as they do when typing. Spoken text is added after keyboard-entered text, so a query
+can be half typed and half spoken. Starting another turn replaces the previous unedited dictation,
+keeping the typed prefix. Editing the query by keyboard preserves the whole edited query on the next
+turn; edits made while listening also take precedence over that turn's remaining transcripts.
+The **Clear search** button beside the query box erases either kind of input and stops listening.
+
+It is off until you turn it on in **Settings > Dictation**, because enabling it downloads about 665 MB of speech
+model and requires accepting the model weights' license (see the table below). Once on, the
+recogniser is loaded at startup and kept in memory, so pressing the hotkey starts listening
+immediately rather than loading a model in front of someone who is already talking.
+
+The Dictation tab also shows the model name, location, readiness, and size, with a **Remove model files**
+action. The General tab keeps the app's other settings; both tabs use the original settings cards
+and follow the system light/dark theme.
+
+If you press the hotkey before that is finished - on the very first run, or immediately after
+enabling it - the overlay opens and says so, showing *Getting dictation ready…* while the recogniser
+loads and the download percentage while the model is still being fetched. The press is never
+silently ignored. If the wait was short - a cold model load - listening then starts on its own. If
+it was long enough to have been a download, the overlay says dictation is ready and waits for a
+fresh press instead, so the microphone never opens minutes after the key that asked for it.
+
+**Everything runs on this device.** Audio is captured by WASAPI, scored for speech by a local Silero
+VAD, and transcribed by a local sherpa-onnx streaming NVIDIA Parakeet (NeMo) transducer - all
+through the same ONNX Runtime the index already uses. The recogniser decodes with greedy search -
+the native streaming implementation for this model does not implement beam search - and synthetic
+trailing silence lets the encoder finish word endings without waiting for more microphone audio.
+No audio is recorded to disk and none is sent anywhere. The platform's own
+recognisers are deliberately not used: `Windows.Media.SpeechRecognition` falls back to Microsoft's
+online service for anything beyond a fixed grammar, `System.Speech`/SAPI is a dictation-unaware
+legacy stack, and Win+H Voice Typing is a separate UI that types into whatever has focus and sends
+audio to the cloud unless the user has found the on-device setting.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Enable dictation | off | Registers the dictation hotkey and keeps the recogniser warm |
+| Dictation hotkey | `Win+Alt+/` | Opens the overlay and starts listening; falls back to a free chord if taken |
+| Silence that ends a phrase | 220 ms | How long a pause must last before the phrase is searched |
+| Hold the hotkey to talk | off | Push-to-talk instead of press-to-start, press-to-stop |
+
+The models are downloaded once into `%LOCALAPPDATA%\SemanticStart\models` and never committed to
+this repository:
+
+| File | Size | Source | License |
+|---|---|---|---|
+| Streaming Parakeet Unified 0.6B encoder/decoder/joiner (int8) + tokens | ~665 MB | `sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-streaming-560ms`, mirrored file-by-file on [Hugging Face](https://huggingface.co/csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-streaming-560ms) from the sherpa-onnx project's `asr-models` GitHub release, exported from [`nvidia/parakeet-unified-en-0.6b`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) | Apache-2.0 for the sherpa-onnx export code; the model weights themselves are under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/) — read it before enabling dictation |
+| Silero VAD v5.1 (`silero_vad.onnx`) | ~2.3 MB | `snakers4/silero-vad` on GitHub, pinned to a tag and verified by SHA-256 | MIT |
+
+The download also saves a complete plain-text NVIDIA Open Model License agreement as
+`<ModelId>-LICENSE.txt` and a `<ModelId>-Notice.txt` containing the exact attribution
+`Licensed by NVIDIA Corporation under the NVIDIA Open Model License`, alongside the weights in
+`%LOCALAPPDATA%\SemanticStart\models`. The agreement is fetched from a
+[pinned NVIDIA/NVlabs plain-text copy](https://raw.githubusercontent.com/NVlabs/GRAIL/8b9afa5c0b10e8d26ea066c8475893eec8ea9165/imports/SONIC/decoupled_wbc/sim2mujoco/resources/robots/g1/policy/NVIDIA%20Open%20Model%20License)
+and verified by SHA-256; it is not an HTML page saved with a `.txt` extension. Both legal files
+are required before the model is ready. Already-cached weights are kept: the next model setup
+backfills missing legal files without redownloading the weights. If you redistribute the weights,
+retain both files with them as required by section 3.1 of the agreement.
+
+SemanticStart's application code remains MIT; sherpa-onnx runtime/export code is Apache-2.0;
+the Parakeet weights are separately licensed under the NVIDIA Open Model License, not MIT or
+Apache-2.0. Silero VAD remains MIT.
+
+NVIDIA's model card for `parakeet-unified-en-0.6b` additionally discloses, among other fields: it
+was trained in part on voice data collected with consent and reviewed for privacy compliance; it
+has been evaluated for bias across age, gender and linguistic-background groups; it carries no
+life-critical use restriction beyond the license itself; and, like any ASR model, its transcripts
+are not guaranteed accurate and accuracy varies with accent, noise and domain. Read the full bias,
+explainability, privacy and safety disclosures on the model card linked above before relying on it
+for anything beyond local, personal dictation.
+
+Those sources are defaults, not fixtures. Dropping a `speech-model.json` into
+`%LOCALAPPDATA%\SemanticStart` overrides any of them — the model id, the five URLs, the VAD
+checksum, and the minimum sizes used to detect a truncated download — so a mirror, an offline
+internal host or a newer model revision needs no rebuild. Legal-file settings are also configurable:
+`LicenseUrl`, `LicenseSha256`, `MinimumLicenseBytes`, and `LicenseNotice`. Mirrors should serve
+the complete plain-text agreement and preserve its checksum. When switching to differently
+licensed weights, configure their agreement and attribution together (and set the appropriate
+checksum, or explicitly set it to `null`); omitted settings retain the NVIDIA defaults.
+Anything the file leaves out keeps its
+default, and a file that is present but unreadable fails loudly rather than quietly falling back to
+the upstream URLs.
+
+#### Recognition tuning
+
+Synthetic trailing silence remains enabled. For further tuning:
+
+- If a pause cuts off a phrase, increase **Silence that ends a phrase** in Settings (try 500–800 ms).
+  Synthetic silence finishes decoding audio already captured; it cannot recover speech after the
+  microphone has closed. The sherpa microphone example uses 800 ms for its speech endpoint rule,
+  but this app uses Silero endpointing, so the two thresholds are not equivalent.
+- There is no beam width to tune any more: the streaming Parakeet Unified model's native recognizer
+  implementation only supports greedy decoding, and asking it for `modified_beam_search` is a fatal
+  native error rather than a slower one. (The streaming Zipformer this app used before did expose a
+  `MaxActivePaths` beam width; that setting has been removed along with it.)
+- The existing model URL overrides can select a compatible streaming transducer model exported by
+  sherpa-onnx's NeMo scripts, including other chunk-latency presets (`1120ms`, `240ms`) or a float32
+  export. Give it a distinct `ModelId` so cached int8 files are not reused, and update the encoder,
+  decoder, joiner, token URLs, minimum sizes, and download-size estimate together. Larger/unquantized
+  models require more memory and decoding time; compare representative phrases rather than assuming
+  a larger model is more accurate.
+
+Silero v5.1 now receives its required 64-sample lookback before each 512-sample frame, with both
+context and recurrent state reset between turns. This corrects the VAD input rather than changing
+the selected recognition model or extending microphone capture.
+
+Known limitations:
+
+- English only. A second engine can be added behind `ISpeechTranscriber` without touching the UI,
+  which is what the provider/selection split exists for, but nothing else is shipped yet.
+- Push-to-talk is approximate. `RegisterHotKey` reports presses and not releases, and the only exact
+  alternative is a low-level keyboard hook, which this app does not install for the reasons in
+  `ActivationManager`. Release is therefore polled a few times a second, so listening stops shortly
+  after you let go rather than at the instant you do.
+- Accuracy is that of a mid-sized (0.6B-parameter) streaming model: a large step up from the
+  previous small Zipformer on uncommon app and feature names, but still not a cloud-scale model.
+- If Windows denies microphone access the overlay says so and names the setting to change -
+  **Let desktop apps access your microphone** - rather than simply transcribing nothing.
+
+The types involved, the startup and per-utterance paths,
+and the failure paths are drawn out in [`docs/architecture-speech.md`](docs/architecture-speech.md).
+
+Dictation logs to the same `%LOCALAPPDATA%\SemanticStart\logs\app.log` as the rest of the app, and
+adds `TRACE` lines with the timings that matter: how long the model took to load, how long until the
+first partial, why a session ended, and how much audio was captured or dropped. Those lines come
+from the `SemanticStart.Speech` activity source, so `dotnet-trace collect --providers
+SemanticStart.Speech` — or any OpenTelemetry listener — can sample the same spans with no change to
+the app. No transcript text is ever written to either; only lengths and durations.
 
 ### Where descriptions come from
 
@@ -395,8 +533,10 @@ paths or documents according to that model provider's privacy policy.
 
 ## Privacy
 
-Queries never leave the machine. The only network traffic is the one-time embedding model download
-and online enrichment during indexing, which sends only app and feature names, is cached to disk,
+Queries never leave the machine, and neither does anything said to it: dictation is transcribed by
+a local model and no audio is stored or transmitted. The only network traffic is the one-time
+embedding and speech model downloads, and online enrichment during indexing, which sends only app
+and feature names, is cached to disk,
 and is on by default but can be turned off in setup or Settings; the index is fully functional
 without it, just less able to find tools you cannot name. No inference of any kind leaves the
 machine.
@@ -413,6 +553,7 @@ data: it lives in `%LOCALAPPDATA%\SemanticStart` and is ignored by source contro
 | `src/SemanticStart.App` | WPF overlay, activation, tray icon, settings, and `--mcp` stdio server mode |
 | `tests/SemanticStart.Tests` | Unit and regression tests |
 | `tools/make-icon.ps1` | Redraws the app icon (`src/SemanticStart.App/Assets/SemanticStart.ico`) |
+| `docs/architecture-speech.md` | Dictation architecture diagrams and implementation notes |
 
 The icon is generated rather than drawn by hand so that every size in the `.ico` is rendered at its
 own resolution — a 16px tray icon resampled from a big bitmap loses the magnifier's ring. Run the
@@ -423,4 +564,6 @@ Palette or PowerToys Run extension later.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Application code: MIT. See [LICENSE](LICENSE). Downloaded speech weights are separately governed
+by the NVIDIA Open Model License; sherpa-onnx is Apache-2.0 and Silero VAD is MIT. See the dictation
+section above for the agreement and Notice files retained alongside the weights.

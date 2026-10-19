@@ -84,8 +84,8 @@ if ($NoLaunch) {
 # --- 3. Launch -------------------------------------------------------------------------------
 $exe = Get-ChildItem -Path (Join-Path $root "src\SemanticStart.App\bin\$Configuration") `
     -Filter 'SemanticStart.App.exe' -Recurse -File -ErrorAction SilentlyContinue |
-    Sort-Object LastWriteTime |
-    Select-Object -Last 1
+Sort-Object LastWriteTime |
+Select-Object -Last 1
 
 if (-not $exe) {
     throw "Built successfully but could not find SemanticStart.App.exe under bin\$Configuration."
@@ -105,15 +105,16 @@ foreach ($attempt in 1..20) {
     if (-not (Test-Path $log)) { continue }
 
     $registration = Get-Content $log -ErrorAction SilentlyContinue |
-        Select-Object -Skip $logLinesBefore |
-        Select-String -Pattern 'Registered hotkey|No hotkey could be registered' |
-        Select-Object -Last 1
+    Select-Object -Skip $logLinesBefore |
+    Select-String -Pattern 'Registered hotkey|Registered dictation hotkey|No hotkey could be registered' |
+    Select-Object -Last 2
     if ($registration) { break }
 }
 
 if ($registration) {
-    Write-Host $registration.Line.Trim() -ForegroundColor Green
-} else {
+    Write-Host ($registration.Line.Trim() -join "`n") -ForegroundColor Green
+}
+else {
     # Not a failure: the app runs from the tray and may simply have been slower than we waited.
     Write-Host "Started. No hotkey registration logged yet - check $log." -ForegroundColor Yellow
 }
