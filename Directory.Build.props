@@ -13,6 +13,6 @@
     <InvariantGlobalization>false</InvariantGlobalization>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <!-- Single source of truth for the version shown in Settings and stamped on the binaries. -->
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
   </PropertyGroup>
 </Project>

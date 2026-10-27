@@ -11,6 +11,8 @@
         <local:NullToVisibilityConverter x:Key="IconVisible" />
         <local:NullToVisibilityConverter x:Key="IconMissing" Invert="True" />
         <local:BooleanToVisibilityConverter x:Key="BoolToVisible" />
+        <DropShadowEffect x:Key="ResultCardShadow" BlurRadius="8" ShadowDepth="2" Direction="270"
+                          Color="{DynamicResource ShadowColor}" Opacity="0.16" />
 
         <!--
             Chevron that reveals a result's full description. Templated rather than a default
@@ -21,7 +23,7 @@
             <Setter Property="Width" Value="26" />
             <Setter Property="Height" Value="26" />
             <Setter Property="Focusable" Value="False" />
-            <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -33,11 +35,11 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemSelectedBrush}" />
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SubtleButtonHoverBrush}" />
                                 <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SearchBoxBorderBrush}" />
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SubtleButtonPressedBrush}" />
                                 <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
@@ -49,13 +51,7 @@
             </Setter>
         </Style>
 
-        <!--
-            Search field templated by hand so it can carry a Windows 11 corner radius, the system
-            focus underline, and inline placeholder text. Windows keeps a stronger stroke along the
-            bottom edge of a text field at rest and swaps it for a 2px accent line on focus, while
-            the fill brightens to ControlFillColorInputActive; all three together are what make a
-            box read as a system input.
-        -->
+        <!-- The pill keeps a full focus outline rather than an input underline. -->
         <Style x:Key="SearchTextBox" TargetType="TextBox">
             <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
             <Setter Property="CaretBrush" Value="{DynamicResource PrimaryTextBrush}" />
@@ -63,12 +59,13 @@
             <Setter Property="BorderBrush" Value="{DynamicResource SearchBoxBorderBrush}" />
             <Setter Property="FontFamily" Value="{DynamicResource UiFont}" />
             <Setter Property="FontSize" Value="{DynamicResource BodyFontSize}" />
-            <Setter Property="Padding" Value="12,9" />
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="MinHeight" Value="32" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">
                         <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="1" CornerRadius="6">
+                                BorderThickness="1" CornerRadius="18">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
@@ -76,24 +73,14 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="&#xE721;" FontFamily="{DynamicResource IconFont}"
                                            FontSize="15" Margin="12,0,0,0" VerticalAlignment="Center"
-                                           Foreground="{DynamicResource SecondaryTextBrush}" />
+                                           Foreground="{DynamicResource SearchGlyphBrush}" />
                                 <Grid Grid.Column="1">
-                                    <!--
-                                        The placeholder shares the content host's margin, so its
-                                        first glyph lands exactly on the caret. Inset it slightly
-                                        so the caret sits to the left of the text, as Windows does.
-                                    -->
                                     <TextBlock x:Name="Placeholder" Text="Search apps, settings, and Windows features"
-                                               Margin="{TemplateBinding Padding}" Padding="15,0,0,0" VerticalAlignment="Center"
+                                               Margin="{TemplateBinding Padding}" Padding="2,0,0,0" VerticalAlignment="Center"
                                                Foreground="{DynamicResource SecondaryTextBrush}" Visibility="Collapsed"
                                                IsHitTestVisible="False" />
-                                    <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
-                                                  VerticalAlignment="Center" />
+                                    <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
                                 </Grid>
-                                <Border x:Name="BottomLine" Grid.ColumnSpan="2" Height="1" VerticalAlignment="Bottom"
-                                        CornerRadius="0,0,6,6" Background="{DynamicResource ControlStrongStrokeBrush}" />
-                                <Border x:Name="FocusLine" Grid.ColumnSpan="2" Height="2" VerticalAlignment="Bottom"
-                                        CornerRadius="0,0,6,6" Background="{DynamicResource AccentBrush}" Visibility="Collapsed" />
                             </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -101,8 +88,7 @@
                                 <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="FocusLine" Property="Visibility" Value="Visible" />
-                                <Setter TargetName="BottomLine" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
                                 <Setter TargetName="Bd" Property="Background" Value="{DynamicResource InputActiveBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -112,9 +98,8 @@
         </Style>
     </Window.Resources>
 
-    <!-- 8px radius matches Windows 11 flyouts; the older 22px read as a phone control. -->
     <Border CornerRadius="8" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource PanelBorderBrush}"
-            BorderThickness="1" Padding="16,14,16,12" Margin="14">
+            BorderThickness="1" Padding="12,18,12,12" Margin="14">
         <Border.Effect>
             <DropShadowEffect BlurRadius="28" ShadowDepth="6" Direction="270"
                               Color="{DynamicResource ShadowColor}" Opacity="{DynamicResource ShadowOpacity}" />
@@ -123,19 +108,21 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <!-- Header -->
-            <Grid Grid.Row="0" Margin="2,0,0,12">
+            <Grid Grid.Row="0" Margin="4,0,4,18">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Width="18" Height="18" CornerRadius="4" Background="{DynamicResource AccentBrush}"
+                    <Border Width="28" Height="28" CornerRadius="6" Background="{DynamicResource AccentBrush}"
                             VerticalAlignment="Center">
-                        <TextBlock Text="&#xE721;" FontFamily="{DynamicResource IconFont}" FontSize="10"
+                        <TextBlock Text="&#xE721;" FontFamily="{DynamicResource IconFont}" FontSize="16"
                                    Foreground="{DynamicResource TextOnAccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
-                    <TextBlock Text="SemanticStart" FontSize="{DynamicResource BodyFontSize}" FontWeight="SemiBold" Margin="9,0,0,0"
+                    <TextBlock Text="SemanticStart" FontFamily="{DynamicResource UiFontDisplay}"
+                               FontSize="{DynamicResource SubtitleFontSize}" FontWeight="Bold" Margin="10,0,0,0"
                                VerticalAlignment="Center" Foreground="{DynamicResource HeaderTextBrush}" />
                 </StackPanel>
             </Grid>
@@ -144,7 +131,10 @@
                      TextChanged="SearchBox_TextChanged"
                      Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}" />
 
-            <ListBox x:Name="ResultsList" Grid.Row="2" Margin="0,12,0,4" ItemsSource="{Binding Results}"
+            <TextBlock Grid.Row="2" Text="Apps, settings, and features" Margin="4,22,0,8"
+                       FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource HeaderTextBrush}" />
+
+            <ListBox x:Name="ResultsList" Grid.Row="3" Margin="0,0,0,4" ItemsSource="{Binding Results}"
                      SelectedIndex="{Binding SelectedIndex, Mode=TwoWay}" Background="Transparent" BorderThickness="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      ScrollViewer.VerticalScrollBarVisibility="Visible"
@@ -157,49 +147,38 @@
                 <ListBox.ItemContainerStyle>
                     <Style TargetType="ListBoxItem">
                         <Setter Property="Padding" Value="0" />
-                        <Setter Property="Margin" Value="0,1" />
+                        <Setter Property="Margin" Value="2,2,4,2" />
                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                         <Setter Property="Background" Value="Transparent" />
                         <Setter Property="Template">
                             <Setter.Value>
                                 <ControlTemplate TargetType="ListBoxItem">
-                                    <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="5" Padding="8,7"
-                                            BorderBrush="Transparent" BorderThickness="1">
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="*" />
-                                            </Grid.ColumnDefinitions>
-                                            <!-- Fluent selection indicator: an accent pill on the leading edge. -->
-                                            <Border x:Name="Indicator" Width="3" Height="16" CornerRadius="1.5"
-                                                    Background="{DynamicResource AccentBrush}" Visibility="Collapsed"
-                                                    HorizontalAlignment="Left" VerticalAlignment="Center" Margin="-4,0,0,0" />
-                                            <ContentPresenter Grid.Column="1" />
-                                        </Grid>
-                                    </Border>
+                                    <Grid>
+                                        <Border x:Name="Rule" BorderBrush="{DynamicResource DividerBrush}"
+                                                BorderThickness="0,0,0,1" Margin="6,0" />
+                                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8"
+                                                Padding="10,9" MinHeight="68" BorderBrush="Transparent" BorderThickness="1">
+                                            <ContentPresenter />
+                                        </Border>
+                                    </Grid>
                                     <ControlTemplate.Triggers>
-                                        <Trigger Property="IsSelected" Value="True">
-                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemSelectedBrush}" />
-                                            <Setter TargetName="Indicator" Property="Visibility" Value="Visible" />
-                                        </Trigger>
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemHoverBrush}" />
+                                            <Setter TargetName="Rule" Property="Visibility" Value="Hidden" />
+                                            <Setter TargetName="Bd" Property="Effect" Value="{StaticResource ResultCardShadow}" />
                                         </Trigger>
-                                        <!--
-                                            Down moves the arrows from the query to the list, and on the first press
-                                            the highlight is already where it is going. Outlining the row is what
-                                            makes that press visible, and afterwards says which of the two the arrow
-                                            keys are steering. Windows draws that outline as a keyboard focus stroke
-                                            rather than in the accent colour, and the pill grows to the full-height
-                                            form the shell uses for a focused selection.
-                                        -->
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemSelectedBrush}" />
+                                            <Setter TargetName="Rule" Property="Visibility" Value="Hidden" />
+                                            <Setter TargetName="Bd" Property="Effect" Value="{StaticResource ResultCardShadow}" />
+                                        </Trigger>
+                                        <!-- Keep keyboard navigation distinct from the soft selected card. -->
                                         <MultiDataTrigger>
                                             <MultiDataTrigger.Conditions>
                                                 <Condition Binding="{Binding IsSelected, RelativeSource={RelativeSource Self}}" Value="True" />
                                                 <Condition Binding="{Binding DataContext.IsResultsActive, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True" />
                                             </MultiDataTrigger.Conditions>
                                             <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource FocusStrokeBrush}" />
-                                            <Setter TargetName="Indicator" Property="Height" Value="24" />
                                         </MultiDataTrigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -222,9 +201,9 @@
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <Grid Width="32" Height="32" VerticalAlignment="Center" Margin="4,0,0,0">
-                                    <Border Background="{DynamicResource IconBackplateBrush}" CornerRadius="5"
-                                            Visibility="{Binding Icon, Converter={StaticResource IconMissing}}" />
+                                <Grid Width="48" Height="48" VerticalAlignment="Center">
+                                    <Border Background="{DynamicResource IconBackplateBrush}" CornerRadius="6"
+                                            BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1" />
                                     <Image Source="{Binding Icon}" Width="26" Height="26" RenderOptions.BitmapScalingMode="HighQuality"
                                            Visibility="{Binding Icon, Converter={StaticResource IconVisible}}" />
                                     <TextBlock Text="{Binding FallbackGlyph}" FontFamily="{DynamicResource IconFont}"
@@ -234,13 +213,15 @@
                                 </Grid>
                                 <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center">
                                     <TextBlock Text="{Binding DisplayName}" FontSize="{DynamicResource BodyFontSize}"
+                                               FontWeight="SemiBold"
                                                Foreground="{DynamicResource PrimaryTextBrush}"
                                                TextTrimming="CharacterEllipsis" />
                                     <TextBlock Text="{Binding Summary}" FontFamily="{DynamicResource UiFontSmall}"
                                                FontSize="{DynamicResource CaptionFontSize}" Foreground="{DynamicResource SecondaryTextBrush}"
-                                               TextTrimming="CharacterEllipsis" />
+                                               TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
                                 </StackPanel>
-                                <Border Grid.Column="2" Background="{DynamicResource BadgeBrush}" CornerRadius="4" Padding="7,2"
+                                <Border Grid.Column="2" Background="{DynamicResource SearchBoxBrush}" CornerRadius="12" Padding="9,3"
+                                        BorderBrush="{DynamicResource SearchBoxBorderBrush}" BorderThickness="1"
                                         VerticalAlignment="Center" Margin="8,0,0,0">
                                     <TextBlock Text="{Binding KindBadge}" FontFamily="{DynamicResource UiFontSmall}"
                                                FontSize="{DynamicResource CaptionFontSize}"
@@ -261,7 +242,7 @@
                                               VerticalAlignment="Center" Margin="4,0,2,0" />
                             </Grid>
 
-                            <Border Grid.Row="1" Margin="48,2,8,6" Padding="10,8" CornerRadius="6"
+                            <Border Grid.Row="1" Margin="60,6,8,6" Padding="10,8" CornerRadius="6"
                                     Background="{DynamicResource BadgeBrush}"
                                     Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVisible}}">
                                 <StackPanel>
@@ -298,7 +279,7 @@
             </ListBox>
 
             <!-- Footer: settings on the left, status to its right. -->
-            <Grid Grid.Row="3" Margin="2,6,0,0">
+            <Grid Grid.Row="4" Margin="2,6,0,0">
                 <Border Height="1" VerticalAlignment="Top" Background="{DynamicResource DividerBrush}" Margin="0,-6,0,0" />
                 <Button x:Name="SettingsButton" Style="{StaticResource SubtleButton}" HorizontalAlignment="Left"
                         Width="32" Height="32" FontSize="15" Content="&#xE713;" ToolTip="Settings"

@@ -2,28 +2,28 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=System.Runtime">
         <!--
-            Light-theme defaults, taken from the Windows 11 (WinUI) common colour set so the app
-            reads as system UI rather than an approximation of it. The comment after each key names
-            the Windows resource it mirrors. ThemeService overwrites every one of these at startup
-            and again whenever the system switches between light and dark, so anything that should
-            follow the system must bind with DynamicResource.
+            Microsoft 365-inspired surfaces with Windows text and accent colours. ThemeService
+            reapplies the palette at startup and when the system switches between light and dark;
+            theme-aware controls must bind with DynamicResource.
         -->
-        <SolidColorBrush x:Key="PanelBrush" Color="#F9F9F9" />                   <!-- AcrylicBackgroundFillColorDefaultFallback -->
+        <SolidColorBrush x:Key="PanelBrush" Color="#F0F3F9" />
         <SolidColorBrush x:Key="PanelBorderBrush" Color="#0F000000" />           <!-- SurfaceStrokeColorFlyout -->
         <SolidColorBrush x:Key="HeaderTextBrush" Color="#E4000000" />            <!-- TextFillColorPrimary -->
         <SolidColorBrush x:Key="PrimaryTextBrush" Color="#E4000000" />           <!-- TextFillColorPrimary -->
-        <SolidColorBrush x:Key="SecondaryTextBrush" Color="#9E000000" />         <!-- TextFillColorSecondary -->
+        <SolidColorBrush x:Key="SecondaryTextBrush" Color="#505050" />
         <SolidColorBrush x:Key="TertiaryTextBrush" Color="#72000000" />          <!-- TextFillColorTertiary -->
         <SolidColorBrush x:Key="DisabledTextBrush" Color="#5C000000" />          <!-- TextFillColorDisabled -->
         <SolidColorBrush x:Key="TextOnAccentBrush" Color="#FFFFFF" />            <!-- TextOnAccentFillColorPrimary -->
-        <SolidColorBrush x:Key="SearchBoxBrush" Color="#B3FFFFFF" />             <!-- ControlFillColorDefault -->
+        <SolidColorBrush x:Key="SearchBoxBrush" Color="#FFFFFF" />
         <SolidColorBrush x:Key="InputActiveBrush" Color="#FFFFFF" />             <!-- ControlFillColorInputActive -->
-        <SolidColorBrush x:Key="SearchBoxBorderBrush" Color="#0F000000" />       <!-- ControlStrokeColorDefault -->
+        <SolidColorBrush x:Key="SearchBoxBorderBrush" Color="#E0E0E0" />
         <SolidColorBrush x:Key="ControlStrongStrokeBrush" Color="#72000000" />   <!-- ControlStrongStrokeColorDefault -->
         <SolidColorBrush x:Key="FocusStrokeBrush" Color="#E4000000" />           <!-- FocusStrokeColorOuter -->
-        <SolidColorBrush x:Key="ItemHoverBrush" Color="#09000000" />             <!-- SubtleFillColorSecondary -->
-        <SolidColorBrush x:Key="ItemSelectedBrush" Color="#0F000000" />          <!-- ListViewItemBackgroundSelected -->
-        <SolidColorBrush x:Key="IconBackplateBrush" Color="#06000000" />         <!-- ControlAltFillColorSecondary -->
+        <SolidColorBrush x:Key="ItemHoverBrush" Color="#F7F9FD" />
+        <SolidColorBrush x:Key="ItemSelectedBrush" Color="#FAFBFE" />
+        <SolidColorBrush x:Key="SubtleButtonHoverBrush" Color="#10000000" />
+        <SolidColorBrush x:Key="SubtleButtonPressedBrush" Color="#1A000000" />
+        <SolidColorBrush x:Key="IconBackplateBrush" Color="#EAF0F9" />
         <SolidColorBrush x:Key="BadgeBrush" Color="#0A000000" />                 <!-- ControlAltFillColorTertiary -->
         <SolidColorBrush x:Key="DividerBrush" Color="#0F000000" />               <!-- DividerStrokeColorDefault -->
         <SolidColorBrush x:Key="ScrollBarThumbBrush" Color="#72000000" />        <!-- ControlStrongFillColorDefault -->
@@ -33,6 +33,10 @@
         <SolidColorBrush x:Key="AccentHoverBrush" Color="#E60067C0" />           <!-- AccentFillColorSecondary -->
         <SolidColorBrush x:Key="AccentPressedBrush" Color="#CC0067C0" />         <!-- AccentFillColorTertiary -->
         <SolidColorBrush x:Key="AccentTextBrush" Color="#003E92" />              <!-- AccentTextFillColorPrimary -->
+        <LinearGradientBrush x:Key="SearchGlyphBrush" StartPoint="0,0" EndPoint="1,1">
+            <GradientStop Color="#0078D4" Offset="0" />
+            <GradientStop Color="#00C8C8" Offset="1" />
+        </LinearGradientBrush>
         <Color x:Key="ShadowColor">#000000</Color>
         <sys:Double x:Key="ShadowOpacity">0.28</sys:Double>
 
@@ -56,7 +60,7 @@
         <Style x:Key="SubtleButton" TargetType="Button">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
             <Setter Property="FontFamily" Value="{DynamicResource IconFont}" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
@@ -67,11 +71,11 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemHoverBrush}" />
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SubtleButtonHoverBrush}" />
                                 <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemSelectedBrush}" />
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SubtleButtonPressedBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>

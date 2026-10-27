@@ -7,8 +7,8 @@ using Color = System.Windows.Media.Color;
 namespace SemanticStart.App;
 
 /// <summary>
-/// Applies Windows 11 Fluent colours to the app's resource dictionary and keeps them in step with
-/// the system.
+/// Applies Microsoft 365-inspired surfaces and Windows text and accent colours, following the
+/// system's light or dark preference.
 ///
 /// Colours are pushed into <see cref="Application.Resources"/> under fixed keys rather than being
 /// hard-coded in XAML, so the overlay only has to reference them with <c>DynamicResource</c> to
@@ -111,23 +111,24 @@ public static class ThemeService
 
             if (IsDarkMode)
             {
-                // Values mirror the Windows 11 (WinUI) dark common colours; the comments name the
-                // system resource each one stands in for.
-                Set(resources, "PanelBrush", Rgb(0x2C, 0x2C, 0x2C));                     // AcrylicBackgroundFillColorDefaultFallback
+                // Cool surfaces retain the same card hierarchy in dark mode.
+                Set(resources, "PanelBrush", Rgb(0x22, 0x26, 0x2F));
                 Set(resources, "PanelBorderBrush", Argb(0x33, 0x00, 0x00, 0x00));        // SurfaceStrokeColorFlyout
                 Set(resources, "HeaderTextBrush", Argb(0xFF, 0xFF, 0xFF, 0xFF));         // TextFillColorPrimary
                 Set(resources, "PrimaryTextBrush", Argb(0xFF, 0xFF, 0xFF, 0xFF));        // TextFillColorPrimary
                 Set(resources, "SecondaryTextBrush", Argb(0xC5, 0xFF, 0xFF, 0xFF));      // TextFillColorSecondary
                 Set(resources, "TertiaryTextBrush", Argb(0x87, 0xFF, 0xFF, 0xFF));       // TextFillColorTertiary
                 Set(resources, "DisabledTextBrush", Argb(0x5D, 0xFF, 0xFF, 0xFF));       // TextFillColorDisabled
-                Set(resources, "SearchBoxBrush", Argb(0x0F, 0xFF, 0xFF, 0xFF));          // ControlFillColorDefault
-                Set(resources, "InputActiveBrush", Argb(0xFF, 0x1F, 0x1F, 0x1F));        // ControlFillColorInputActive
+                Set(resources, "SearchBoxBrush", Rgb(0x2D, 0x32, 0x3D));
+                Set(resources, "InputActiveBrush", Rgb(0x2D, 0x32, 0x3D));
                 Set(resources, "SearchBoxBorderBrush", Argb(0x12, 0xFF, 0xFF, 0xFF));    // ControlStrokeColorDefault
                 Set(resources, "ControlStrongStrokeBrush", Argb(0x8B, 0xFF, 0xFF, 0xFF));// ControlStrongStrokeColorDefault
                 Set(resources, "FocusStrokeBrush", Argb(0xFF, 0xFF, 0xFF, 0xFF));        // FocusStrokeColorOuter
-                Set(resources, "ItemHoverBrush", Argb(0x0F, 0xFF, 0xFF, 0xFF));          // SubtleFillColorSecondary
-                Set(resources, "ItemSelectedBrush", Argb(0x16, 0xFF, 0xFF, 0xFF));       // ListViewItemBackgroundSelected
-                Set(resources, "IconBackplateBrush", Argb(0x0F, 0xFF, 0xFF, 0xFF));      // ControlAltFillColorSecondary
+                Set(resources, "ItemHoverBrush", Rgb(0x30, 0x36, 0x42));
+                Set(resources, "ItemSelectedBrush", Rgb(0x36, 0x3D, 0x4B));
+                Set(resources, "SubtleButtonHoverBrush", Argb(0x20, 0xFF, 0xFF, 0xFF));
+                Set(resources, "SubtleButtonPressedBrush", Argb(0x30, 0xFF, 0xFF, 0xFF));
+                Set(resources, "IconBackplateBrush", Rgb(0x2C, 0x34, 0x43));
                 Set(resources, "BadgeBrush", Argb(0x12, 0xFF, 0xFF, 0xFF));              // ControlAltFillColorTertiary
                 Set(resources, "DividerBrush", Argb(0x15, 0xFF, 0xFF, 0xFF));            // DividerStrokeColorDefault
                 Set(resources, "ScrollBarThumbBrush", Argb(0x8B, 0xFF, 0xFF, 0xFF));     // ControlStrongFillColorDefault
@@ -137,21 +138,23 @@ public static class ThemeService
             }
             else
             {
-                Set(resources, "PanelBrush", Rgb(0xF9, 0xF9, 0xF9));                     // AcrylicBackgroundFillColorDefaultFallback
+                Set(resources, "PanelBrush", Rgb(0xF0, 0xF3, 0xF9));
                 Set(resources, "PanelBorderBrush", Argb(0x0F, 0x00, 0x00, 0x00));        // SurfaceStrokeColorFlyout
                 Set(resources, "HeaderTextBrush", Argb(0xE4, 0x00, 0x00, 0x00));         // TextFillColorPrimary
                 Set(resources, "PrimaryTextBrush", Argb(0xE4, 0x00, 0x00, 0x00));        // TextFillColorPrimary
-                Set(resources, "SecondaryTextBrush", Argb(0x9E, 0x00, 0x00, 0x00));      // TextFillColorSecondary
+                Set(resources, "SecondaryTextBrush", Rgb(0x50, 0x50, 0x50));
                 Set(resources, "TertiaryTextBrush", Argb(0x72, 0x00, 0x00, 0x00));       // TextFillColorTertiary
                 Set(resources, "DisabledTextBrush", Argb(0x5C, 0x00, 0x00, 0x00));       // TextFillColorDisabled
-                Set(resources, "SearchBoxBrush", Argb(0xB3, 0xFF, 0xFF, 0xFF));          // ControlFillColorDefault
+                Set(resources, "SearchBoxBrush", Rgb(0xFF, 0xFF, 0xFF));
                 Set(resources, "InputActiveBrush", Argb(0xFF, 0xFF, 0xFF, 0xFF));        // ControlFillColorInputActive
-                Set(resources, "SearchBoxBorderBrush", Argb(0x0F, 0x00, 0x00, 0x00));    // ControlStrokeColorDefault
+                Set(resources, "SearchBoxBorderBrush", Rgb(0xE0, 0xE0, 0xE0));
                 Set(resources, "ControlStrongStrokeBrush", Argb(0x72, 0x00, 0x00, 0x00));// ControlStrongStrokeColorDefault
                 Set(resources, "FocusStrokeBrush", Argb(0xE4, 0x00, 0x00, 0x00));        // FocusStrokeColorOuter
-                Set(resources, "ItemHoverBrush", Argb(0x09, 0x00, 0x00, 0x00));          // SubtleFillColorSecondary
-                Set(resources, "ItemSelectedBrush", Argb(0x0F, 0x00, 0x00, 0x00));       // ListViewItemBackgroundSelected
-                Set(resources, "IconBackplateBrush", Argb(0x06, 0x00, 0x00, 0x00));      // ControlAltFillColorSecondary
+                Set(resources, "ItemHoverBrush", Rgb(0xF7, 0xF9, 0xFD));
+                Set(resources, "ItemSelectedBrush", Rgb(0xFA, 0xFB, 0xFE));
+                Set(resources, "SubtleButtonHoverBrush", Argb(0x10, 0x00, 0x00, 0x00));
+                Set(resources, "SubtleButtonPressedBrush", Argb(0x1A, 0x00, 0x00, 0x00));
+                Set(resources, "IconBackplateBrush", Rgb(0xEA, 0xF0, 0xF9));
                 Set(resources, "BadgeBrush", Argb(0x0A, 0x00, 0x00, 0x00));              // ControlAltFillColorTertiary
                 Set(resources, "DividerBrush", Argb(0x0F, 0x00, 0x00, 0x00));            // DividerStrokeColorDefault
                 Set(resources, "ScrollBarThumbBrush", Argb(0x72, 0x00, 0x00, 0x00));     // ControlStrongFillColorDefault
