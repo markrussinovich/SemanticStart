@@ -1,6 +1,10 @@
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using SemanticStart.App;
+using SemanticStart.Core.Model;
 using Xunit;
 
 namespace SemanticStart.Tests;
@@ -105,6 +109,8 @@ public class SettingsWindowSmokeTests
                 setupRendered = setupWindow.IsSetupMode && setupWindow.Title.Contains("Set up")
                     && setupWindow.PrimaryActionText == "Build index" && setupWindow.IsSaveEnabled;
                 setupWindow.Close();
+
+                VerifyOverlayCards(searchService, settings);
             }
             catch (Exception ex)
             {
@@ -135,6 +141,81 @@ public class SettingsWindowSmokeTests
         Assert.True(saveEnabledAfterEdit, "Save stayed disabled after a setting was changed, so the change cannot be committed.");
         Assert.False(backgroundNoteVisibleWhenIdle, "The 'indexing runs in the background' note showed with no rebuild running.");
         Assert.True(setupRendered, "First-run setup did not render with Build index as the footer's primary action.");
+    }
+
+    private static void VerifyOverlayCards(SemanticSearchService searchService, AppSettings settings)
+    {
+        using var icons = new IconProvider();
+        var viewModel = new OverlayViewModel(searchService, icons, settings);
+        for (var i = 0; i < 2; i++)
+        {
+            viewModel.Results.Add(new SearchResultItem(new SearchHit
+            {
+                Entity = new Entity
+                {
+                    Id = $"theme-preview-{i}",
+                    DisplayName = $"Example application {i}",
+                    Kind = EntityKind.Application,
+                    LaunchKind = LaunchKind.Executable,
+                    LaunchTarget = "example.exe",
+                    Source = "test",
+                },
+                Score = 1,
+                Summary = "An application with an expandable description.",
+                Details = "Additional information about the application and its capabilities.",
+            }));
+        }
+        viewModel.SelectedIndex = 0;
+
+        var overlay = new OverlayWindow(viewModel)
+        {
+            Left = -32000,
+            Top = -32000,
+            ShowActivated = false,
+        };
+        try
+        {
+            overlay.Show();
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Loaded);
+            overlay.UpdateLayout();
+
+            var search = (TextBox)overlay.FindName("SearchBox");
+            var placeholder = (TextBlock)search.Template.FindName("Placeholder", search);
+            var placeholderLeft = placeholder.TransformToAncestor(search).Transform(new Point()).X
+                + placeholder.Padding.Left;
+            var caretLeft = search.GetRectFromCharacterIndex(0).Left;
+            Assert.InRange(Math.Abs(placeholderLeft - caretLeft), 0, 1);
+
+            var results = (ListBox)overlay.FindName("ResultsList");
+            var first = (ListBoxItem)results.ItemContainerGenerator.ContainerFromIndex(0);
+            var second = (ListBoxItem)results.ItemContainerGenerator.ContainerFromIndex(1);
+            var card = (Border)first.Template.FindName("Bd", first);
+            var separator = (Border)first.Template.FindName("Rule", first);
+            Assert.NotNull(card.Effect);
+            Assert.Equal(Visibility.Hidden, separator.Visibility);
+
+            // The new soft card still needs a distinct keyboard-navigation state.
+            viewModel.IsResultsActive = true;
+            Assert.Same(overlay.FindResource("FocusStrokeBrush"), card.BorderBrush);
+            viewModel.SelectedIndex = 1;
+            Assert.Null(card.Effect);
+            Assert.Equal(Visibility.Visible, separator.Visibility);
+            Assert.NotNull(((Border)second.Template.FindName("Bd", second)).Effect);
+
+            var collapsedHeight = second.ActualHeight;
+            viewModel.Results[1].IsExpanded = true;
+            overlay.UpdateLayout();
+            Assert.True(second.ActualHeight > collapsedHeight, "Expanded details were clipped by the card layout.");
+
+            // Exercise the shadow and all dynamic resources through WPF's renderer.
+            var image = new RenderTargetBitmap((int)overlay.ActualWidth, (int)overlay.ActualHeight,
+                96, 96, PixelFormats.Pbgra32);
+            image.Render(overlay);
+        }
+        finally
+        {
+            overlay.Close();
+        }
     }
 
     /// <summary>
