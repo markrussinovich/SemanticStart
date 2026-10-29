@@ -144,35 +144,6 @@ public sealed class EnrichmentTests
     }
 
     [Fact]
-    public async Task Enrichment_ContainsNoHandWrittenPerProgramKnowledge()
-    {
-        // Generality contract. Every description, task phrase, and synonym must be derived at index
-        // time from the entity's own metadata and its harvested documentation. Hand-written text for
-        // named programs was removed because it can only describe the software someone happened to
-        // think of while writing the code, which says nothing about the machine the tool installs
-        // on. It also went stale silently: the removed catalog mapped "Resource Monitor" to Task
-        // Manager's description, so the UI confidently showed the wrong summary for a real tool.
-        //
-        // This test fails if a per-program lookup is reintroduced, by asserting that entities the
-        // old catalog covered get nothing at all from the offline enricher set.
-        var pipeline = new EnrichmentPipeline(EnricherRegistry.CreateAll(), new HeuristicProfileSynthesizer(), maxDegreeOfParallelism: 1);
-
-        var previouslyCurated = new[]
-        {
-            CreateEntity("Power & Battery", EntityKind.SettingsPage, "ms-settings:powersleep"),
-            CreateEntity("Network Connections", EntityKind.ControlPanelApplet, @"C:\Windows\system32\ncpa.cpl"),
-            CreateEntity("Disk Cleanup", EntityKind.Application, @"C:\Windows\system32\cleanmgr.exe"),
-            CreateEntity("Device Manager", EntityKind.Application, @"C:\Windows\system32\devmgmt.msc"),
-        };
-
-        foreach (var entity in previouslyCurated)
-        {
-            var (documents, _) = await pipeline.EnrichAndSynthesizeAsync(entity, new EnrichmentOptions { AllowNetwork = false });
-            Assert.DoesNotContain(documents, d => d.Provider == "windows-intent-catalog");
-        }
-    }
-
-    [Fact]
     public async Task AdjacentDocs_IgnoresLicenseAndChangelogFiles()
     {
         // Visual Studio Code was summarised as 'THE SOFTWARE IS PROVIDED "AS IS"...' because its

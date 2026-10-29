@@ -17,6 +17,17 @@ public partial class OverlayWindow : Window
     /// <summary>Raised when the user clicks the settings button in the footer.</summary>
     public Action? SettingsRequested { get; set; }
 
+    /// <summary>Raised when the user asks to dictate, from the footer button or the hotkey.</summary>
+    public Action? DictationRequested { get; set; }
+
+    /// <summary>Raised when listening has to stop without asking for a new turn.</summary>
+    public Action? DictationStopRequested { get; set; }
+
+    public void SetDictationEnabled(bool enabled)
+        => DictationButton.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+
+    internal bool IsDictationButtonVisible => DictationButton.Visibility == Visibility.Visible;
+
     public OverlayWindow(OverlayViewModel viewModel)
     {
         InitializeComponent();
@@ -75,6 +86,21 @@ public partial class OverlayWindow : Window
         SettingsRequested?.Invoke();
     }
 
+    private void DictationButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Focus goes straight back to the query: dictation adds to what is typed there rather than
+        // replacing typing, so the caret has to stay where the user left it.
+        SearchBox.Focus();
+        DictationRequested?.Invoke();
+    }
+
+    private void ClearQueryButton_Click(object sender, RoutedEventArgs e)
+    {
+        DictationStopRequested?.Invoke();
+        _viewModel.Clear();
+        SearchBox.Focus();
+    }
+
     public void ShowOverlay()
     {
         // Registry theme changes are not always broadcast, so re-read on every activation.
@@ -100,6 +126,12 @@ public partial class OverlayWindow : Window
     public void HideAndReset()
     {
         _isOpen = false;
+
+        // Closing the overlay ends the dictation turn with it. A microphone that stays open behind
+        // a hidden window is exactly the behaviour a local-only feature cannot afford to have.
+        if (_viewModel.IsListening)
+            DictationStopRequested?.Invoke();
+
         Hide();
         ClearCopiedFlash();
         _viewModel.Clear();

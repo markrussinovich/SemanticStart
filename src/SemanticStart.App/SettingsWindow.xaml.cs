@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using SemanticStart.Core.Indexing;
+using SemanticStart.Core.Speech;
 
 namespace SemanticStart.App;
 
@@ -11,6 +12,16 @@ public partial class SettingsWindow : Window
     private readonly SemanticSearchService _searchService;
     private readonly ActivationManager _activationManager;
     private readonly IndexRebuildCoordinator _rebuilds;
+    private readonly DictationController? _dictation;
+    private readonly Action<bool>? _dictationEnabledChanged;
+
+    /// <summary>
+    /// One bootstrapper for the window's lifetime. Each instance owns an <see cref="HttpClient"/>,
+    /// and the status line asks about the model often enough that allocating one per question is a
+    /// socket leak in slow motion.
+    /// </summary>
+    private readonly SpeechModelBootstrapper _speechModels = new();
+    private CancellationTokenSource? _modelDownload;
     private AppSettings _settings;
     private bool _dirty;
     private bool _loading;
@@ -21,7 +32,9 @@ public partial class SettingsWindow : Window
         SemanticSearchService searchService,
         ActivationManager activationManager,
         IndexRebuildCoordinator rebuilds,
-        bool setupMode = false)
+        bool setupMode = false,
+        DictationController? dictation = null,
+        Action<bool>? dictationEnabledChanged = null)
     {
         InitializeComponent();
         ThemeService.Refresh();
@@ -30,6 +43,8 @@ public partial class SettingsWindow : Window
         _searchService = searchService;
         _activationManager = activationManager;
         _rebuilds = rebuilds;
+        _dictation = dictation;
+        _dictationEnabledChanged = dictationEnabledChanged;
         _settings = settingsService.Load();
         VersionText.Text = $"SemanticStart {ProductVersion}";
         LoadControls();
@@ -157,6 +172,7 @@ public partial class SettingsWindow : Window
         // so the shortcut would stop working until the app was restarted. Re-applying is harmless
         // when nothing was suspended.
         _activationManager.ResumeAfterCapture();
+        CancelSpeechModelDownload();
 
         base.OnClosed(e);
     }
@@ -170,9 +186,14 @@ public partial class SettingsWindow : Window
         LoginBox.IsChecked = _settings.LaunchAtLogin;
         LimitSlider.Value = _settings.ResultLimit;
         DebounceSlider.Value = _settings.SearchDebounceMilliseconds;
+        DictationBox.IsChecked = _settings.DictationEnabled;
+        DictationHotKeyBox.HotKey = _settings.DictationHotKey;
+        TrailingSilenceSlider.Value = _settings.DictationTrailingSilenceMilliseconds;
+        PushToTalkBox.IsChecked = _settings.DictationPushToTalk;
         _loading = false;
 
         UpdateHotKeyStatus();
+        UpdateDictationStatus();
         UpdateSaveState();
     }
 
@@ -283,6 +304,10 @@ public partial class SettingsWindow : Window
             ? spec.Normalized
             : _settings.HotKey;
 
+        var dictationHotKey = HotKeySpec.TryParse(DictationHotKeyBox.HotKey, out var dictationSpec, out _) && dictationSpec is not null
+            ? dictationSpec.Normalized
+            : _settings.DictationHotKey;
+
         _settings = _settings with
         {
             HotKey = hotKey,
@@ -291,17 +316,210 @@ public partial class SettingsWindow : Window
             LaunchAtLogin = LoginBox.IsChecked == true,
             ResultLimit = (int)Math.Round(LimitSlider.Value),
             SearchDebounceMilliseconds = (int)Math.Round(DebounceSlider.Value),
+            DictationEnabled = DictationBox.IsChecked == true,
+            DictationHotKey = dictationHotKey,
+            DictationTrailingSilenceMilliseconds = (int)Math.Round(TrailingSilenceSlider.Value),
+            DictationPushToTalk = PushToTalkBox.IsChecked == true,
         };
         _settingsService.Save(_settings);
         _activationManager.ApplySettings(_settings);
+        _dictation?.ApplySettings(_settings);
+        _dictationEnabledChanged?.Invoke(_settings.DictationEnabled);
         HotKeyBox.HotKey = _settings.HotKey;
+        DictationHotKeyBox.HotKey = _settings.DictationHotKey;
         _dirty = false;
         UpdateSaveState();
         UpdateHotKeyStatus();
+        UpdateDictationStatus();
+    }
+
+    /// <summary>
+    /// Turning dictation on is what authorises the model download, so the download starts here
+    /// rather than at the next press of the hotkey, with its progress on screen. Anything else
+    /// leaves a user who has just enabled a feature with ~665 MB of silent background traffic.
+    /// </summary>
+    private void Dictation_Changed(object sender, RoutedEventArgs e)
+    {
+        MarkDirty();
+        if (_loading || !IsLoaded)
+            return;
+
+        SaveFromControls();
+
+        if (DictationBox.IsChecked == true)
+            _ = DownloadSpeechModelAsync();
+        else
+            CancelSpeechModelDownload();
+    }
+
+    private async Task DownloadSpeechModelAsync()
+    {
+        var models = _speechModels;
+        if (models.IsDownloaded)
+        {
+            UpdateDictationStatus();
+            _ = _dictation?.WarmStartAsync();
+            return;
+        }
+
+        CancelSpeechModelDownload();
+        var download = new CancellationTokenSource();
+        _modelDownload = download;
+
+        DictationProgress.Visibility = Visibility.Visible;
+        DictationProgress.Value = 0;
+        DictationStatus.Text = "Downloading the speech model\u2026";
+
+        try
+        {
+            var progress = new Progress<double>(value => DictationProgress.Value = Math.Clamp(value, 0, 1));
+            await models.EnsureAsync(progress, download.Token);
+            DictationStatus.Text = "Speech model ready.";
+            _dictation?.ApplySettings(_settings);
+            _ = _dictation?.WarmStartAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            Log.Info("The speech model download was cancelled.");
+            DictationStatus.Text = "Speech model download cancelled.";
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Speech model download failed");
+            DictationStatus.Text = "The speech model could not be downloaded. Check your connection and try again.";
+        }
+        finally
+        {
+            DictationProgress.Visibility = Visibility.Collapsed;
+            if (ReferenceEquals(_modelDownload, download))
+            {
+                _modelDownload = null;
+                download.Dispose();
+            }
+            UpdateSpeechModelDetails();
+        }
+    }
+
+    private void CancelSpeechModelDownload()
+    {
+        // Left in place for the download's own finally to clear and dispose: clearing it here
+        // would make that cleanup skip the source it was asked to cancel.
+        _modelDownload?.Cancel();
+        DictationProgress.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Says which dictation chord is in force, on the same grounds as
+    /// <see cref="UpdateHotKeyStatus"/>, and whether the model is on the machine yet.
+    /// </summary>
+    private void UpdateDictationStatus()
+    {
+        UpdateSpeechModelDetails();
+
+        if (DictationBox.IsChecked != true)
+        {
+            DictationHotKeyStatus.Text = "Dictation is off.";
+            DictationStatus.Text = "Dictation is disabled.";
+            return;
+        }
+
+        var active = _activationManager.ActiveDictationHotKey;
+        DictationHotKeyStatus.Text = active switch
+        {
+            null => "No dictation hotkey is active. Every candidate is already claimed by another app; pick a different one.",
+            _ when !string.Equals(active, _settings.DictationHotKey, StringComparison.OrdinalIgnoreCase) =>
+                $"{_settings.DictationHotKey} is already used by another app, so {active} is active instead.",
+            _ => $"{active} is active.",
+        };
+
+        if (_modelDownload is null)
+            DictationStatus.Text = _speechModels.IsDownloaded
+                ? "Speech model ready."
+                : "The speech model will be downloaded when dictation is first used.";
+    }
+
+    private void UpdateSpeechModelDetails()
+    {
+        SpeechModelName.Text = $"{_speechModels.ModelId} (int8)";
+        SpeechModelLocation.Text = $"Location: {_speechModels.ModelsDirectory}";
+        SpeechModelReadiness.Text = _speechModels.IsDownloaded
+            ? "Readiness: model files are ready."
+            : "Readiness: model files are missing or incomplete.";
+        SpeechModelSize.Text =
+            _speechModels.IsDownloaded
+            ? $"Size: {FormatBytes(_speechModels.InstalledBytes)} installed."
+            : $"Size: about {FormatBytes(_speechModels.Options.ApproximateDownloadBytes)} to download.";
+        RemoveSpeechModelButton.IsEnabled = _speechModels.HasModelFiles && _modelDownload is null;
+    }
+
+    private static string FormatBytes(long bytes)
+        => $"{bytes / (1024.0 * 1024.0):N1} MB";
+
+    private async void RemoveSpeechModelButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_speechModels.HasModelFiles)
+        {
+            UpdateSpeechModelDetails();
+            return;
+        }
+
+        var result = System.Windows.MessageBox.Show(
+            this,
+            "Remove the downloaded dictation model files? Dictation will be disabled and the model must be downloaded again before it can be used.",
+            "Remove dictation model",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (result != MessageBoxResult.Yes)
+            return;
+
+        DictationBox.IsChecked = false;
+        _dictation?.Stop();
+        RemoveSpeechModelButton.IsEnabled = false;
+
+        try
+        {
+            if (_dictation is not null)
+                await _dictation.UnloadAsync();
+            _speechModels.DeleteModelFiles();
+            DictationStatus.Text = "Dictation model files removed.";
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to remove dictation model files");
+            DictationStatus.Text = "The dictation model files could not be removed.";
+        }
+        finally
+        {
+            UpdateSpeechModelDetails();
+        }
+    }
+
+    private void DictationHotKeyBox_HotKeyChanged(object? sender, EventArgs e)
+    {
+        if (!IsLoaded)
+            return;
+
+        SaveFromControls();
+    }
+
+    private void DictationHotKeyBox_RecordingStopped(object? sender, EventArgs e)
+    {
+        _activationManager.ResumeAfterCapture();
+        UpdateDictationStatus();
     }
 
     /// <summary>Whether Save is currently offered. Exposed so a test can check it tracks edits.</summary>
     internal bool IsSaveEnabled => SaveButton.IsEnabled;
+
+    internal string DictationSettingsTabHeader => ((TabItem)SettingsTabs.Items[1]).Header as string ?? string.Empty;
+
+    internal string SpeechModelNameText => SpeechModelName.Text;
+
+    internal string SpeechModelLocationText => SpeechModelLocation.Text;
+
+    internal string SpeechModelReadinessText => SpeechModelReadiness.Text;
+
+    internal string SpeechModelSizeText => SpeechModelSize.Text;
 
     /// <summary>Whether the "indexing runs in the background" note is showing.</summary>
     internal bool IsBackgroundNoteVisible => BackgroundNote.Visibility == Visibility.Visible;

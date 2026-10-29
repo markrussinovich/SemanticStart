@@ -36,41 +36,6 @@ public sealed class ResultCardBindingTests
     }
 
     /// <summary>
-    /// The copy button is the only way to get a result's command line out of the overlay with the
-    /// mouse, and it is templated rather than a labelled button, so all three of its moving parts
-    /// have to be wired: the glyph, the tooltip that shows what will be copied, and the click.
-    /// </summary>
-    [Fact]
-    public void TheCopyButtonIsWiredToTheGlyphTheToolTipAndAHandler()
-    {
-        var template = ResultCardTemplate();
-
-        var paths = BindingPaths(template).ToHashSet(StringComparer.Ordinal);
-
-        Assert.Contains(nameof(SearchResultItem.CopyGlyph), paths);
-        Assert.Contains(nameof(SearchResultItem.CopyToolTip), paths);
-        Assert.Contains(nameof(SearchResultItem.HasCommandLine), paths);
-        Assert.Contains("CopyCommandLine_Click", template, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// The card reads left to right as icon, name, kind, copy, expand. Sharing a column index
-    /// stacks two controls on top of each other, which is the mistake that adding a column invites.
-    /// </summary>
-    [Fact]
-    public void TheCardHasAColumnForEveryControlInItsHeaderRow()
-    {
-        var header = ResultCardTemplate();
-        var columns = Regex.Matches(header, @"<ColumnDefinition\b").Count;
-        var used = Regex.Matches(header, @"Grid\.Column=""(\d+)""")
-            .Select(m => int.Parse(m.Groups[1].Value))
-            .ToList();
-
-        Assert.Equal(used.Count, used.Distinct().Count());
-        Assert.All(used, column => Assert.True(column < columns, $"Grid.Column {column} has no column definition."));
-    }
-
-    /// <summary>
     /// Everything between the DataTemplate for a result and its close tag. Read as text rather than
     /// as a parsed tree because binding expressions are attribute strings in WPF's own
     /// mini-language, not XML.

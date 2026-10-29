@@ -17,9 +17,45 @@
     <!-- Pinned above the transitive 2.1.10, which carries GHSA-2m69-gcr7-jv3q. -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.10.0" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" />
+    <!--
+      Pinned to the ONNX Runtime the sherpa-onnx build below links against. Both packages carry
+      their own runtimes/<rid>/native/onnxruntime.dll and exactly one of them can sit next to the
+      exe, so the versions have to be chosen together rather than bumped independently: ORT
+      promises that a runtime serves consumers built against the same or an older API, never a
+      newer one. 1.27.1 is a patch above sherpa 1.13.4's 1.27.0, which is the safe direction.
+    -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.27.1" />
     <PackageReference Include="Microsoft.ML.Tokenizers" Version="1.0.0" />
+    <!--
+      Dictation. NAudio.Wasapi is the microphone; sherpa-onnx is the streaming speech model. The
+      sherpa meta-package declares a runtime dependency for every platform it supports, so restore
+      pulls in Android and macOS natives that no Windows build will ever publish - a restore-cache
+      cost rather than a shipped one, since only the published RID's natives are copied.
+    -->
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.4" />
     <PackageReference Include="System.Numerics.Tensors" Version="10.0.12" />
   </ItemGroup>
+
+  <!--
+    Two packages ship a file called onnxruntime.dll for the same RID, and the build resolves that
+    silently: no warning, and which copy survives depends on the order the assets happen to be
+    collected in. Deciding it here makes the shipped runtime a stated choice rather than an
+    accident of package ordering.
+
+    Microsoft.ML.OnnxRuntime's copy is the one kept, because it is the pair that stays consistent:
+    it arrives with a matching onnxruntime_providers_shared.dll, and its managed assembly is what
+    the embedding path P/Invokes. sherpa-onnx-c-api.dll loads whatever onnxruntime.dll is next to
+    it, and a runtime at or above the version it was built against is exactly the case ORT
+    supports.
+  -->
+  <Target Name="ResolveDuplicateOnnxRuntimeNative" AfterTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <ReferenceCopyLocalPaths
+        Remove="@(ReferenceCopyLocalPaths)"
+        Condition="'%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension)' == 'onnxruntime.dll'
+                   AND $([System.String]::Copy('%(ReferenceCopyLocalPaths.NuGetPackageId)').StartsWith('org.k2fsa.sherpa.onnx.runtime'))" />
+    </ItemGroup>
+  </Target>
 
 </Project>
