@@ -44,7 +44,30 @@ permissions:
   id-token: write
 
 jobs:
+  # A push can be delivered more than once - one commit here started two runs, and the
+  # concurrency group ran them back to back, publishing the same build as v1.1.1 and v1.1.2. A
+  # commit that already carries a release tag has been released; manual runs are exempt because
+  # re-releasing on purpose is what they are for.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.tags.outputs.released }}
+    steps:
+      - id: tags
+        env:
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          tags=$(git ls-remote --tags "$REPO_URL" 'refs/tags/v*' | awk -v sha="$GITHUB_SHA" '$1 == sha { print $2 }')
+          if [ -n "$tags" ] && [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "Commit $GITHUB_SHA is already released as: $tags"
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: check
+    if: needs.check.outputs.released != 'true'
     # WPF, and the app is Windows-only. There is no cross-compilation route for this target.
     runs-on: windows-latest
     # Gives OIDC one stable, environment-bound subject for main and manual runs. GitHub emits this

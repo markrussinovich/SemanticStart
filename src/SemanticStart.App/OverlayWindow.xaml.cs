@@ -383,7 +383,13 @@ public partial class OverlayWindow : Window
             if ((sender as FrameworkElement)?.DataContext is SearchResultItem item)
             {
                 ResultsList.SelectedItem = item;
-                await _viewModel.LaunchSelectedAsync(default);
+                var modifiers = Keyboard.Modifiers;
+                var options = new LaunchOptions
+                {
+                    RunAsAdministrator = modifiers.HasFlag(ModifierKeys.Control) && !modifiers.HasFlag(ModifierKeys.Shift),
+                    OpenContainingFolder = modifiers.HasFlag(ModifierKeys.Control) && modifiers.HasFlag(ModifierKeys.Shift),
+                };
+                await _viewModel.LaunchSelectedAsync(options);
                 HideAndReset();
             }
         }

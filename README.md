@@ -204,17 +204,21 @@ whether to start at sign-in, and whether to look up documentation online while i
 default); choosing **Build index** builds the index (downloading the ~90 MB embedding model once).
 Everything can be changed later in Settings.
 
-| Key | Action |
+| Key / mouse | Action |
 |---|---|
 | `Win+Alt+.` | Open the overlay (configurable) |
 | `Win+Alt+/` | Open the overlay and dictate (configurable, off until enabled) |
-| `Enter` | Launch |
+| `Enter` or left-click | Launch |
 | `Down` / `Up` | Move into the results and back to the search box |
 | `Right` / `Left` | Show / hide the selected result's description (`Ctrl+D` toggles) |
 | `Ctrl+C` | Copy the selected result's command line |
-| `Ctrl+Enter` | Launch as administrator |
-| `Ctrl+Shift+Enter` | Open file location |
+| `Ctrl+Enter` or `Ctrl`+left-click | Launch as administrator |
+| `Ctrl+Shift+Enter` or `Ctrl+Shift`+left-click | Open file location |
 | `Esc` | Dismiss |
+
+Administrator launches request the shell item's `runas` action, including desktop applications
+indexed through AppsFolder. Windows determines whether the target supports elevation; packaged
+apps such as Calculator may not support running elevated.
 
 The overlay follows the system light/dark theme and accent color live, and shows each entry's real
 Shell icon (including MSIX/UWP assets) via `IShellItemImageFactory` — the same source Start uses.

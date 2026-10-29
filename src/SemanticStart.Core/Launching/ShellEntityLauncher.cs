@@ -51,14 +51,7 @@ public sealed class ShellEntityLauncher : IEntityLauncher
         switch (entity.LaunchKind)
         {
             case LaunchKind.AppsFolder:
-                // explorer.exe is the only reliable way to activate an AppUserModelId without
-                // taking a dependency on the packaged-app activation COM interfaces.
-                Start(new ProcessStartInfo
-                {
-                    FileName = "explorer.exe",
-                    Arguments = $"shell:AppsFolder\\{entity.LaunchTarget}",
-                    UseShellExecute = true,
-                });
+                Start(AppsFolderStartInfo(entity, options));
                 break;
 
             case LaunchKind.Uri:
@@ -102,6 +95,19 @@ public sealed class ShellEntityLauncher : IEntityLauncher
                 });
                 break;
         }
+    }
+
+    internal static ProcessStartInfo AppsFolderStartInfo(Entity entity, LaunchOptions options)
+    {
+        var target = $"shell:AppsFolder\\{entity.LaunchTarget}";
+        // Apply runas to the shell item, not Explorer, which delegates activation unelevated.
+        return new ProcessStartInfo
+        {
+            FileName = options.RunAsAdministrator ? target : "explorer.exe",
+            Arguments = options.RunAsAdministrator ? string.Empty : target,
+            UseShellExecute = true,
+            Verb = options.RunAsAdministrator ? "runas" : string.Empty,
+        };
     }
 
     private static void OpenContainingFolder(Entity entity)
