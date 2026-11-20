@@ -361,7 +361,11 @@ public sealed class OverlayViewModel : ObservableObject
             _resultsQuery = query;
             SelectedIndex = Results.Count > 0 ? 0 : -1;
             IsResultsActive = false;
-            Status = Results.Count == 0
+            Status = _searchService.IsIndexing
+                ? _searchService.Count == 0
+                    ? "Discovering apps; search will be available shortly."
+                    : "Indexing in background; results may be incomplete."
+                : Results.Count == 0
                 ? string.IsNullOrWhiteSpace(query) ? IdleStatus : _searchService.Count == 0 ? EmptyIndexStatus : NoMatchStatus
                 : string.Empty;
             _ = LoadIconsAsync(cancellationToken);

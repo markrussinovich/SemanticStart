@@ -94,6 +94,18 @@ public sealed class EmbeddingGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateAsync_SingleThreadIndexingAndQuerySessionsPreserveEmbeddings()
+    {
+        using var vocab = new TestBertVocabulary();
+        using var indexing = new OnnxEmbeddingGenerator(FixtureModelPath, vocab.Path, FixtureModelId, dimensions: 2, intraOpNumThreads: 1);
+        using var querying = new OnnxEmbeddingGenerator(FixtureModelPath, vocab.Path, FixtureModelId, dimensions: 2, intraOpNumThreads: 2);
+        var batch = await indexing.GenerateAsync(["hello world", "hello"]);
+        var queries = await querying.GenerateAsync(["hello world", "hello"]);
+        Assert.Equal(batch[0].Vector.ToArray(), queries[0].Vector.ToArray());
+        Assert.Equal(batch[1].Vector.ToArray(), queries[1].Vector.ToArray());
+    }
+
+    [Fact]
     public async Task GenerateAsync_DefaultAndInjectedBert_PreserveBaselineEmbeddings()
     {
         using var vocab = new TestBertVocabulary();

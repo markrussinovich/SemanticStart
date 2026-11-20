@@ -184,7 +184,40 @@ public sealed class CliHelpEnricher : IEnricher
 {
     private static readonly IReadOnlyDictionary<string, string[]> Arguments = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
     {
-        ["ipconfig.exe"] = ["/?"], ["ping.exe"] = ["/?"], ["tracert.exe"] = ["/?"], ["netstat.exe"] = ["/?"], ["nslookup.exe"] = ["/?"], ["route.exe"] = ["/?"], ["arp.exe"] = ["/?"], ["netsh.exe"] = ["/?"], ["sfc.exe"] = ["/?"], ["dism.exe"] = ["/?"], ["chkdsk.exe"] = ["/?"], ["diskpart.exe"] = ["/?"], ["tasklist.exe"] = ["/?"], ["taskkill.exe"] = ["/?"], ["systeminfo.exe"] = ["/?"], ["whoami.exe"] = ["/?"], ["gpupdate.exe"] = ["/?"], ["gpresult.exe"] = ["/?"], ["robocopy.exe"] = ["/?"], ["xcopy.exe"] = ["/?"], ["schtasks.exe"] = ["/?"], ["sc.exe"] = ["/?"], ["reg.exe"] = ["/?"], ["bcdedit.exe"] = ["/?"], ["powercfg.exe"] = ["/?"], ["driverquery.exe"] = ["/?"], ["pathping.exe"] = ["/?"], ["certutil.exe"] = ["/?"], ["cipher.exe"] = ["/?"], ["compact.exe"] = ["/?"], ["fsutil.exe"] = ["/?"], ["icacls.exe"] = ["/?"], ["takeown.exe"] = ["/?"], ["shutdown.exe"] = ["/?"]
+        ["ipconfig.exe"] = ["/?"],
+        ["ping.exe"] = ["/?"],
+        ["tracert.exe"] = ["/?"],
+        ["netstat.exe"] = ["/?"],
+        ["nslookup.exe"] = ["/?"],
+        ["route.exe"] = ["/?"],
+        ["arp.exe"] = ["/?"],
+        ["netsh.exe"] = ["/?"],
+        ["sfc.exe"] = ["/?"],
+        ["dism.exe"] = ["/?"],
+        ["chkdsk.exe"] = ["/?"],
+        ["diskpart.exe"] = ["/?"],
+        ["tasklist.exe"] = ["/?"],
+        ["taskkill.exe"] = ["/?"],
+        ["systeminfo.exe"] = ["/?"],
+        ["whoami.exe"] = ["/?"],
+        ["gpupdate.exe"] = ["/?"],
+        ["gpresult.exe"] = ["/?"],
+        ["robocopy.exe"] = ["/?"],
+        ["xcopy.exe"] = ["/?"],
+        ["schtasks.exe"] = ["/?"],
+        ["sc.exe"] = ["/?"],
+        ["reg.exe"] = ["/?"],
+        ["bcdedit.exe"] = ["/?"],
+        ["powercfg.exe"] = ["/?"],
+        ["driverquery.exe"] = ["/?"],
+        ["pathping.exe"] = ["/?"],
+        ["certutil.exe"] = ["/?"],
+        ["cipher.exe"] = ["/?"],
+        ["compact.exe"] = ["/?"],
+        ["fsutil.exe"] = ["/?"],
+        ["icacls.exe"] = ["/?"],
+        ["takeown.exe"] = ["/?"],
+        ["shutdown.exe"] = ["/?"]
     };
     /// <summary>Characters of output a tool must produce before its reply counts as documentation.</summary>
     private const int SucceededMinimum = 120;
@@ -196,7 +229,7 @@ public sealed class CliHelpEnricher : IEnricher
     /// </summary>
     private const int FailedMinimum = 300;
 
-    public string Provider => "cli-help";    public bool RequiresNetwork => false;
+    public string Provider => "cli-help"; public bool RequiresNetwork => false;
     public bool CanEnrich(Entity entity) => ResolveTarget(entity) is not null;
 
     public async Task<IReadOnlyList<EnrichmentDocument>> EnrichAsync(Entity entity, CancellationToken cancellationToken = default)
@@ -214,7 +247,8 @@ public sealed class CliHelpEnricher : IEnricher
 
             foreach (var switches in target.Candidates)
             {
-                var result = await ProcessRunner.RunAsync(target.Path, switches, TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+                var result = await CachedProcess.RunWithExitCodeAsync(target.Path, switches, TimeSpan.FromSeconds(3),
+                    cancellationToken, cacheNonZero: true).ConfigureAwait(false);
                 var text = RepairWideOutput(result.Output).Trim();
                 if (text.Length > 4096) text = text[..4096];
                 if (!LooksLikeHelp(text, result.ExitCode)) continue;
@@ -372,6 +406,7 @@ public sealed class CliHelpEnricher : IEnricher
 
 internal static class ProcessRunner
 {
+    private static readonly SemaphoreSlim Slots = new(2, 2);
     /// <summary>
     /// Hard cap on captured output. A help screen is a few kilobytes; anything past this is a tool
     /// that ignored its arguments and started doing work, and none of it is documentation.
@@ -379,6 +414,19 @@ internal static class ProcessRunner
     private const int MaxCapturedCharacters = 64 * 1024;
 
     public static async Task<(int ExitCode, string Output)> RunAsync(string fileName, IReadOnlyList<string> args, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        await Slots.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await RunCoreAsync(fileName, args, timeout, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            Slots.Release();
+        }
+    }
+
+    private static async Task<(int ExitCode, string Output)> RunCoreAsync(string fileName, IReadOnlyList<string> args, TimeSpan timeout, CancellationToken cancellationToken)
     {
         using var process = new Process();
         process.StartInfo = new ProcessStartInfo { FileName = fileName, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true, CreateNoWindow = true };
@@ -410,6 +458,8 @@ internal static class ProcessRunner
         process.OutputDataReceived += (_, e) => Capture(e.Data);
         process.ErrorDataReceived += (_, e) => Capture(e.Data);
         process.Start();
+        try { process.PriorityClass = ProcessPriorityClass.BelowNormal; }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { }
 
         // Contain the probe and everything it starts.
         //
@@ -429,6 +479,7 @@ internal static class ProcessRunner
         if (!finished)
         {
             try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            cancellationToken.ThrowIfCancellationRequested();
             lock (gate) return (-1, output.ToString());
         }
         await waitTask.ConfigureAwait(false);

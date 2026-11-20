@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using SemanticStart.Core;
 using SemanticStart.Core.Abstractions;
@@ -43,10 +44,12 @@ public sealed class SemanticSearchService : IDisposable
     private HybridSearchEngine? _engine;
     private ShellEntityLauncher? _launcher;
     private bool _initialized;
+    private volatile bool _isIndexing;
 
     public SemanticSearchService(AppSettings settings) => _settings = settings;
 
     public int Count => _engine?.Count ?? 0;
+    public bool IsIndexing => _isIndexing;
 
     public async Task<IndexStats> GetIndexStatsAsync(CancellationToken cancellationToken)
     {
@@ -151,16 +154,43 @@ public sealed class SemanticSearchService : IDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            var profiler = new EnrichmentPipeline(EnricherRegistry.CreateAll(), new HeuristicProfileSynthesizer());
-            var builder = new IndexBuilder(CollectorRegistry.CreateAll(), profiler, _embeddingGenerator, _store);
-            await builder.BuildAsync(new IndexOptions { AllowNetwork = settings.AllowOnlineEnrichment, ForceFullRebuild = force }, progress, cancellationToken);
-            _engine.Invalidate();
-            await _engine.LoadAsync(cancellationToken);
-            Log.Info($"Index rebuilt; {_engine.Count} entities loaded.");
+            _isIndexing = true;
+            Log.Info($"Index build started: online={settings.AllowOnlineEnrichment}, force={force}, processors={Environment.ProcessorCount}.");
+            var result = await Task.Run(async () =>
+            {
+                var files = new EmbeddingModelBootstrapper();
+                // Interactive queries have their own session; a build cannot monopolize its workers.
+                using var indexingEmbeddings = new OnnxEmbeddingGenerator(files.ModelPath, files.VocabPath, intraOpNumThreads: 1);
+                var profiler = new EnrichmentPipeline(EnricherRegistry.CreateAll(), new HeuristicProfileSynthesizer(), diagnostic: Log.Info);
+                var builder = new IndexBuilder(CollectorRegistry.CreateAll(), profiler, indexingEmbeddings, _store);
+                var refreshTimer = Stopwatch.StartNew();
+                return await builder.BuildAsync(
+                    new IndexOptions { AllowNetwork = settings.AllowOnlineEnrichment, ForceFullRebuild = force },
+                    progress, cancellationToken, async ct =>
+                    {
+                        if (_engine.Count > 0 && refreshTimer.Elapsed < TimeSpan.FromSeconds(1))
+                            return;
+                        await _engine.LoadAsync(ct).ConfigureAwait(false);
+                        refreshTimer.Restart();
+                    }).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
+            Log.Info($"Index build: {result}");
+            if (result.Failed > 0)
+                throw new InvalidOperationException($"Index build had {result.Failed} failed entities: {result.FirstFailure}");
         }
         finally
         {
-            _gate.Release();
+            try
+            {
+                // Cancellation keeps everything committed so far searchable and resumable.
+                await Task.Run(() => _engine.LoadAsync(CancellationToken.None)).ConfigureAwait(false);
+                Log.Info($"Search snapshot refreshed; {_engine.Count} entities loaded.");
+            }
+            finally
+            {
+                _isIndexing = false;
+                _gate.Release();
+            }
         }
     }
 

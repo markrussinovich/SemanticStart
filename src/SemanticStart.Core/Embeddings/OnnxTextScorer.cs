@@ -9,17 +9,22 @@ internal sealed class OnnxTextScorer : IDisposable
     private readonly bool _hasTokenTypeIds;
     private bool _disposed;
 
-    public OnnxTextScorer(string modelPath)
+    public OnnxTextScorer(string modelPath, int intraOpNumThreads = 2)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelPath);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(intraOpNumThreads);
         if (!File.Exists(modelPath))
             throw new FileNotFoundException("ONNX embedding model was not found.", modelPath);
 
-        var sessionOptions = new SessionOptions
+        using var sessionOptions = new SessionOptions
         {
             GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
             ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
+            IntraOpNumThreads = Math.Min(intraOpNumThreads, Environment.ProcessorCount),
+            InterOpNumThreads = 1,
         };
+        sessionOptions.AddSessionConfigEntry("session.intra_op.allow_spinning", "0");
+        sessionOptions.AddSessionConfigEntry("session.inter_op.allow_spinning", "0");
 
         _session = new InferenceSession(modelPath, sessionOptions);
         var inputMetadata = _session.InputMetadata;

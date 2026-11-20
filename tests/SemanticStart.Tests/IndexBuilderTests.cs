@@ -1,6 +1,7 @@
 using SemanticStart.Core.Abstractions;
 using SemanticStart.Core.Indexing;
 using SemanticStart.Core.Model;
+using SemanticStart.Core.Query;
 using SemanticStart.Core.Storage;
 
 namespace SemanticStart.Tests;
@@ -285,6 +286,133 @@ public sealed class IndexBuilderTests : IDisposable
         Assert.Equal(0, second.Updated);
     }
 
+    [Fact]
+    public async Task Build_DiscoveryRowsAreSearchableBeforeEnrichmentCompletes()
+    {
+        using var store = new SqliteIndexStore(DbPath, VectorPath);
+        using var embeddings = new FakeEmbeddings();
+        var engine = new HybridSearchEngine(store, embeddings);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entity = Make("test", "widget", "Widget", EntityKind.Application, LaunchKind.Executable);
+        var profiler = new DelegateProfiler(async (_, ct) =>
+        {
+            started.TrySetResult();
+            await release.Task.WaitAsync(ct);
+        });
+        var build = new IndexBuilder([new FakeCollector("test", [entity])], profiler, embeddings, store)
+            .BuildAsync(onBatchCommitted: engine.LoadAsync);
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(build.IsCompleted);
+            var hit = Assert.Single(await engine.SearchAsync("Widget"));
+            Assert.Equal(entity.Id, hit.Entity.Id);
+            Assert.Empty(await store.GetContentHashesAsync());
+            Assert.Null(Assert.Single(await store.GetAllAsync()).VectorOrdinal);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await build.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.NotNull(Assert.Single(await store.GetAllAsync()).VectorOrdinal);
+    }
+
+    [Fact]
+    public async Task Build_PublishesEmbeddedBatchesWhileAnotherEntityIsBlocked()
+    {
+        using var store = new SqliteIndexStore(DbPath, VectorPath);
+        using var embeddings = new FakeEmbeddings();
+        var committed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = Make("test", "first", "First Widget", EntityKind.Application, LaunchKind.Executable);
+        var last = Make("test", "last", "Last Widget", EntityKind.Application, LaunchKind.Executable);
+        var profiler = new DelegateProfiler(async (entity, ct) =>
+        {
+            if (entity.Id == last.Id)
+                await release.Task.WaitAsync(ct);
+        });
+        var build = new IndexBuilder([new FakeCollector("test", [first, last])], profiler, embeddings, store)
+            .BuildAsync(new IndexOptions { EmbeddingBatchSize = 1, EnrichmentConcurrency = 1 },
+                onBatchCommitted: async ct =>
+                {
+                    if ((await store.GetByIdAsync(first.Id, ct))?.VectorOrdinal is not null)
+                        committed.TrySetResult();
+                });
+        try
+        {
+            await committed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(build.IsCompleted);
+            Assert.NotNull((await store.GetByIdAsync(first.Id))!.Profile);
+            Assert.Null((await store.GetByIdAsync(last.Id))!.Entity.ContentHash);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await build.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public async Task Build_CancellationKeepsCompletedRowsAndResumesOnlyUnfinishedRows()
+    {
+        var first = Make("test", "first", "First Widget", EntityKind.Application, LaunchKind.Executable);
+        var last = Make("test", "last", "Last Widget", EntityKind.Application, LaunchKind.Executable);
+        var collector = new FakeCollector("test", [first, last]);
+        using (var store = new SqliteIndexStore(DbPath, VectorPath))
+        using (var cancellation = new CancellationTokenSource())
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                new IndexBuilder([collector], new FakeProfiler(), new FakeEmbeddings(), store)
+                    .BuildAsync(new IndexOptions { EmbeddingBatchSize = 1, EnrichmentConcurrency = 1 },
+                        cancellationToken: cancellation.Token, onBatchCommitted: async ct =>
+                        {
+                            if ((await store.GetContentHashesAsync(ct)).Count == 1)
+                                cancellation.Cancel();
+                        }).WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Single(await store.GetContentHashesAsync());
+            Assert.Equal(2, await store.CountAsync());
+        }
+
+        using var resumed = new SqliteIndexStore(DbPath, VectorPath);
+        var result = await new IndexBuilder([collector], new FakeProfiler(), new FakeEmbeddings(), resumed).BuildAsync();
+        Assert.Equal(1, result.Unchanged);
+        Assert.Equal(1, result.Updated);
+        Assert.All(await resumed.GetAllAsync(), item => Assert.NotNull(item.VectorOrdinal));
+    }
+
+    [Fact]
+    public async Task Build_RetiresUndiscoveredIncompleteRows()
+    {
+        using var store = new SqliteIndexStore(DbPath, VectorPath);
+        await store.InitializeAsync("test-model", 4);
+        await store.UpsertAsync(Make("test", "gone", "Gone Widget", EntityKind.Application, LaunchKind.Executable)
+            with
+        { ContentHash = null }, [], null, null);
+        var result = await new IndexBuilder([], new FakeProfiler(), new FakeEmbeddings(), store).BuildAsync();
+        Assert.Equal(1, result.Removed);
+        Assert.Empty(await store.GetAllAsync());
+    }
+
+    [Fact]
+    public async Task Build_EmbeddingFailureKeepsLexicalResultsAndRetriesNextBuild()
+    {
+        using var store = new SqliteIndexStore(DbPath, VectorPath);
+        var entity = Make("test", "widget", "Widget", EntityKind.Application, LaunchKind.Executable);
+        var collector = new FakeCollector("test", [entity]);
+        using var failing = new FailingEmbeddings();
+        var result = await new IndexBuilder([collector], new FakeProfiler(), failing, store).BuildAsync();
+        Assert.Equal(1, result.Failed);
+        Assert.Empty(await store.GetContentHashesAsync());
+        Assert.Equal(entity.Id, Assert.Single(await new HybridSearchEngine(store, failing).SearchAsync("Widget")).Entity.Id);
+
+        var retry = await new IndexBuilder([collector], new FakeProfiler(), new FakeEmbeddings(), store).BuildAsync();
+        Assert.Equal(0, retry.Unchanged);
+        Assert.Equal(0, retry.Failed);
+        Assert.NotNull(Assert.Single(await store.GetAllAsync()).VectorOrdinal);
+    }
+
     private static Entity Make(
         string source, string key, string name, EntityKind kind, LaunchKind launchKind, string? target = null) =>
         new()
@@ -335,6 +463,21 @@ public sealed class IndexBuilderTests : IDisposable
                     Summary = entity.DisplayName,
                     Generator = "test",
                 }));
+    }
+
+    private sealed class DelegateProfiler(Func<Entity, CancellationToken, Task> beforeProfile) : IEntityProfiler
+    {
+        public async Task<(IReadOnlyList<EnrichmentDocument> Documents, SynthesizedProfile Profile)> ProfileAsync(
+            Entity entity, bool allowNetwork, CancellationToken cancellationToken = default)
+        {
+            await beforeProfile(entity, cancellationToken);
+            return await new FakeProfiler().ProfileAsync(entity, allowNetwork, cancellationToken);
+        }
+    }
+
+    private sealed class FailingEmbeddings : TestEmbeddingGenerator
+    {
+        public FailingEmbeddings() : base(_ => throw new InvalidOperationException("model failure")) { }
     }
 
     private sealed class FakeEmbeddings : TestEmbeddingGenerator

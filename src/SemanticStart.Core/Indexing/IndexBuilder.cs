@@ -1,11 +1,12 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Threading.Channels;
 using Microsoft.Extensions.AI;
 using SemanticStart.Core.Abstractions;
 using SemanticStart.Core.Collectors;
 using SemanticStart.Core.Embeddings;
 using SemanticStart.Core.Model;
 using SemanticStart.Core.Query;
+using SemanticStart.Core.Synthesis;
 
 namespace SemanticStart.Core.Indexing;
 
@@ -40,9 +41,12 @@ public sealed class IndexBuilder
     public async Task<IndexResult> BuildAsync(
         IndexOptions? options = null,
         IProgress<IndexProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<CancellationToken, Task>? onBatchCommitted = null)
     {
         options ??= IndexOptions.Default;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.EnrichmentConcurrency);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.EmbeddingBatchSize);
         var stopwatch = Stopwatch.StartNew();
 
         await _store.InitializeAsync(
@@ -57,13 +61,15 @@ public sealed class IndexBuilder
         // normally loses to its AppsFolder entry has nothing to lose to, and would be indexed a
         // second time under its bare file name. Discovery is also the cheap phase - the cost this
         // option saves is enrichment and embedding, not collection.
+        var discoveryTimer = Stopwatch.StartNew();
         var discovered = await DiscoverAsync(progress, cancellationToken).ConfigureAwait(false);
+        discoveryTimer.Stop();
 
-        // Always read the stored hashes, even for a forced rebuild. They serve two distinct
-        // purposes: deciding what can be skipped, and identifying rows that are no longer
-        // discovered. Only the first is disabled by ForceFullRebuild — dropping the second would
-        // strand entities that a collector or dedupe change stopped producing.
+        // Read all stored IDs as well as completed hashes: discovery-only rows have no hash,
+        // but still need to be retired when their program is removed.
         var storedHashes = await _store.GetContentHashesAsync(cancellationToken).ConfigureAwait(false);
+        var storedIds = (await _store.GetAllAsync(cancellationToken).ConfigureAwait(false))
+            .Select(item => item.Entity.Id).ToHashSet(StringComparer.Ordinal);
 
         // A refresh pass targets stale enrichment, not stale discovery: the content hash of an app
         // whose menus we now read differently has not changed, so hash skipping would skip every
@@ -106,7 +112,7 @@ public sealed class IndexBuilder
             // Whether this is an addition or an update is a question about what is stored, not
             // about which hashes this pass chose to honour. Asking the filtered map meant every
             // forced, refreshed, or scoped rebuild reported its entire index as newly added.
-            if (storedHashes.ContainsKey(entity.Id))
+            if (storedIds.Contains(entity.Id))
                 updated++;
             else
                 added++;
@@ -114,7 +120,29 @@ public sealed class IndexBuilder
             toProcess.Add(entity);
         }
 
-        var (failed, firstFailure) = await ProcessAsync(toProcess, options, reuse, progress, cancellationToken).ConfigureAwait(false);
+        var persistenceTimer = new Stopwatch();
+        var seeded = 0;
+        var discoverySynthesizer = new HeuristicProfileSynthesizer();
+        foreach (var entity in toProcess.Where(entity => !storedIds.Contains(entity.Id)))
+        {
+            // A null hash marks discovery-only rows as unfinished, so a canceled build resumes
+            // enrichment rather than treating these searchable placeholders as complete.
+            var profile = await discoverySynthesizer.SynthesizeAsync(entity, [], cancellationToken).ConfigureAwait(false);
+            persistenceTimer.Start();
+            await _store.UpsertAsync(entity with { ContentHash = null }, [], profile, null, cancellationToken)
+                .ConfigureAwait(false);
+            persistenceTimer.Stop();
+            seeded++;
+        }
+        if (seeded > 0)
+        {
+            if (onBatchCommitted is not null)
+                await onBatchCommitted(cancellationToken).ConfigureAwait(false);
+            progress?.Report(new IndexProgress { Phase = "Searchable", Completed = seeded, Total = toProcess.Count });
+        }
+
+        var (failed, firstFailure, embeddingDuration, writeDuration) =
+            await ProcessAsync(toProcess, options, reuse, progress, cancellationToken, onBatchCommitted).ConfigureAwait(false);
 
         // Anything previously indexed but no longer discovered has been uninstalled, removed, or
         // collapsed into another entity by deduplication.
@@ -123,7 +151,7 @@ public sealed class IndexBuilder
         // run everything, so the full set would be accurate here - but acting on it would make a
         // scoped pass capable of deleting from sources the caller did not ask it to touch, and a
         // collector that silently failed mid-enumeration would take its whole source with it.
-        var staleIds = storedHashes.Keys.Except(discovered.Keys, StringComparer.Ordinal);
+        var staleIds = storedIds.Except(discovered.Keys, StringComparer.Ordinal);
         if (scoped)
             staleIds = staleIds.Where(id => EntityId.SourceOf(id) is { } source && options.Sources.Contains(source));
 
@@ -145,6 +173,9 @@ public sealed class IndexBuilder
             Failed = failed,
             FirstFailure = firstFailure,
             Duration = stopwatch.Elapsed,
+            DiscoveryDuration = discoveryTimer.Elapsed,
+            EmbeddingDuration = embeddingDuration,
+            PersistenceDuration = persistenceTimer.Elapsed + writeDuration,
         };
     }
 
@@ -506,11 +537,6 @@ public sealed class IndexBuilder
     }
 
     /// <summary>
-    /// Enriches and synthesizes concurrently, then embeds in batches. Embedding is deliberately
-    /// serialized into batches after profiling rather than done per entity: the ONNX per-call
-    /// overhead dominates the actual matrix multiply at this text length.
-    /// </summary>
-    /// <summary>
     /// What a refresh pass can carry forward: the documents already gathered for each entity, and
     /// the exact text that produced each stored vector.
     ///
@@ -547,45 +573,149 @@ public sealed class IndexBuilder
         return new ReusableIndex { Documents = documents, EmbeddingTexts = texts };
     }
 
-    private async Task<(int Failed, string? FirstFailure)> ProcessAsync(
+    private sealed record ProfiledEntity(Entity Entity, IReadOnlyList<EnrichmentDocument> Docs, SynthesizedProfile Profile);
+
+    private async Task<(int Failed, string? FirstFailure, TimeSpan EmbeddingDuration, TimeSpan WriteDuration)> ProcessAsync(
         IReadOnlyList<Entity> entities,
         IndexOptions options,
         ReusableIndex reuse,
         IProgress<IndexProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? onBatchCommitted)
     {
         if (entities.Count == 0)
-            return (0, null);
+            return (0, null, TimeSpan.Zero, TimeSpan.Zero);
 
-        var profiled = new ConcurrentBag<(Entity Entity, IReadOnlyList<EnrichmentDocument> Docs, SynthesizedProfile Profile)>();
+        var profiled = Channel.CreateBounded<ProfiledEntity>(new BoundedChannelOptions(options.EmbeddingBatchSize * 2)
+        {
+            SingleReader = true,
+            FullMode = BoundedChannelFullMode.Wait,
+        });
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var failed = 0;
         var completed = 0;
         string? firstFailure = null;
+        var embeddingTimer = new Stopwatch();
+        var writeTimer = new Stopwatch();
+        var persisted = 0;
+        var producer = ProduceAsync();
+        try
+        {
+            var batch = new List<ProfiledEntity>(options.EmbeddingBatchSize);
+            await foreach (var item in profiled.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                batch.Add(item);
+                if (batch.Count == options.EmbeddingBatchSize)
+                {
+                    await FlushAsync(batch).ConfigureAwait(false);
+                    batch.Clear();
+                }
+            }
+            if (batch.Count > 0)
+                await FlushAsync(batch).ConfigureAwait(false);
+        }
+        finally
+        {
+            // A failed writer or snapshot refresh must not leave producers blocked on a full queue.
+            lifetime.Cancel();
+            await producer.ConfigureAwait(false);
+        }
+        return (failed, firstFailure, embeddingTimer.Elapsed, writeTimer.Elapsed);
 
-        await Parallel.ForEachAsync(
-            entities,
-            new ParallelOptions
+        async Task ProduceAsync()
+        {
+            try
             {
-                MaxDegreeOfParallelism = options.EnrichmentConcurrency,
-                CancellationToken = cancellationToken,
-            },
-            async (entity, ct) =>
+                await Parallel.ForEachAsync(
+                    entities,
+                    new ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = options.EnrichmentConcurrency,
+                        CancellationToken = lifetime.Token,
+                    },
+                    async (entity, ct) =>
+                    {
+                        try
+                        {
+                            var stored = reuse.Documents.TryGetValue(entity.Id, out var cached) ? cached : [];
+
+                            var (docs, profile) = await _profiler
+                                .ProfileAsync(
+                                    entity,
+                                    options.AllowNetwork,
+                                    stored,
+                                    options.RefreshProviders,
+                                    options.ReuseStoredDocuments,
+                                    ct)
+                                .ConfigureAwait(false);
+
+                            await profiled.Writer.WriteAsync(new ProfiledEntity(entity, docs, profile), ct).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            Interlocked.Increment(ref failed);
+                            Interlocked.CompareExchange(ref firstFailure, $"profiling {entity.Id}: {ex.Message}", null);
+                            Debug.WriteLine($"Profiling failed for {entity.Id}: {ex}");
+                        }
+                        finally
+                        {
+                            var done = Interlocked.Increment(ref completed);
+                            progress?.Report(new IndexProgress
+                            {
+                                Phase = "Enriching",
+                                Completed = done,
+                                Total = entities.Count,
+                                CurrentItem = entity.DisplayName,
+                            });
+                        }
+                    }).ConfigureAwait(false);
+                profiled.Writer.TryComplete();
+            }
+            catch (Exception ex)
             {
+                profiled.Writer.TryComplete(ex);
+            }
+        }
+
+        async Task FlushAsync(List<ProfiledEntity> batch)
+        {
+            var items = batch.Select(p => (p.Entity, p.Docs, p.Profile, Text: p.Profile.ToEmbeddingText(p.Entity))).ToArray();
+            // An entity whose embedding text is unchanged already has the right vector on disk.
+            // Handing UpsertAsync no embedding leaves it in place, so these skip the model entirely.
+            var unchangedIds = items
+                .Where(i => reuse.EmbeddingTexts.TryGetValue(i.Entity.Id, out var previous)
+                    && string.Equals(previous, i.Text, StringComparison.Ordinal))
+                .Select(i => i.Entity.Id)
+                .ToHashSet(StringComparer.Ordinal);
+
+            foreach (var item in items.Where(i => unchangedIds.Contains(i.Entity.Id)))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await PersistAsync(item.Entity, item.Docs, item.Profile, null).ConfigureAwait(false);
+                persisted++;
+            }
+
+            var needsEmbedding = items.Where(i => !unchangedIds.Contains(i.Entity.Id)).ToArray();
+
+            if (needsEmbedding.Length > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var texts = needsEmbedding.Select(b => b.Text).ToArray();
+
+                IReadOnlyList<float[]> vectors;
                 try
                 {
-                    var stored = reuse.Documents.TryGetValue(entity.Id, out var cached) ? cached : [];
-
-                    var (docs, profile) = await _profiler
-                        .ProfileAsync(
-                            entity,
-                            options.AllowNetwork,
-                            stored,
-                            options.RefreshProviders,
-                            options.ReuseStoredDocuments,
-                            ct)
+                    embeddingTimer.Start();
+                    vectors = await _embeddings.GenerateVectorsAsync(
+                            texts,
+                            _embeddingMetadata.DefaultModelDimensions!.Value,
+                            cancellationToken)
                         .ConfigureAwait(false);
-
-                    profiled.Add((entity, docs, profile));
                 }
                 catch (OperationCanceledException)
                 {
@@ -593,93 +723,46 @@ public sealed class IndexBuilder
                 }
                 catch (Exception ex)
                 {
-                    Interlocked.Increment(ref failed);
-                    Interlocked.CompareExchange(ref firstFailure, $"profiling {entity.Id}: {ex.Message}", null);
-                    Debug.WriteLine($"Profiling failed for {entity.Id}: {ex}");
+                    // Persist without vectors rather than losing the batch: the lexical arm still works.
+                    Debug.WriteLine($"Embedding batch failed: {ex.Message}");
+                    vectors = [];
                 }
                 finally
                 {
-                    var done = Interlocked.Increment(ref completed);
-                    progress?.Report(new IndexProgress
-                    {
-                        Phase = "Enriching",
-                        Completed = done,
-                        Total = entities.Count,
-                        CurrentItem = entity.DisplayName,
-                    });
+                    embeddingTimer.Stop();
                 }
-            }).ConfigureAwait(false);
 
-        var items = profiled
-            .Select(p => (p.Entity, p.Docs, p.Profile, Text: p.Profile.ToEmbeddingText(p.Entity)))
-            .ToArray();
+                for (var i = 0; i < needsEmbedding.Length; i++)
+                {
+                    var item = needsEmbedding[i];
+                    var vector = i < vectors.Count ? vectors[i] : null;
+                    if (vector is null)
+                    {
+                        Interlocked.Increment(ref failed);
+                        Interlocked.CompareExchange(ref firstFailure, $"embedding {item.Entity.Id}: no vector returned", null);
+                    }
+                    await PersistAsync(vector is null ? item.Entity with { ContentHash = null } : item.Entity,
+                            item.Docs, item.Profile, vector)
+                        .ConfigureAwait(false);
+                }
 
-        var persisted = 0;
-
-        // An entity whose embedding text is unchanged already has the right vector on disk.
-        // Handing UpsertAsync no embedding leaves it in place, so these skip the model entirely.
-        var unchangedIds = items
-            .Where(i => reuse.EmbeddingTexts.TryGetValue(i.Entity.Id, out var previous)
-                && string.Equals(previous, i.Text, StringComparison.Ordinal))
-            .Select(i => i.Entity.Id)
-            .ToHashSet(StringComparer.Ordinal);
-
-        foreach (var item in items.Where(i => unchangedIds.Contains(i.Entity.Id)))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await PersistAsync(item.Entity, item.Docs, item.Profile, null).ConfigureAwait(false);
-            persisted++;
-        }
-
-        var needsEmbedding = items.Where(i => !unchangedIds.Contains(i.Entity.Id)).ToArray();
-
-        foreach (var batch in needsEmbedding.Chunk(options.EmbeddingBatchSize))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var texts = batch.Select(b => b.Text).ToArray();
-
-            IReadOnlyList<float[]> vectors;
-            try
-            {
-                vectors = await _embeddings.GenerateVectorsAsync(
-                        texts,
-                        _embeddingMetadata.DefaultModelDimensions!.Value,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                persisted += needsEmbedding.Length;
             }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                // Persist without vectors rather than losing the batch: the lexical arm still works.
-                Debug.WriteLine($"Embedding batch failed: {ex.Message}");
-                vectors = [];
-            }
-
-            for (var i = 0; i < batch.Length; i++)
-            {
-                await PersistAsync(batch[i].Entity, batch[i].Docs, batch[i].Profile, i < vectors.Count ? vectors[i] : null)
-                    .ConfigureAwait(false);
-            }
-
-            persisted += batch.Length;
+            if (onBatchCommitted is not null)
+                await onBatchCommitted(cancellationToken).ConfigureAwait(false);
             progress?.Report(new IndexProgress
             {
-                Phase = "Embedding",
+                Phase = "Indexing",
                 Completed = persisted,
-                Total = items.Length,
+                Total = entities.Count,
             });
         }
-
-        return (failed, firstFailure);
 
         async Task PersistAsync(Entity entity, IReadOnlyList<EnrichmentDocument> docs, SynthesizedProfile profile, float[]? vector)
         {
             try
             {
+                writeTimer.Start();
                 await _store.UpsertAsync(entity, docs, profile, vector, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -689,8 +772,12 @@ public sealed class IndexBuilder
             catch (Exception ex)
             {
                 Interlocked.Increment(ref failed);
-                firstFailure ??= $"persisting {entity.Id}: {ex.Message}";
+                Interlocked.CompareExchange(ref firstFailure, $"persisting {entity.Id}: {ex.Message}", null);
                 Debug.WriteLine($"Persist failed for {entity.Id}: {ex}");
+            }
+            finally
+            {
+                writeTimer.Stop();
             }
         }
     }

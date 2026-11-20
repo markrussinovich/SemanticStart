@@ -340,6 +340,20 @@ public sealed partial class SqliteIndexStore : IIndexStore
             return Task.FromResult(Vectors.ReadAll());
     }
 
+    public Task<(IReadOnlyList<IndexedEntity> Entities, float[] Vectors, IReadOnlyDictionary<string, UsageStats> Usage)>
+        GetSearchSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            // These reads complete synchronously under the same reentrant lock as UpsertAsync.
+            // In particular, an updated vector cannot get paired with its previous profile.
+            return Task.FromResult((
+                GetAllAsync(cancellationToken).GetAwaiter().GetResult(),
+                GetVectorMatrixAsync(cancellationToken).GetAwaiter().GetResult(),
+                GetUsageStatsAsync(cancellationToken).GetAwaiter().GetResult()));
+        }
+    }
+
     public Task<IReadOnlyList<(string EntityId, double Score)>> SearchLexicalAsync(
         string query, int limit, CancellationToken cancellationToken = default)
     {

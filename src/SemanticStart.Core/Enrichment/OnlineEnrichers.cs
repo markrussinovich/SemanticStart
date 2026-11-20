@@ -1,4 +1,7 @@
 using System.Security.Cryptography;
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -909,21 +912,36 @@ internal static class CachedProcess
 {
     public static async Task<string> RunAsync(string fileName, IReadOnlyList<string> args, TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var executable = ResolveOnPath(fileName);
+        var result = await RunWithExitCodeAsync(fileName, args, timeout, cancellationToken).ConfigureAwait(false);
+        return result.Output;
+    }
+
+    public static async Task<(int ExitCode, string Output)> RunWithExitCodeAsync(
+        string fileName, IReadOnlyList<string> args, TimeSpan timeout, CancellationToken cancellationToken, bool cacheNonZero = false)
+    {
+        var executable = Path.IsPathRooted(fileName) ? fileName : ResolveOnPath(fileName);
         if (executable is null)
-            return string.Empty;
+            return (-1, string.Empty);
 
         Directory.CreateDirectory(AppPaths.EnrichmentCacheDirectory);
-        var key = "process-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fileName + "\0" + string.Join("\0", args)))).ToLowerInvariant();
+        var info = new FileInfo(executable);
+        var identity = $"{executable}\0{info.Length}\0{info.LastWriteTimeUtc.Ticks}\0{string.Join("\0", args)}";
+        var key = "process-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
         var path = Path.Combine(AppPaths.EnrichmentCacheDirectory, key + ".txt");
         if (File.Exists(path))
-            return await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+        {
+            var cached = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+            var separator = cached.IndexOf('\n');
+            if (separator > 0 && int.TryParse(cached.AsSpan(0, separator), CultureInfo.InvariantCulture, out var exitCode)
+                && (exitCode == 0 || DateTime.UtcNow - File.GetLastWriteTimeUtc(path) < TimeSpan.FromMinutes(5)))
+                return (exitCode, cached[(separator + 1)..]);
+        }
 
         var result = await ProcessRunner.RunAsync(executable, args, timeout, cancellationToken).ConfigureAwait(false);
         var output = result.Output.Length > 64 * 1024 ? result.Output[..(64 * 1024)] : result.Output;
-        if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
-            await File.WriteAllTextAsync(path, output, cancellationToken).ConfigureAwait(false);
-        return output;
+        if ((result.ExitCode == 0 || cacheNonZero) && !string.IsNullOrWhiteSpace(output))
+            await File.WriteAllTextAsync(path, result.ExitCode.ToString(CultureInfo.InvariantCulture) + "\n" + output, cancellationToken).ConfigureAwait(false);
+        return (result.ExitCode, output);
     }
 
     private static string? ResolveOnPath(string fileName)
@@ -954,6 +972,8 @@ internal static class CachedHttp
     private static readonly SemaphoreSlim Throttle = new(3, 3);
     private static DateTimeOffset _lastRequest = DateTimeOffset.MinValue;
     private static readonly object DelayLock = new();
+    private static readonly ConcurrentDictionary<string, DateTimeOffset> Misses = new();
+    private static readonly ConcurrentDictionary<string, DateTimeOffset> HostBackoff = new();
 
     public static async Task<string> GetStringAsync(HttpClient http, string uri, TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -961,9 +981,14 @@ internal static class CachedHttp
         var key = "http-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(uri))).ToLowerInvariant();
         var path = Path.Combine(AppPaths.EnrichmentCacheDirectory, key + ".txt");
         if (File.Exists(path)) return await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+        var host = new Uri(uri).Host;
+        if (IsSuppressed())
+            return string.Empty;
         await Throttle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (IsSuppressed())
+                return string.Empty;
             TimeSpan wait;
             lock (DelayLock)
             {
@@ -977,7 +1002,18 @@ internal static class CachedHttp
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.UserAgent.ParseAdd("SemanticStart/1.0 (+https://github.com/microsoft/SemanticStart)");
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return string.Empty;
+            if (!response.IsSuccessStatusCode)
+            {
+                Misses[uri] = DateTimeOffset.UtcNow.AddMinutes(5);
+                if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable)
+                {
+                    var retry = response.Headers.RetryAfter?.Delta
+                        ?? response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow
+                        ?? TimeSpan.FromSeconds(30);
+                    HostBackoff[host] = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(Math.Clamp(retry.TotalSeconds, 1, 300));
+                }
+                return string.Empty;
+            }
             var contentLength = response.Content.Headers.ContentLength;
             if (contentLength > MaxResponseBytes) return string.Empty;
             await using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
@@ -996,6 +1032,15 @@ internal static class CachedHttp
             await File.WriteAllTextAsync(path, text, cts.Token).ConfigureAwait(false);
             return text;
         }
+        catch (Exception ex) when (ex is HttpRequestException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+        {
+            HostBackoff[host] = DateTimeOffset.UtcNow.AddSeconds(30);
+            throw;
+        }
         finally { Throttle.Release(); }
+
+        bool IsSuppressed() =>
+            (Misses.TryGetValue(uri, out var missUntil) && missUntil > DateTimeOffset.UtcNow)
+            || (HostBackoff.TryGetValue(host, out var retryUntil) && retryUntil > DateTimeOffset.UtcNow);
     }
 }

@@ -25,8 +25,9 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator<string, Embeddi
         string modelPath,
         string vocabPath,
         string modelId = DefaultModelId,
-        int dimensions = DefaultDimensions)
-        : this(modelPath, CreateDefaultTokenizer(vocabPath), modelId, dimensions)
+        int dimensions = DefaultDimensions,
+        int intraOpNumThreads = 2)
+        : this(modelPath, CreateDefaultTokenizer(vocabPath), modelId, dimensions, intraOpNumThreads)
     {
     }
 
@@ -43,7 +44,8 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator<string, Embeddi
         string modelPath,
         Tokenizer tokenizer,
         string modelId = DefaultModelId,
-        int dimensions = DefaultDimensions)
+        int dimensions = DefaultDimensions,
+        int intraOpNumThreads = 2)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelPath);
         ArgumentNullException.ThrowIfNull(tokenizer);
@@ -53,7 +55,7 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator<string, Embeddi
         _modelId = modelId;
         _dimensions = dimensions;
         _tokenizer = tokenizer;
-        _scorer = new OnnxTextScorer(modelPath);
+        _scorer = new OnnxTextScorer(modelPath, intraOpNumThreads);
 
         _metadata = new EmbeddingGeneratorMetadata(
             providerName: "ONNX Runtime",

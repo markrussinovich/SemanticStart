@@ -64,9 +64,7 @@ public sealed class HybridSearchEngine : ISearchEngine
         await _loadLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var entities = await _store.GetAllAsync(cancellationToken).ConfigureAwait(false);
-            var vectors = await _store.GetVectorMatrixAsync(cancellationToken).ConfigureAwait(false);
-            var usage = await _store.GetUsageStatsAsync(cancellationToken).ConfigureAwait(false);
+            var (entities, vectors, usage) = await _store.GetSearchSnapshotAsync(cancellationToken).ConfigureAwait(false);
 
             var array = entities.ToArray();
             var byId = new Dictionary<string, int>(array.Length, StringComparer.Ordinal);

@@ -143,7 +143,7 @@ public partial class SettingsWindow : Window
         // to press a button that is disabled. Re-render so it describes what is actually happening.
         RenderIndexStats(_lastStats);
 
-        if (state.Outcome == RebuildOutcome.Completed)
+        if (state.Outcome is not null || state.Message.StartsWith("Searchable:", StringComparison.Ordinal))
             _ = RefreshIndexStatsAsync();
     }
 

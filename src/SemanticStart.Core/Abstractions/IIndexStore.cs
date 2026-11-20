@@ -71,6 +71,13 @@ public interface IIndexStore : IDisposable
 
     Task<IReadOnlyDictionary<string, UsageStats>> GetUsageStatsAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Reads a coherent search snapshot while indexing is writing new batches.</summary>
+    async Task<(IReadOnlyList<IndexedEntity> Entities, float[] Vectors, IReadOnlyDictionary<string, UsageStats> Usage)>
+        GetSearchSnapshotAsync(CancellationToken cancellationToken = default) =>
+        (await GetAllAsync(cancellationToken).ConfigureAwait(false),
+         await GetVectorMatrixAsync(cancellationToken).ConfigureAwait(false),
+         await GetUsageStatsAsync(cancellationToken).ConfigureAwait(false));
+
     /// <summary>Records a launch, incrementing the count and stamping the time.</summary>
     Task RecordLaunchAsync(string entityId, CancellationToken cancellationToken = default);
 

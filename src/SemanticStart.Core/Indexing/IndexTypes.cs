@@ -31,10 +31,14 @@ public sealed record IndexResult
     public string? FirstFailure { get; init; }
 
     public TimeSpan Duration { get; init; }
+    public TimeSpan DiscoveryDuration { get; init; }
+    public TimeSpan EmbeddingDuration { get; init; }
+    public TimeSpan PersistenceDuration { get; init; }
 
     public override string ToString() =>
         $"discovered {Discovered}, added {Added}, updated {Updated}, unchanged {Unchanged}, " +
         $"removed {Removed}, failed {Failed} in {Duration.TotalSeconds:F1}s" +
+        $" (discovery {DiscoveryDuration.TotalSeconds:F1}s, embedding {EmbeddingDuration.TotalSeconds:F1}s, writes {PersistenceDuration.TotalSeconds:F1}s)" +
         (Failed > 0 && FirstFailure is { Length: > 0 } reason ? $"{Environment.NewLine}first failure: {reason}" : string.Empty);
 }
 
@@ -81,10 +85,10 @@ public sealed record IndexOptions
     public bool ReuseStoredDocuments { get; init; }
 
     /// <summary>Concurrency for the enrich/synthesize stage, which is I/O and process bound.</summary>
-    public int EnrichmentConcurrency { get; init; } = Math.Max(2, Environment.ProcessorCount / 2);
+    public int EnrichmentConcurrency { get; init; } = Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
 
     /// <summary>Texts per embedding call. Batching amortizes ONNX per-call overhead.</summary>
-    public int EmbeddingBatchSize { get; init; } = 32;
+    public int EmbeddingBatchSize { get; init; } = 8;
 
     public static IndexOptions Default { get; } = new();
 }

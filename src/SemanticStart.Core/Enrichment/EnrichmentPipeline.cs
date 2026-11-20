@@ -10,7 +10,8 @@ namespace SemanticStart.Core.Enrichment;
 public sealed record EnrichmentOptions
 {
     public bool AllowNetwork { get; init; }
-    public int MaxDegreeOfParallelism { get; init; } = Math.Max(2, Environment.ProcessorCount / 2);
+    public int MaxDegreeOfParallelism { get; init; } = 2;
+    public TimeSpan NetworkTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>Documents already held for this entity, available to carry forward.</summary>
     public IReadOnlyList<EnrichmentDocument> StoredDocuments { get; init; } = [];
@@ -48,12 +49,16 @@ public sealed class EnrichmentPipeline : IEntityProfiler
     private readonly IReadOnlyList<IEnricher> _enrichers;
     private readonly IProfileSynthesizer _synthesizer;
     private readonly int _maxDegreeOfParallelism;
+    private readonly SemaphoreSlim _providerGate = new(Math.Clamp(Environment.ProcessorCount / 2, 1, 4));
+    private readonly Action<string>? _diagnostic;
 
-    public EnrichmentPipeline(IReadOnlyList<IEnricher>? enrichers = null, IProfileSynthesizer? synthesizer = null, int? maxDegreeOfParallelism = null)
+    public EnrichmentPipeline(IReadOnlyList<IEnricher>? enrichers = null, IProfileSynthesizer? synthesizer = null,
+        int? maxDegreeOfParallelism = null, Action<string>? diagnostic = null)
     {
         _enrichers = enrichers ?? EnricherRegistry.CreateAll();
         _synthesizer = synthesizer ?? new HeuristicProfileSynthesizer();
-        _maxDegreeOfParallelism = Math.Max(1, maxDegreeOfParallelism ?? Math.Max(2, Environment.ProcessorCount / 2));
+        _maxDegreeOfParallelism = Math.Max(1, maxDegreeOfParallelism ?? 2);
+        _diagnostic = diagnostic;
     }
 
     public async Task<(IReadOnlyList<EnrichmentDocument> Documents, SynthesizedProfile Profile)> ProfileAsync(
@@ -133,9 +138,15 @@ public sealed class EnrichmentPipeline : IEntityProfiler
             new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, options.MaxDegreeOfParallelism), CancellationToken = cancellationToken },
             async (enricher, ct) =>
             {
+                await _providerGate.WaitAsync(ct).ConfigureAwait(false);
+                var timer = Stopwatch.StartNew();
                 try
                 {
-                    var docs = await enricher.EnrichAsync(entity, ct).ConfigureAwait(false);
+                    using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    if (enricher.RequiresNetwork)
+                        budget.CancelAfter(options.NetworkTimeout);
+                    var docs = await enricher.EnrichAsync(entity, budget.Token).ConfigureAwait(false);
+                    budget.Token.ThrowIfCancellationRequested();
                     foreach (var doc in docs)
                     {
                         var text = EnrichmentTextNormalizer.ToPlainText(doc.Text);
@@ -143,8 +154,23 @@ public sealed class EnrichmentPipeline : IEntityProfiler
                             documents.Add(doc with { Text = text });
                     }
                 }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    _diagnostic?.Invoke($"Enricher {enricher.Provider} timed out for {entity.Id} after {timer.Elapsed.TotalSeconds:F1}s.");
+                }
                 catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { Debug.WriteLine($"Enricher '{enricher.Provider}' failed for {entity.Id}: {ex.Message}"); }
+                catch (Exception ex)
+                {
+                    var message = $"Enricher {enricher.Provider} failed for {entity.Id}: {ex.Message}";
+                    Debug.WriteLine(message);
+                    _diagnostic?.Invoke(message);
+                }
+                finally
+                {
+                    if (timer.Elapsed >= TimeSpan.FromSeconds(2))
+                        _diagnostic?.Invoke($"Enricher {enricher.Provider} for {entity.Id}: {timer.Elapsed.TotalSeconds:F1}s.");
+                    _providerGate.Release();
+                }
             }).ConfigureAwait(false);
 
         var ordered = documents

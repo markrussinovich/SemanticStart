@@ -2,6 +2,11 @@ using SemanticStart.Core.Abstractions;
 using SemanticStart.Core.Enrichment;
 using SemanticStart.Core.Model;
 using SemanticStart.Core.Synthesis;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Cryptography;
+using System.Text;
+using SemanticStart.Core;
 
 namespace SemanticStart.Tests;
 
@@ -128,6 +133,78 @@ public sealed class EnrichmentTests
         Assert.DoesNotContain("<html", documents[0].Text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("alert", documents[0].Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("Read Python language documentation and library reference.", profile.Summary);
+    }
+
+    [Fact]
+    public async Task Pipeline_NetworkBudgetPreservesLocalDocuments()
+    {
+        var entity = CreateEntity("Widget", EntityKind.Application, "widget.exe");
+        var diagnostics = new List<string>();
+        var pipeline = new EnrichmentPipeline(
+            [new FixedEnricher("local", "A tool for editing documents."), new WaitingNetworkEnricher()],
+            diagnostic: diagnostics.Add);
+
+        var (documents, _) = await pipeline.EnrichAndSynthesizeAsync(entity, new EnrichmentOptions
+        {
+            AllowNetwork = true,
+            NetworkTimeout = TimeSpan.FromMilliseconds(25),
+        }).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("local", Assert.Single(documents).Provider);
+        Assert.Contains(diagnostics, message => message.Contains("timed out", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Pipeline_UserCancellationIsNotTreatedAsNetworkTimeout()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pipeline = new EnrichmentPipeline([new WaitingNetworkEnricher(started)]);
+        var work = pipeline.EnrichAndSynthesizeAsync(CreateEntity("Widget", EntityKind.Application, "widget.exe"),
+            new EnrichmentOptions { AllowNetwork = true }, cancellation.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => work.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task CachedHttp_RateLimitSuppressesOtherUncachedRequestsToSameHost()
+    {
+        var host = Guid.NewGuid().ToString("N") + ".test";
+        var handler = new CacheTestHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromMinutes(1));
+            return response;
+        });
+        using var http = new HttpClient(handler);
+        Assert.Empty(await CachedHttp.GetStringAsync(http, $"https://{host}/first", TimeSpan.FromSeconds(1), default));
+        Assert.Empty(await CachedHttp.GetStringAsync(http, $"https://{host}/second", TimeSpan.FromSeconds(1), default));
+        Assert.Equal(1, handler.Requests);
+    }
+
+    [Fact]
+    public async Task CachedHttp_NotFoundIsCachedWithoutSuppressingOtherUrls()
+    {
+        var host = Guid.NewGuid().ToString("N") + ".test";
+        var missing = $"https://{host}/missing";
+        var available = $"https://{host}/available";
+        var handler = new CacheTestHandler(request => request.RequestUri!.AbsolutePath == "/missing"
+            ? new HttpResponseMessage(HttpStatusCode.NotFound)
+            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("documentation") });
+        using var http = new HttpClient(handler);
+        try
+        {
+            Assert.Empty(await CachedHttp.GetStringAsync(http, missing, TimeSpan.FromSeconds(1), default));
+            Assert.Empty(await CachedHttp.GetStringAsync(http, missing, TimeSpan.FromSeconds(1), default));
+            Assert.Equal("documentation", await CachedHttp.GetStringAsync(http, available, TimeSpan.FromSeconds(1), default));
+            Assert.Equal(2, handler.Requests);
+        }
+        finally
+        {
+            var key = "http-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(available))).ToLowerInvariant();
+            File.Delete(Path.Combine(AppPaths.EnrichmentCacheDirectory, key + ".txt"));
+        }
     }
 
     [Fact]
@@ -352,5 +429,30 @@ public sealed class EnrichmentTests
 
         public Task<IReadOnlyList<EnrichmentDocument>> EnrichAsync(Entity entity, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<EnrichmentDocument>>([new EnrichmentDocument { EntityId = entity.Id, Provider = provider, IsOnline = false, Text = text }]);
+    }
+
+    private sealed class WaitingNetworkEnricher(TaskCompletionSource? started = null) : IEnricher
+    {
+        public string Provider => "waiting-network";
+        public bool RequiresNetwork => true;
+        public bool CanEnrich(Entity entity) => true;
+
+        public async Task<IReadOnlyList<EnrichmentDocument>> EnrichAsync(Entity entity, CancellationToken cancellationToken = default)
+        {
+            started?.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return [];
+        }
+    }
+
+    private sealed class CacheTestHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        public int Requests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests++;
+            return Task.FromResult(respond(request));
+        }
     }
 }
