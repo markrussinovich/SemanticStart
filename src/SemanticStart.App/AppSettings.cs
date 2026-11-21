@@ -19,7 +19,7 @@ public sealed record AppSettings
     /// installed we would simply never open. The period keeps the same one-handed bottom-row shape
     /// as Space without the collision.
     /// </summary>
-    public const string DefaultHotKey = "Win+Alt+.";
+    internal const string DefaultHotKey = "Win+Alt+.";
 
     /// <summary>
     /// Defaults we have shipped before, migrated away from on load. Win+Alt+Space is here because
@@ -27,7 +27,38 @@ public sealed record AppSettings
     /// </summary>
     internal static readonly string[] LegacyDefaultHotKeys = ["Alt+Space", "Win+Shift+S", "Win+Alt+S", "Win+Alt+Space"];
 
+    /// <summary>
+    /// Opens the overlay and starts listening. Chosen on the same grounds as
+    /// <see cref="DefaultHotKey"/>: it keeps the Win+Alt+&lt;punctuation&gt; shape, which is the part
+    /// of the keyboard the shell and Game Bar have left alone, and sits next to the activation
+    /// chord so the two are one key apart.
+    /// </summary>
+    internal const string DefaultDictationHotKey = "Win+Alt+/";
+
     public string HotKey { get; init; } = DefaultHotKey;
+
+    /// <summary>
+    /// Whether the dictation hotkey is registered and the speech model is kept warm. Off until
+    /// asked for: turning it on is what authorises the ~665 MB model download, in the same way the
+    /// first index build is what authorises the embedding model download.
+    /// </summary>
+    public bool DictationEnabled { get; init; }
+
+    public string DictationHotKey { get; init; } = DefaultDictationHotKey;
+
+    /// <summary>
+    /// How much silence ends an utterance. Clamped to 100-2000 ms on load. 220 ms is short enough
+    /// that a finished phrase searches immediately and long enough to survive the pause in the
+    /// middle of "visual... studio".
+    /// </summary>
+    public int DictationTrailingSilenceMilliseconds { get; init; } = 220;
+
+    /// <summary>
+    /// Hold the hotkey to talk instead of pressing it once to start and again to stop. Off by
+    /// default because release detection is necessarily approximate - see
+    /// <see cref="ActivationManager.IsDictationHotKeyHeld"/> - whereas toggling is exact.
+    /// </summary>
+    public bool DictationPushToTalk { get; init; }
 
     /// <summary>
     /// On by default, matching first-run setup. Most installed programs describe themselves with
@@ -101,9 +132,15 @@ public sealed class AppSettingsService
                     ? AppSettings.DefaultHotKey
                     : settings.HotKey;
 
+            var dictationHotKey = string.IsNullOrWhiteSpace(settings.DictationHotKey)
+                ? AppSettings.DefaultDictationHotKey
+                : settings.DictationHotKey;
+
             return settings with
             {
                 HotKey = hotKey,
+                DictationHotKey = dictationHotKey,
+                DictationTrailingSilenceMilliseconds = Math.Clamp(settings.DictationTrailingSilenceMilliseconds, 100, 2000),
                 ResultLimit = Math.Clamp(settings.ResultLimit, 3, 20),
                 SearchDebounceMilliseconds = Math.Clamp(settings.SearchDebounceMilliseconds, 0, 2000),
                 RefreshIntervalMinutes = Math.Clamp(settings.RefreshIntervalMinutes, 15, 24 * 60),

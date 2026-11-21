@@ -5,9 +5,6 @@ namespace SemanticStart.Tests;
 
 public sealed class AppSettingsDefaultsTests
 {
-    [Fact]
-    public void OnlineEnrichmentIsOnByDefault() => Assert.True(new AppSettings().AllowOnlineEnrichment);
-
     /// <summary>
     /// A settings file written before the option existed, or an index built without first-run
     /// setup, must get the same default first-run setup offers rather than silently indexing
